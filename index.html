@@ -44,6 +44,13 @@
   let deals       = [];
   let transfers   = [];
 
+  // Expose to global scope so shift countdown can read today's data
+  function syncGlobals() {
+    window._deals       = deals;
+    window._transfers   = transfers;
+    window._currentRole = currentUser ? currentUser.role : null;
+  }
+
   // ══════════════════════════════════════════
   //  COMMISSION LOGIC
   // ══════════════════════════════════════════
@@ -188,6 +195,7 @@
     if (role === 'admin')  { switchPanel('admin'); }
     if (role === 'closer') { switchPanel('closer'); autoFillCloserName(); }
     if (role === 'opener') { switchPanel('opener'); }
+    syncGlobals();
     loadData();
   }
 
@@ -229,6 +237,7 @@
     }
 
     renderDashboard();
+    syncGlobals();
   }
 
   function renderDashboard() {
@@ -460,11 +469,11 @@
     const f     = getFilters();
     const twrap = document.getElementById('adm-transfers');
 
-    // Filter transfers by date only (they have no status/closer in same way)
     const filtered = transfers.filter(t => {
-      const dateStr = (t.date || '').slice(0, 10);
+      const dateStr = (t.createdAt || t.date || '').slice(0, 10);
       if (f.from && dateStr < f.from) return false;
       if (f.to   && dateStr > f.to)   return false;
+      if (f.status !== 'All' && (t.status || 'Pending') !== f.status) return false;
       return true;
     });
 
@@ -474,15 +483,32 @@
     }
 
     twrap.innerHTML = '';
-    filtered.forEach(t => {
+    // Pending first
+    const sorted = [...filtered].sort((a, b) => {
+      const order = { Pending: 0, Approved: 1, Declined: 2 };
+      return (order[a.status||'Pending'] || 0) - (order[b.status||'Pending'] || 0);
+    });
+
+    sorted.forEach(t => {
+      const status   = t.status || 'Pending';
+      const resolved = status !== 'Pending';
+      const sc       = status === 'Approved' ? 'status-approved'
+                     : status === 'Declined' ? 'status-declined' : 'status-pending';
       twrap.insertAdjacentHTML('beforeend', `
-        <div class="admin-deal">
-          <span class="deal-status status-pending">Transfer</span>
+        <div class="admin-deal ${resolved ? 'deal-resolved' : ''}">
+          <span class="deal-status ${sc}">${status}</span>
           <span style="float:right;font-size:11px;color:var(--muted)">${fmtDate(t.date)}</span><br>
-          <b>${t.name}</b> — ${t.type}<br>
+          <b>Opener:</b> ${t.name} &nbsp;|&nbsp; <b>Type:</b> ${t.type}<br>
           ${t.closer ? `Closer: <b>${t.closer}</b><br>` : ''}
           Phone: ${t.phone}<br>
-          Commission: <b>$${t.comm}</b>
+          ${resolved
+            ? `Commission: <b>$${t.comm}</b>`
+            : `<div class="admin-actions">
+                 <input class="admin-comm-edit" type="number" id="tcomm-${t.id}" value="${t.comm}" placeholder="Edit commission…"/>
+                 <button class="btn-approve" onclick="adminTransferAction('${t.id}','Approved')">✓ Approve</button>
+                 <button class="btn-decline" onclick="adminTransferAction('${t.id}','Declined')">✗ Decline</button>
+               </div>`
+          }
         </div>`);
     });
   }
@@ -510,7 +536,6 @@
     d.status = action;
     try {
       await updateDoc(doc(db, 'deals', id), { status: action, comm: d.comm });
-      // Re-render both admin view AND closer/opener dashboards so status reflects immediately
       refreshAdmin();
       renderDashboard();
       toast(action === 'Approved' ? '✅ Deal approved!' : '❌ Deal declined.',
@@ -518,15 +543,31 @@
     } catch (err) { toast('Failed to update deal.'); console.error(err); }
   };
 
+  window.adminTransferAction = async function(id, action) {
+    const t = transfers.find(x => x.id === id);
+    if (!t) return;
+    const editEl = document.getElementById('tcomm-' + id);
+    if (editEl) t.comm = Number(editEl.value) || t.comm;
+    t.status = action;
+    try {
+      await updateDoc(doc(db, 'transfers', id), { status: action, comm: t.comm });
+      refreshAdmin();
+      renderDashboard();
+      toast(action === 'Approved' ? '✅ Transfer approved!' : '❌ Transfer declined.',
+            action === 'Approved' ? 'success' : 'error');
+    } catch (err) { toast('Failed to update transfer.'); console.error(err); }
+  };
+
   // ══════════════════════════════════════════
   //  CARD BUILDERS
   // ══════════════════════════════════════════
   function buildTransferCard(t) {
-    const sc = t.status === 'Approved' ? 'status-approved'
-             : t.status === 'Declined' ? 'status-declined' : 'status-pending';
-    const label = t.status === 'Approved' ? '✅ Approved'
-                : t.status === 'Declined' ? '❌ Declined' : 'Pending Review';
-    return `<div class="deal ${(t.status||'pending').toLowerCase()}">
+    const status = t.status || 'Pending';
+    const sc = status === 'Approved' ? 'status-approved'
+             : status === 'Declined' ? 'status-declined' : 'status-pending';
+    const label = status === 'Approved' ? '✅ Approved!'
+                : status === 'Declined' ? '❌ Declined'  : 'Pending Admin Review';
+    return `<div class="deal ${status.toLowerCase()}">
       <span class="deal-status ${sc}">${label}</span><br>
       <b>${t.name}</b> &nbsp;·&nbsp; ${t.type}<br>
       ${t.closer ? `Closer: <b>${t.closer}</b><br>` : ''}
@@ -735,7 +776,44 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   .filter-grid{grid-template-columns:1fr;}
 }
 
-/* FOOTER */
+/* SHIFT COUNTDOWN */
+.shift-bar{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:14px;padding:16px 20px 14px;margin-bottom:18px;
+  position:relative;overflow:hidden;
+}
+.shift-bar::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,rgba(56,189,248,.04),rgba(99,102,241,.04));
+  pointer-events:none;
+}
+.shift-info{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;}
+.shift-label{font-size:9px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);}
+.shift-timer{font-family:'Bebas Neue',sans-serif;font-size:32px;letter-spacing:3px;color:var(--accent);line-height:1;}
+.shift-timer.urgent{color:var(--red);animation:pulse 1s infinite;}
+.shift-timer.off{color:var(--muted);font-size:18px;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.shift-progress-wrap{height:5px;background:var(--border);border-radius:4px;overflow:hidden;margin-bottom:8px;}
+.shift-progress-bar{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width 1s linear;}
+.shift-tag{font-size:10px;color:var(--muted);letter-spacing:1px;}
+.shift-off-msg{font-size:12px;color:var(--muted);letter-spacing:.5px;margin-top:4px;}
+
+/* END OF SHIFT SUMMARY */
+.eod-summary{
+  background:linear-gradient(135deg,rgba(56,189,248,.06),rgba(99,102,241,.06));
+  border:1px solid rgba(56,189,248,.2);border-radius:14px;
+  padding:20px 22px;margin-bottom:18px;animation:fadeUp .4s ease;
+}
+.eod-title{
+  font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:3px;
+  color:var(--accent);margin-bottom:14px;
+  border-bottom:1px solid rgba(56,189,248,.15);padding-bottom:10px;
+}
+.eod-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px;}
+.eod-stat{background:var(--surface2);border-radius:10px;padding:12px;text-align:center;}
+.eod-stat-val{font-family:'Bebas Neue',sans-serif;font-size:28px;color:var(--accent);}
+.eod-stat-label{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-top:2px;}
+.eod-msg{font-size:12px;color:var(--muted);text-align:center;letter-spacing:.5px;margin-top:6px;font-style:italic;}
 .app-footer{
   width:100%;max-width:800px;
   display:flex;align-items:center;justify-content:center;gap:14px;
@@ -826,6 +904,21 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
     <!-- OPENER PANEL -->
     <div class="panel" id="panel-opener">
+
+      <!-- SHIFT COUNTDOWN -->
+      <div class="shift-bar" id="shift-bar-opener">
+        <div class="shift-info">
+          <span class="shift-label">⏱ SHIFT ENDS IN</span>
+          <span class="shift-timer" id="shift-timer-opener">—</span>
+        </div>
+        <div class="shift-progress-wrap">
+          <div class="shift-progress-bar" id="shift-progress-opener"></div>
+        </div>
+        <div class="shift-tag" id="shift-tag-opener">Egypt: 5PM – 2AM &nbsp;·&nbsp; Mon–Fri</div>
+      </div>
+
+      <!-- END OF SHIFT SUMMARY (hidden until shift ends) -->
+      <div class="eod-summary" id="eod-opener" style="display:none"></div>
       <div class="card">
         <div class="card-title">Opener Submission</div>
 
@@ -900,6 +993,21 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
     <!-- CLOSER PANEL -->
     <div class="panel" id="panel-closer">
+
+      <!-- SHIFT COUNTDOWN -->
+      <div class="shift-bar" id="shift-bar-closer">
+        <div class="shift-info">
+          <span class="shift-label">⏱ SHIFT ENDS IN</span>
+          <span class="shift-timer" id="shift-timer-closer">—</span>
+        </div>
+        <div class="shift-progress-wrap">
+          <div class="shift-progress-bar" id="shift-progress-closer"></div>
+        </div>
+        <div class="shift-tag" id="shift-tag-closer">Egypt: 5PM – 2AM &nbsp;·&nbsp; Mon–Fri</div>
+      </div>
+
+      <!-- END OF SHIFT SUMMARY -->
+      <div class="eod-summary" id="eod-closer" style="display:none"></div>
       <div class="card">
         <div class="card-title">Closer Submission</div>
 
@@ -1060,6 +1168,182 @@ function updateStrength(val) {
   bar.style.width      = val ? (widths[score-1] || '10%') : '0%';
   bar.style.background = val ? (colors[score-1] || '#ef4444') : 'transparent';
 }
+
+// ══════════════════════════════════════════
+//  SHIFT COUNTDOWN
+//  Shift: Mon–Fri, 5PM–2AM Egypt time (EET = UTC+2)
+//  2AM Egypt = midnight UTC (UTC+2, so 2AM - 2h = 0:00 UTC next day)
+// ══════════════════════════════════════════
+(function initShift() {
+  const SHIFT_START_H = 17; // 5 PM Egypt
+  const SHIFT_END_H   = 2;  // 2 AM Egypt (next day)
+  const SHIFT_DURATION_S = 9 * 3600; // 9 hours in seconds
+
+  function getNowEgypt() {
+    // EET = UTC+2 (Egypt Standard Time, no DST)
+    const now = new Date();
+    const utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
+    return new Date(utcMs + (2 * 3600000)); // +2 hours
+  }
+
+  function isWeekday(d) {
+    const day = d.getDay(); // 0=Sun,1=Mon,...,6=Sat
+    return day >= 1 && day <= 5;
+  }
+
+  function isShiftActive(egypt) {
+    if (!isWeekday(egypt)) return false;
+    const h = egypt.getHours();
+    const m = egypt.getMinutes();
+    const s = egypt.getSeconds();
+    // Shift: 17:00:00 to next day 02:00:00
+    // Active if h >= 17 OR h < 2
+    return (h >= SHIFT_START_H) || (h < SHIFT_END_H) || (h === SHIFT_END_H && m === 0 && s === 0);
+  }
+
+  function getSecondsLeft(egypt) {
+    const h = egypt.getHours();
+    const m = egypt.getMinutes();
+    const s = egypt.getSeconds();
+    // End of shift is 02:00:00
+    let endH = SHIFT_END_H;
+    // Seconds from now until 02:00:00
+    let nowSecs = h * 3600 + m * 60 + s;
+    let endSecs = endH * 3600;
+    if (nowSecs >= SHIFT_START_H * 3600) {
+      // We're in the PM portion — end is next day 2AM
+      // Seconds to midnight + 2 hours
+      return (24 * 3600 - nowSecs) + endSecs;
+    } else {
+      // We're past midnight, before 2AM
+      return endSecs - nowSecs;
+    }
+  }
+
+  function formatCountdown(secs) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+
+  function buildEODSummary(role) {
+    // Pull today's data from the global deals/transfers arrays
+    const todayStr = getNowEgypt().toISOString().slice(0, 10);
+
+    if (role === 'closer') {
+      const todayDeals    = (window._deals || []).filter(d => (d.createdAt||'').slice(0,10) === todayStr);
+      const approved      = todayDeals.filter(d => d.status === 'Approved');
+      const totalComm     = approved.reduce((s, d) => s + (d.comm||0), 0);
+      const totalDebt     = todayDeals.reduce((s, d) => s + (Number(d.debt)||0), 0);
+      return `
+        <div class="eod-title">🏁 Shift Summary — Great Work!</div>
+        <div class="eod-grid">
+          <div class="eod-stat">
+            <div class="eod-stat-val">${todayDeals.length}</div>
+            <div class="eod-stat-label">Deals Submitted</div>
+          </div>
+          <div class="eod-stat">
+            <div class="eod-stat-val">${approved.length}</div>
+            <div class="eod-stat-label">Approved</div>
+          </div>
+          <div class="eod-stat">
+            <div class="eod-stat-val">$${totalComm}</div>
+            <div class="eod-stat-label">Commission Earned</div>
+          </div>
+        </div>
+        <div class="eod-stat" style="margin-bottom:8px;background:var(--surface2);border-radius:10px;padding:10px;text-align:center;">
+          <div class="eod-stat-val" style="font-size:22px;">$${totalDebt.toLocaleString()}</div>
+          <div class="eod-stat-label">Total Debt Enrolled Today</div>
+        </div>
+        <div class="eod-msg">${approved.length > 0 ? '🔥 Incredible shift! See you tomorrow.' : '💪 Every shift is a new opportunity. Rest up!'}</div>`;
+    }
+
+    if (role === 'opener') {
+      const todayTransfers = (window._transfers || []).filter(t => (t.createdAt||'').slice(0,10) === todayStr);
+      const approved       = todayTransfers.filter(t => t.status === 'Approved');
+      const totalComm      = todayTransfers.reduce((s, t) => s + (t.comm||0), 0);
+      return `
+        <div class="eod-title">🏁 Shift Summary — Great Work!</div>
+        <div class="eod-grid">
+          <div class="eod-stat">
+            <div class="eod-stat-val">${todayTransfers.length}</div>
+            <div class="eod-stat-label">Transfers Sent</div>
+          </div>
+          <div class="eod-stat">
+            <div class="eod-stat-val">${approved.length}</div>
+            <div class="eod-stat-label">Approved</div>
+          </div>
+          <div class="eod-stat">
+            <div class="eod-stat-val">$${totalComm}</div>
+            <div class="eod-stat-label">Commission</div>
+          </div>
+        </div>
+        <div class="eod-msg">${todayTransfers.length > 0 ? '🔥 Solid shift! Rest up and come back stronger.' : '💪 Tomorrow is a fresh start. You got this!'}</div>`;
+    }
+    return '';
+  }
+
+  let eodShown = false;
+
+  function tick() {
+    const egypt  = getNowEgypt();
+    const active = isShiftActive(egypt);
+    const role   = window._currentRole;
+    if (!role || role === 'admin') return;
+
+    const timerId   = role === 'closer' ? 'shift-timer-closer'   : 'shift-timer-opener';
+    const progId    = role === 'closer' ? 'shift-progress-closer': 'shift-progress-opener';
+    const tagId     = role === 'closer' ? 'shift-tag-closer'     : 'shift-tag-opener';
+    const barId     = role === 'closer' ? 'shift-bar-closer'     : 'shift-bar-opener';
+    const eodId     = role === 'closer' ? 'eod-closer'           : 'eod-opener';
+
+    const timerEl = document.getElementById(timerId);
+    const progEl  = document.getElementById(progId);
+    const tagEl   = document.getElementById(tagId);
+    const eodEl   = document.getElementById(eodId);
+    if (!timerEl) return;
+
+    if (active) {
+      eodShown = false;
+      const secsLeft = getSecondsLeft(egypt);
+      const pct      = Math.max(0, Math.min(100, ((SHIFT_DURATION_S - secsLeft) / SHIFT_DURATION_S) * 100));
+
+      timerEl.textContent = formatCountdown(secsLeft);
+      timerEl.className   = 'shift-timer' + (secsLeft <= 1800 ? ' urgent' : '');
+      if (progEl) progEl.style.width = pct + '%';
+      if (progEl) progEl.style.background = secsLeft <= 1800
+        ? 'linear-gradient(90deg,#f43f5e,#fb923c)'
+        : 'linear-gradient(90deg,var(--accent2),var(--accent))';
+      if (tagEl) tagEl.textContent = secsLeft <= 1800
+        ? '⚠️ Less than 30 minutes left — finish strong!'
+        : 'Egypt: 5PM – 2AM · Mon–Fri';
+      if (eodEl) eodEl.style.display = 'none';
+
+    } else {
+      // Shift is over
+      timerEl.textContent = isWeekday(egypt) ? 'OFF SHIFT' : 'WEEKEND';
+      timerEl.className   = 'shift-timer off';
+      if (progEl) progEl.style.width = '0%';
+      if (tagEl)  tagEl.textContent  = isWeekday(egypt)
+        ? 'Next shift starts at 5PM Egypt time'
+        : 'Back Monday at 5PM Egypt time';
+
+      // Show EOD summary once
+      if (!eodShown && eodEl) {
+        eodEl.innerHTML    = buildEODSummary(role);
+        eodEl.style.display = 'block';
+        eodShown = true;
+      }
+    }
+  }
+
+  // Start ticking once DOM is ready
+  document.addEventListener('DOMContentLoaded', () => {
+    setInterval(tick, 1000);
+    tick();
+  });
+})();
 </script>
 </body>
 </html>
