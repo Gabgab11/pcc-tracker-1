@@ -478,7 +478,6 @@
       const dateStr = (t.createdAt || t.date || '').slice(0, 10);
       if (f.from && dateStr < f.from) return false;
       if (f.to   && dateStr > f.to)   return false;
-      if (f.status !== 'All' && (t.status || 'Pending') !== f.status) return false;
       return true;
     });
 
@@ -488,32 +487,15 @@
     }
 
     twrap.innerHTML = '';
-    // Pending first
-    const sorted = [...filtered].sort((a, b) => {
-      const order = { Pending: 0, Approved: 1, Declined: 2 };
-      return (order[a.status||'Pending'] || 0) - (order[b.status||'Pending'] || 0);
-    });
-
-    sorted.forEach(t => {
-      const status   = t.status || 'Pending';
-      const resolved = status !== 'Pending';
-      const sc       = status === 'Approved' ? 'status-approved'
-                     : status === 'Declined' ? 'status-declined' : 'status-pending';
+    filtered.forEach(t => {
       twrap.insertAdjacentHTML('beforeend', `
-        <div class="admin-deal ${resolved ? 'deal-resolved' : ''}">
-          <span class="deal-status ${sc}">${status}</span>
+        <div class="admin-deal">
+          <span class="deal-status status-pending">Transfer</span>
           <span style="float:right;font-size:11px;color:var(--muted)">${fmtDate(t.date)}</span><br>
           <b>Opener:</b> ${t.name} &nbsp;|&nbsp; <b>Type:</b> ${t.type}<br>
           ${t.closer ? `Closer: <b>${t.closer}</b><br>` : ''}
           Phone: ${t.phone}<br>
-          ${resolved
-            ? `Commission: <b>$${t.comm}</b>`
-            : `<div class="admin-actions">
-                 <input class="admin-comm-edit" type="number" id="tcomm-${t.id}" value="${t.comm}" placeholder="Edit commission…"/>
-                 <button class="btn-approve" onclick="adminTransferAction('${t.id}','Approved')">✓ Approve</button>
-                 <button class="btn-decline" onclick="adminTransferAction('${t.id}','Declined')">✗ Decline</button>
-               </div>`
-          }
+          Commission: <b>$${t.comm}</b>
         </div>`);
     });
   }
@@ -548,33 +530,6 @@
       toast(action === 'Approved' ? '✅ Deal approved!' : '❌ Deal declined.',
             action === 'Approved' ? 'success' : 'error');
     } catch (err) { toast('Failed to update deal.'); console.error(err); }
-  };
-
-  window.adminTransferAction = async function(id, action) {
-    const t = transfers.find(x => x.id === id);
-    if (!t) { toast('Transfer not found.'); return; }
-    const editEl = document.getElementById('tcomm-' + id);
-    const newComm = editEl ? (Number(editEl.value) || t.comm) : t.comm;
-    t.comm   = newComm;
-    t.status = action;
-    try {
-      // Try updateDoc first; fall back to setDoc merge if doc doesn't have all fields
-      try {
-        await updateDoc(doc(db, 'transfers', id), { status: action, comm: newComm });
-      } catch (innerErr) {
-        // Fallback: setDoc with merge (works even if security rules are stricter)
-        await setDoc(doc(db, 'transfers', id), { status: action, comm: newComm }, { merge: true });
-      }
-      syncGlobals();
-      refreshEOD();
-      refreshAdmin();
-      renderDashboard();
-      toast(action === 'Approved' ? '✅ Transfer approved!' : '❌ Transfer declined.',
-            action === 'Approved' ? 'success' : 'error');
-    } catch (err) {
-      console.error('adminTransferAction error:', err);
-      toast('Failed to update transfer: ' + (err.code || err.message));
-    }
   };
 
   // ══════════════════════════════════════════
