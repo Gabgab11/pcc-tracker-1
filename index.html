@@ -383,57 +383,123 @@
     document.getElementById('adm-approved').textContent = approved;
     document.getElementById('adm-pending').textContent  = pending;
 
-    // Render deals
+    // Render deals (with active filters)
+    renderAdminDeals();
+    renderAdminTransfers();
+  };
+
+  function getFilters() {
+    return {
+      from:   document.getElementById('f-from')?.value   || '',
+      to:     document.getElementById('f-to')?.value     || '',
+      status: document.getElementById('f-status')?.value || 'All',
+      closer: document.getElementById('f-closer')?.value || 'All',
+    };
+  }
+
+  function dealMatchesFilters(d, f) {
+    // Date range — compare against createdAt (YYYY-MM-DD prefix)
+    const dateStr = (d.createdAt || '').slice(0, 10);
+    if (f.from && dateStr < f.from) return false;
+    if (f.to   && dateStr > f.to)   return false;
+    // Status
+    if (f.status !== 'All' && d.status !== f.status) return false;
+    // Closer
+    if (f.closer !== 'All' && d.name !== f.closer) return false;
+    return true;
+  }
+
+  function renderAdminDeals() {
+    const f    = getFilters();
     const wrap = document.getElementById('adm-deals');
-    if (deals.length === 0) {
-      wrap.innerHTML = '<div class="empty">No deals submitted yet.</div>';
-    } else {
-      wrap.innerHTML = '';
-      // Show pending first
-      const sorted = [...deals].sort((a, b) => {
-        const order = { Pending: 0, Approved: 1, Declined: 2 };
-        return (order[a.status] || 0) - (order[b.status] || 0);
-      });
-      sorted.forEach(d => {
-        const resolved = d.status !== 'Pending';
-        wrap.insertAdjacentHTML('beforeend', `
-          <div class="admin-deal ${resolved ? 'deal-resolved' : ''}">
-            <span class="deal-status ${statusClass(d.status)}">${d.status}</span>
-            <span style="float:right;font-size:11px;color:var(--muted)">${fmtDate(d.createdAt)}</span><br>
-            <b>Closer:</b> ${d.name} &nbsp;|&nbsp; <b>Client:</b> ${d.client}<br>
-            <b>Opener:</b> ${d.opener} &nbsp;|&nbsp; <b>Phone:</b> ${d.phone}<br>
-            Debt: $${Number(d.debt).toLocaleString()} &nbsp;·&nbsp; Monthly: $${d.monthly || '—'}<br>
-            First Pay: ${fmtDate(d.firstpay)} &nbsp;·&nbsp; Closing: ${fmtDate(d.closing)}<br>
-            ${resolved
-              ? `Commission: <b>$${d.comm}</b>`
-              : `<div class="admin-actions">
-                   <input class="admin-comm-edit" type="number" id="comm-${d.id}" value="${d.comm}" placeholder="Edit commission…"/>
-                   <button class="btn-approve" onclick="adminAction('${d.id}','Approved')">✓ Approve</button>
-                   <button class="btn-decline" onclick="adminAction('${d.id}','Declined')">✗ Decline</button>
-                 </div>`
-            }
-          </div>`);
-      });
+    const filtered = deals.filter(d => dealMatchesFilters(d, f));
+
+    // Update result count
+    const countEl = document.getElementById('f-count');
+    if (countEl) {
+      const hasFilter = f.from || f.to || f.status !== 'All' || f.closer !== 'All';
+      countEl.innerHTML = hasFilter
+        ? `Showing <span>${filtered.length}</span> of ${deals.length} deals`
+        : '';
     }
 
-    // Render transfers
-    const twrap = document.getElementById('adm-transfers');
-    if (transfers.length === 0) {
-      twrap.innerHTML = '<div class="empty">No transfers submitted yet.</div>';
-    } else {
-      twrap.innerHTML = '';
-      transfers.forEach(t => {
-        twrap.insertAdjacentHTML('beforeend', `
-          <div class="admin-deal">
-            <span class="deal-status status-pending">Transfer</span>
-            <span style="float:right;font-size:11px;color:var(--muted)">${fmtDate(t.date)}</span><br>
-            <b>${t.name}</b> — ${t.type}<br>
-            ${t.closer ? `Closer: <b>${t.closer}</b><br>` : ''}
-            Phone: ${t.phone}<br>
-            Commission: <b>$${t.comm}</b>
-          </div>`);
-      });
+    if (filtered.length === 0) {
+      wrap.innerHTML = '<div class="empty">No deals match the selected filters.</div>';
+      return;
     }
+
+    wrap.innerHTML = '';
+    const sorted = [...filtered].sort((a, b) => {
+      const order = { Pending: 0, Approved: 1, Declined: 2 };
+      return (order[a.status] || 0) - (order[b.status] || 0);
+    });
+
+    sorted.forEach(d => {
+      const resolved = d.status !== 'Pending';
+      wrap.insertAdjacentHTML('beforeend', `
+        <div class="admin-deal ${resolved ? 'deal-resolved' : ''}">
+          <span class="deal-status ${statusClass(d.status)}">${d.status}</span>
+          <span style="float:right;font-size:11px;color:var(--muted)">${fmtDate(d.createdAt)}</span><br>
+          <b>Closer:</b> ${d.name} &nbsp;|&nbsp; <b>Client:</b> ${d.client}<br>
+          <b>Opener:</b> ${d.opener} &nbsp;|&nbsp; <b>Phone:</b> ${d.phone}<br>
+          Debt: $${Number(d.debt).toLocaleString()} &nbsp;·&nbsp; Monthly: $${d.monthly || '—'}<br>
+          First Pay: ${fmtDate(d.firstpay)} &nbsp;·&nbsp; Closing: ${fmtDate(d.closing)}<br>
+          ${resolved
+            ? `Commission: <b>$${d.comm}</b>`
+            : `<div class="admin-actions">
+                 <input class="admin-comm-edit" type="number" id="comm-${d.id}" value="${d.comm}" placeholder="Edit commission…"/>
+                 <button class="btn-approve" onclick="adminAction('${d.id}','Approved')">✓ Approve</button>
+                 <button class="btn-decline" onclick="adminAction('${d.id}','Declined')">✗ Decline</button>
+               </div>`
+          }
+        </div>`);
+    });
+  }
+
+  function renderAdminTransfers() {
+    const f     = getFilters();
+    const twrap = document.getElementById('adm-transfers');
+
+    // Filter transfers by date only (they have no status/closer in same way)
+    const filtered = transfers.filter(t => {
+      const dateStr = (t.date || '').slice(0, 10);
+      if (f.from && dateStr < f.from) return false;
+      if (f.to   && dateStr > f.to)   return false;
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      twrap.innerHTML = '<div class="empty">No transfers match the selected filters.</div>';
+      return;
+    }
+
+    twrap.innerHTML = '';
+    filtered.forEach(t => {
+      twrap.insertAdjacentHTML('beforeend', `
+        <div class="admin-deal">
+          <span class="deal-status status-pending">Transfer</span>
+          <span style="float:right;font-size:11px;color:var(--muted)">${fmtDate(t.date)}</span><br>
+          <b>${t.name}</b> — ${t.type}<br>
+          ${t.closer ? `Closer: <b>${t.closer}</b><br>` : ''}
+          Phone: ${t.phone}<br>
+          Commission: <b>$${t.comm}</b>
+        </div>`);
+    });
+  }
+
+  window.applyFilters = function() {
+    renderAdminDeals();
+    renderAdminTransfers();
+  };
+
+  window.clearFilters = function() {
+    document.getElementById('f-from').value   = '';
+    document.getElementById('f-to').value     = '';
+    document.getElementById('f-status').value = 'All';
+    document.getElementById('f-closer').value = 'All';
+    document.getElementById('f-count').innerHTML = '';
+    renderAdminDeals();
+    renderAdminTransfers();
   };
 
   window.adminAction = async function(id, action) {
@@ -626,11 +692,77 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .toast-fire{background:linear-gradient(135deg,#05122a,#0a0f2e);border:1px solid var(--accent);color:#bae6fd;font-size:15px;text-align:center;}
 .empty{text-align:center;padding:28px;color:var(--muted);font-size:13px;letter-spacing:1px;}
 
+/* FILTER CARD */
+.filter-card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:18px;padding:22px 26px 18px;margin-bottom:18px;
+  position:relative;overflow:hidden;
+}
+.filter-card::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,rgba(56,189,248,.03) 0%,rgba(99,102,241,.03) 100%);
+  pointer-events:none;
+}
+.filter-title{
+  font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:3px;
+  color:var(--accent);margin-bottom:16px;
+  border-bottom:1px solid var(--border);padding-bottom:10px;
+}
+.filter-grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:12px;
+}
+.filter-field label.filter-label{
+  display:block;font-size:9px;font-weight:700;letter-spacing:2px;
+  text-transform:uppercase;color:var(--muted);margin-bottom:5px;margin-top:0;
+}
+.filter-actions{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-top:14px;flex-wrap:wrap;gap:8px;
+}
+.btn-filter-clear{
+  padding:8px 18px;border:1px solid var(--border);border-radius:8px;
+  background:transparent;color:var(--muted);font-size:11px;font-weight:700;
+  letter-spacing:1px;text-transform:uppercase;cursor:pointer;
+  transition:border .2s,color .2s;
+}
+.btn-filter-clear:hover{border-color:var(--red);color:var(--red);}
+.filter-results-count{
+  font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.5px;
+}
+.filter-results-count span{color:var(--accent);font-family:'Bebas Neue',sans-serif;font-size:15px;}
+
 @media(max-width:540px){
-  .row{grid-template-columns:1fr;}
-  .role-btn{padding:9px 14px;font-size:10px;}
-  .admin-stats{grid-template-columns:1fr 1fr;}
-  .login-box{padding:32px 22px 28px;}
+  .filter-grid{grid-template-columns:1fr;}
+}
+
+/* FOOTER */
+.app-footer{
+  width:100%;max-width:800px;
+  display:flex;align-items:center;justify-content:center;gap:14px;
+  padding:20px 24px 32px;
+  position:relative;z-index:1;
+  border-top:1px solid var(--border);
+  margin-top:12px;
+}
+.version-tag{
+  font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:3px;
+  background:linear-gradient(135deg,var(--accent2),var(--accent));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  border:1px solid rgba(56,189,248,.2);border-radius:6px;
+  padding:3px 10px;
+  /* fallback for non-webkit */
+  color:var(--accent);
+}
+.footer-name{
+  font-size:11px;font-weight:600;letter-spacing:2px;
+  text-transform:uppercase;color:var(--muted);
+}
+.footer-copy{
+  font-size:10px;letter-spacing:1px;color:#1e3050;
+}
+
+@media(max-width:540px){
+  .app-footer{flex-direction:column;gap:6px;text-align:center;}
 }
 </style>
 </head>
@@ -857,6 +989,45 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         </div>
       </div>
 
+      <!-- FILTER BAR -->
+      <div class="filter-card">
+        <div class="filter-title">🔍 Filter Records</div>
+        <div class="filter-grid">
+          <div class="filter-field">
+            <label class="filter-label">From Date</label>
+            <input type="date" id="f-from" onchange="applyFilters()"/>
+          </div>
+          <div class="filter-field">
+            <label class="filter-label">To Date</label>
+            <input type="date" id="f-to" onchange="applyFilters()"/>
+          </div>
+          <div class="filter-field">
+            <label class="filter-label">Status</label>
+            <select id="f-status" onchange="applyFilters()">
+              <option value="All">All Statuses</option>
+              <option value="Pending">Pending</option>
+              <option value="Approved">Approved</option>
+              <option value="Declined">Declined</option>
+            </select>
+          </div>
+          <div class="filter-field">
+            <label class="filter-label">Closer</label>
+            <select id="f-closer" onchange="applyFilters()">
+              <option value="All">All Closers</option>
+              <option value="David">David</option>
+              <option value="Sabrina">Sabrina</option>
+              <option value="Eddy">Eddy</option>
+              <option value="Willy">Willy</option>
+              <option value="Nate">Nate</option>
+            </select>
+          </div>
+        </div>
+        <div class="filter-actions">
+          <button class="btn-filter-clear" onclick="clearFilters()">✕ Clear Filters</button>
+          <div class="filter-results-count" id="f-count"></div>
+        </div>
+      </div>
+
       <div class="section-label">Closer Deals — Approve or Decline</div>
       <div id="adm-deals"><div class="empty">No deals submitted yet.</div></div>
 
@@ -866,6 +1037,13 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
     </div>
 
   </div>
+
+  <footer class="app-footer">
+    <span class="version-tag">v1.0</span>
+    <span class="footer-name">United Funds Tracker</span>
+    <span class="footer-copy">© 2026 · Foundation Release</span>
+  </footer>
+
 </div>
 
 <script>
