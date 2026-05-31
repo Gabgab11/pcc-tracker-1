@@ -238,6 +238,7 @@
 
     renderDashboard();
     syncGlobals();
+    if (window.refreshEOD) window.refreshEOD();
   }
 
   function renderDashboard() {
@@ -301,6 +302,8 @@
       document.getElementById('op-closer-wrap').style.display = 'none';
       document.getElementById('op-comm-preview').textContent = '$—';
       toast('🔥 Nice one, keep going!', 'fire');
+      syncGlobals();
+      refreshEOD();
     } catch (err) { toast('Failed to submit. Check your connection.'); console.error(err); }
   };
 
@@ -371,6 +374,8 @@
       document.getElementById('cl-commission').value = '$0';
       document.getElementById('cl-tier-info').textContent = '';
       toast('🔥 Nice one, keep going!', 'fire');
+      syncGlobals();
+      refreshEOD();
     } catch (err) { toast('Failed to submit. Check your connection.'); console.error(err); }
   };
 
@@ -538,6 +543,8 @@
       await updateDoc(doc(db, 'deals', id), { status: action, comm: d.comm });
       refreshAdmin();
       renderDashboard();
+      syncGlobals();
+      if (window.refreshEOD) window.refreshEOD();
       toast(action === 'Approved' ? '✅ Deal approved!' : '❌ Deal declined.',
             action === 'Approved' ? 'success' : 'error');
     } catch (err) { toast('Failed to update deal.'); console.error(err); }
@@ -545,17 +552,29 @@
 
   window.adminTransferAction = async function(id, action) {
     const t = transfers.find(x => x.id === id);
-    if (!t) return;
+    if (!t) { toast('Transfer not found.'); return; }
     const editEl = document.getElementById('tcomm-' + id);
-    if (editEl) t.comm = Number(editEl.value) || t.comm;
+    const newComm = editEl ? (Number(editEl.value) || t.comm) : t.comm;
+    t.comm   = newComm;
     t.status = action;
     try {
-      await updateDoc(doc(db, 'transfers', id), { status: action, comm: t.comm });
+      // Try updateDoc first; fall back to setDoc merge if doc doesn't have all fields
+      try {
+        await updateDoc(doc(db, 'transfers', id), { status: action, comm: newComm });
+      } catch (innerErr) {
+        // Fallback: setDoc with merge (works even if security rules are stricter)
+        await setDoc(doc(db, 'transfers', id), { status: action, comm: newComm }, { merge: true });
+      }
+      syncGlobals();
+      refreshEOD();
       refreshAdmin();
       renderDashboard();
       toast(action === 'Approved' ? '✅ Transfer approved!' : '❌ Transfer declined.',
             action === 'Approved' ? 'success' : 'error');
-    } catch (err) { toast('Failed to update transfer.'); console.error(err); }
+    } catch (err) {
+      console.error('adminTransferAction error:', err);
+      toast('Failed to update transfer: ' + (err.code || err.message));
+    }
   };
 
   // ══════════════════════════════════════════
@@ -1284,7 +1303,69 @@ function updateStrength(val) {
     return '';
   }
 
-  let eodShown = false;
+  // ── refreshEOD: called after every submit & approval to update live stats ──
+  window.refreshEOD = function() {
+    const role = window._currentRole;
+    if (!role || role === 'admin') return;
+    const eodId = role === 'closer' ? 'eod-closer' : 'eod-opener';
+    const eodEl = document.getElementById(eodId);
+    if (!eodEl) return;
+
+    const egypt  = getNowEgypt();
+    const active = isShiftActive(egypt);
+
+    // During shift — show a compact live summary bar
+    if (active) {
+      const todayStr = egypt.toISOString().slice(0, 10);
+      if (role === 'closer') {
+        const todayDeals = (window._deals || []).filter(d => (d.createdAt||'').slice(0,10) === todayStr);
+        const approved   = todayDeals.filter(d => d.status === 'Approved');
+        const totalComm  = approved.reduce((s, d) => s + (d.comm||0), 0);
+        eodEl.innerHTML = `
+          <div class="eod-title" style="font-size:14px;margin-bottom:10px;">📊 Today's Progress</div>
+          <div class="eod-grid">
+            <div class="eod-stat">
+              <div class="eod-stat-val">${todayDeals.length}</div>
+              <div class="eod-stat-label">Deals Submitted</div>
+            </div>
+            <div class="eod-stat">
+              <div class="eod-stat-val">${approved.length}</div>
+              <div class="eod-stat-label">Approved</div>
+            </div>
+            <div class="eod-stat">
+              <div class="eod-stat-val">$${totalComm}</div>
+              <div class="eod-stat-label">Earned Today</div>
+            </div>
+          </div>`;
+        eodEl.style.display = todayDeals.length > 0 ? 'block' : 'none';
+      } else {
+        const todayTransfers = (window._transfers || []).filter(t => (t.createdAt||'').slice(0,10) === todayStr);
+        const approved       = todayTransfers.filter(t => t.status === 'Approved');
+        const totalComm      = todayTransfers.reduce((s, t) => s + (t.comm||0), 0);
+        eodEl.innerHTML = `
+          <div class="eod-title" style="font-size:14px;margin-bottom:10px;">📊 Today's Progress</div>
+          <div class="eod-grid">
+            <div class="eod-stat">
+              <div class="eod-stat-val">${todayTransfers.length}</div>
+              <div class="eod-stat-label">Transfers Sent</div>
+            </div>
+            <div class="eod-stat">
+              <div class="eod-stat-val">${approved.length}</div>
+              <div class="eod-stat-label">Approved</div>
+            </div>
+            <div class="eod-stat">
+              <div class="eod-stat-val">$${totalComm}</div>
+              <div class="eod-stat-label">Earned Today</div>
+            </div>
+          </div>`;
+        eodEl.style.display = todayTransfers.length > 0 ? 'block' : 'none';
+      }
+    } else {
+      // Shift over — show full end-of-shift summary
+      eodEl.innerHTML    = buildEODSummary(role);
+      eodEl.style.display = 'block';
+    }
+  };
 
   function tick() {
     const egypt  = getNowEgypt();
@@ -1292,11 +1373,10 @@ function updateStrength(val) {
     const role   = window._currentRole;
     if (!role || role === 'admin') return;
 
-    const timerId   = role === 'closer' ? 'shift-timer-closer'   : 'shift-timer-opener';
-    const progId    = role === 'closer' ? 'shift-progress-closer': 'shift-progress-opener';
-    const tagId     = role === 'closer' ? 'shift-tag-closer'     : 'shift-tag-opener';
-    const barId     = role === 'closer' ? 'shift-bar-closer'     : 'shift-bar-opener';
-    const eodId     = role === 'closer' ? 'eod-closer'           : 'eod-opener';
+    const timerId = role === 'closer' ? 'shift-timer-closer'    : 'shift-timer-opener';
+    const progId  = role === 'closer' ? 'shift-progress-closer' : 'shift-progress-opener';
+    const tagId   = role === 'closer' ? 'shift-tag-closer'      : 'shift-tag-opener';
+    const eodId   = role === 'closer' ? 'eod-closer'            : 'eod-opener';
 
     const timerEl = document.getElementById(timerId);
     const progEl  = document.getElementById(progId);
@@ -1305,35 +1385,36 @@ function updateStrength(val) {
     if (!timerEl) return;
 
     if (active) {
-      eodShown = false;
       const secsLeft = getSecondsLeft(egypt);
       const pct      = Math.max(0, Math.min(100, ((SHIFT_DURATION_S - secsLeft) / SHIFT_DURATION_S) * 100));
+      const urgent   = secsLeft <= 1800;
 
       timerEl.textContent = formatCountdown(secsLeft);
-      timerEl.className   = 'shift-timer' + (secsLeft <= 1800 ? ' urgent' : '');
-      if (progEl) progEl.style.width = pct + '%';
-      if (progEl) progEl.style.background = secsLeft <= 1800
-        ? 'linear-gradient(90deg,#f43f5e,#fb923c)'
-        : 'linear-gradient(90deg,var(--accent2),var(--accent))';
-      if (tagEl) tagEl.textContent = secsLeft <= 1800
+      timerEl.className   = 'shift-timer' + (urgent ? ' urgent' : '');
+
+      if (progEl) {
+        progEl.style.width      = pct + '%';
+        progEl.style.background = urgent
+          ? 'linear-gradient(90deg,#f43f5e,#fb923c)'
+          : 'linear-gradient(90deg,var(--accent2),var(--accent))';
+      }
+      if (tagEl) tagEl.textContent = urgent
         ? '⚠️ Less than 30 minutes left — finish strong!'
         : 'Egypt: 5PM – 2AM · Mon–Fri';
-      if (eodEl) eodEl.style.display = 'none';
 
     } else {
-      // Shift is over
+      // Off shift
       timerEl.textContent = isWeekday(egypt) ? 'OFF SHIFT' : 'WEEKEND';
       timerEl.className   = 'shift-timer off';
-      if (progEl) progEl.style.width = '0%';
-      if (tagEl)  tagEl.textContent  = isWeekday(egypt)
+      if (progEl) { progEl.style.width = '0%'; }
+      if (tagEl)  tagEl.textContent = isWeekday(egypt)
         ? 'Next shift starts at 5PM Egypt time'
         : 'Back Monday at 5PM Egypt time';
 
-      // Show EOD summary once
-      if (!eodShown && eodEl) {
+      // Always keep EOD summary fresh when off shift
+      if (eodEl && eodEl.style.display === 'none') {
         eodEl.innerHTML    = buildEODSummary(role);
         eodEl.style.display = 'block';
-        eodShown = true;
       }
     }
   }
