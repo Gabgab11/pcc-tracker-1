@@ -100,8 +100,12 @@
   // ══════════════════════════════════════════
   onAuthStateChanged(auth, async (fbUser) => {
     if (fbUser) {
-      const meta = ROLE_MAP[fbUser.email] || { role: 'opener', name: fbUser.email };
-      currentUser = { ...meta, email: fbUser.email, uid: fbUser.uid };
+      // Use ROLE_MAP if email is known, otherwise fall back to selectedLoginRole
+      const mapped = ROLE_MAP[fbUser.email];
+      const role   = mapped ? mapped.role : (selectedLoginRole || 'opener');
+      const name   = mapped ? mapped.name : fbUser.email.split('@')[0];
+      currentUser  = { role, name, email: fbUser.email, uid: fbUser.uid };
+
       const userDoc = await getDoc(doc(db, 'users', fbUser.uid));
       if (!userDoc.exists() || userDoc.data().mustChangePassword === true) {
         showScreen('force-pw');
@@ -115,12 +119,38 @@
     }
   });
 
+  // Track selected role on login screen
+  let selectedLoginRole = '';
+
+  window.selectRole = function(role) {
+    selectedLoginRole = role;
+    ['opener','closer','admin'].forEach(r => {
+      const btn = document.getElementById('rs-' + r);
+      if (btn) btn.classList.toggle('selected', r === role);
+    });
+  };
+
   window.doLogin = async function() {
-    const email = document.getElementById('li-email').value.trim().toLowerCase();
-    const pass  = document.getElementById('li-pass').value;
-    const errEl = document.getElementById('li-error');
-    const btn   = document.getElementById('li-btn');
-    if (!email || !pass) { showError(errEl, 'Please enter email and password.'); return; }
+    const email  = document.getElementById('li-email').value.trim().toLowerCase();
+    const pass   = document.getElementById('li-pass').value;
+    const errEl  = document.getElementById('li-error');
+    const btn    = document.getElementById('li-btn');
+
+    // Validate role selected
+    if (!selectedLoginRole) {
+      showError(errEl, 'Please select your role first.'); return;
+    }
+    if (!email || !pass) {
+      showError(errEl, 'Please enter email and password.'); return;
+    }
+
+    // Cross-check: does this email's mapped role match what they selected?
+    const mapped = ROLE_MAP[email];
+    if (mapped && mapped.role !== selectedLoginRole) {
+      showError(errEl, `This email is registered as a ${mapped.role}, not a ${selectedLoginRole}.`);
+      return;
+    }
+
     btn.textContent = 'LOGGING IN…'; btn.disabled = true; errEl.style.display = 'none';
     try {
       await signInWithEmailAndPassword(auth, email, pass);
@@ -161,7 +191,6 @@
 
   window.doLogout = async function() {
     await signOut(auth);
-    // Hide app
     document.getElementById('app').classList.remove('visible');
     // Reset login form
     document.getElementById('li-email').value = '';
@@ -169,11 +198,16 @@
     document.getElementById('li-btn').textContent = 'LOG IN';
     document.getElementById('li-btn').disabled = false;
     document.getElementById('li-error').style.display = 'none';
-    // Remove hidden class so animation plays fresh, then show login
+    // Reset role selector
+    selectedLoginRole = '';
+    ['opener','closer','admin'].forEach(r => {
+      const btn = document.getElementById('rs-' + r);
+      if (btn) btn.classList.remove('selected');
+    });
+    // Show login screen cleanly
     const loginScreen = document.getElementById('login-screen');
     loginScreen.classList.remove('hidden');
     loginScreen.style.display = 'flex';
-    // Reset force-pw screen too
     document.getElementById('force-pw-screen').style.display = 'none';
   };
 
@@ -633,6 +667,26 @@ body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse
 .login-logo{font-family:'Bebas Neue',sans-serif;font-size:58px;letter-spacing:6px;background:linear-gradient(135deg,#fff 20%,var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;text-align:center;line-height:1;}
 .login-welcome{text-align:center;margin-top:8px;margin-bottom:6px;font-size:13px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
 .login-sub{text-align:center;font-size:12px;color:#1e3a52;letter-spacing:3px;text-transform:uppercase;margin-bottom:32px;font-style:italic;}
+/* ROLE SELECTOR */
+.role-selector{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:4px;
+}
+.role-sel-btn{
+  display:flex;flex-direction:column;align-items:center;gap:6px;
+  padding:12px 8px;border-radius:12px;border:1px solid var(--border);
+  background:var(--surface2);cursor:pointer;transition:all .2s;
+  color:var(--muted);
+}
+.role-sel-btn:hover{border-color:rgba(56,189,248,.4);color:var(--text);}
+.role-sel-btn.selected{
+  border-color:var(--accent);
+  background:linear-gradient(135deg,rgba(14,165,233,.15),rgba(56,189,248,.08));
+  color:var(--accent);
+  box-shadow:0 0 16px rgba(56,189,248,.15);
+}
+.role-sel-icon{font-size:20px;line-height:1;}
+.role-sel-name{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;}
+
 .login-label{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:6px;margin-top:16px;display:block;}
 .login-input{width:100%;padding:13px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:11px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;outline:none;transition:border .2s,box-shadow .2s;}
 .login-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(56,189,248,.12);}
@@ -843,6 +897,23 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
     <div class="login-logo">UNITED FUNDS</div>
     <div class="login-welcome">Welcome Back</div>
     <div class="login-sub">Track &nbsp;·&nbsp; Grow &nbsp;·&nbsp; Earn</div>
+
+    <label class="login-label">I am a</label>
+    <div class="role-selector">
+      <button class="role-sel-btn" id="rs-opener" onclick="selectRole('opener')">
+        <span class="role-sel-icon">📞</span>
+        <span class="role-sel-name">Opener</span>
+      </button>
+      <button class="role-sel-btn" id="rs-closer" onclick="selectRole('closer')">
+        <span class="role-sel-icon">🤝</span>
+        <span class="role-sel-name">Closer</span>
+      </button>
+      <button class="role-sel-btn" id="rs-admin" onclick="selectRole('admin')">
+        <span class="role-sel-icon">⚙️</span>
+        <span class="role-sel-name">Admin</span>
+      </button>
+    </div>
+
     <label class="login-label" for="li-email">Email</label>
     <input class="login-input" id="li-email" type="email" placeholder="your@email.com" autocomplete="email"/>
     <label class="login-label" for="li-pass">Password</label>
