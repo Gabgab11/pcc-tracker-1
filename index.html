@@ -161,11 +161,20 @@
 
   window.doLogout = async function() {
     await signOut(auth);
+    // Hide app
     document.getElementById('app').classList.remove('visible');
+    // Reset login form
     document.getElementById('li-email').value = '';
     document.getElementById('li-pass').value  = '';
     document.getElementById('li-btn').textContent = 'LOG IN';
     document.getElementById('li-btn').disabled = false;
+    document.getElementById('li-error').style.display = 'none';
+    // Remove hidden class so animation plays fresh, then show login
+    const loginScreen = document.getElementById('login-screen');
+    loginScreen.classList.remove('hidden');
+    loginScreen.style.display = 'flex';
+    // Reset force-pw screen too
+    document.getElementById('force-pw-screen').style.display = 'none';
   };
 
   // ══════════════════════════════════════════
@@ -177,8 +186,13 @@
     document.getElementById('app').classList.remove('visible');
   }
   function hideLogin() {
-    document.getElementById('login-screen').classList.add('hidden');
-    setTimeout(() => { document.getElementById('login-screen').style.display = 'none'; }, 400);
+    const loginScreen = document.getElementById('login-screen');
+    loginScreen.classList.remove('hidden');
+    loginScreen.classList.add('hidden');
+    setTimeout(() => {
+      loginScreen.style.display = 'none';
+      loginScreen.classList.remove('hidden');
+    }, 400);
   }
   function hideForcePassword() {
     document.getElementById('force-pw-screen').style.display = 'none';
