@@ -30,14 +30,19 @@
   const auth = getAuth(app);
   const db   = getFirestore(app);
 
+  // ══════════════════════════════════════════
+  //  ROLE MAP — Updated with all users
+  // ══════════════════════════════════════════
   const ROLE_MAP = {
-    'admin@pcc.com':   { role: 'admin',  name: 'Admin'   },
-    'david@pcc.com':   { role: 'closer', name: 'David'   },
-    'sabrina@pcc.com': { role: 'closer', name: 'Sabrina' },
-    'eddy@pcc.com':    { role: 'closer', name: 'Eddy'    },
-    'willy@pcc.com':   { role: 'closer', name: 'Willy'   },
-    'nate@pcc.com':    { role: 'closer', name: 'Nate'    },
-    'opener@pcc.com':  { role: 'opener', name: 'Opener'  },
+    'info@unitedfund.net':   { role: 'admin',  name: 'Admin'   },
+    'david@pcc.com':         { role: 'closer', name: 'David'   },
+    'sabrina@pcc.com':       { role: 'closer', name: 'Sabrina' },
+    'eddy@pcc.com':          { role: 'closer', name: 'Eddy'    },
+    'willy@pcc.com':         { role: 'closer', name: 'Willy'   },
+    'nate@pcc.com':          { role: 'closer', name: 'Nathan'  },
+    'kiley@unitedfunds.com': { role: 'opener', name: 'Kiley'   },
+    'sara@unitedfunds.com':  { role: 'opener', name: 'Sara'    },
+    'kate@unitedfunds.com':  { role: 'opener', name: 'Kate'    },
   };
 
   let currentUser = null;
@@ -55,8 +60,6 @@
   //  COMMISSION LOGIC
   // ══════════════════════════════════════════
 
-  // CLOSER: based on monthly payment amount
-  // If closer has 2+ deals on same calendar day → commission x2
   function closerBaseComm(monthly) {
     const m = Number(monthly);
     if (m >= 500) return 100;
@@ -69,7 +72,6 @@
   }
 
   async function countCloserDealsOnDate(dateStr) {
-    // dateStr = "YYYY-MM-DD"
     if (!currentUser || !dateStr) return 0;
     try {
       const snap = await getDocs(query(
@@ -81,7 +83,6 @@
     } catch (e) { return 0; }
   }
 
-  // OPENER: flat commission per lead source type
   function openerComm(type) {
     const map = {
       '1st Closed':  5,
@@ -100,7 +101,6 @@
   // ══════════════════════════════════════════
   onAuthStateChanged(auth, async (fbUser) => {
     if (fbUser) {
-      // Use ROLE_MAP if email is known, otherwise fall back to selectedLoginRole
       const mapped = ROLE_MAP[fbUser.email];
       const role   = mapped ? mapped.role : (selectedLoginRole || 'opener');
       const name   = mapped ? mapped.name : fbUser.email.split('@')[0];
@@ -119,7 +119,6 @@
     }
   });
 
-  // Track selected role on login screen
   let selectedLoginRole = '';
 
   window.selectRole = function(role) {
@@ -136,7 +135,6 @@
     const errEl  = document.getElementById('li-error');
     const btn    = document.getElementById('li-btn');
 
-    // Validate role selected
     if (!selectedLoginRole) {
       showError(errEl, 'Please select your role first.'); return;
     }
@@ -144,7 +142,6 @@
       showError(errEl, 'Please enter email and password.'); return;
     }
 
-    // Cross-check: does this email's mapped role match what they selected?
     const mapped = ROLE_MAP[email];
     if (mapped && mapped.role !== selectedLoginRole) {
       showError(errEl, `This email is registered as a ${mapped.role}, not a ${selectedLoginRole}.`);
@@ -171,7 +168,8 @@
     errEl.style.display = 'none';
     if (newPass.length < 8) { showError(errEl, 'Password must be at least 8 characters.'); return; }
     if (newPass !== confirm) { showError(errEl, 'Passwords do not match.'); return; }
-    const defaults = ['admin123','david123','sabrina123','eddy123','willy123','nate123','opener123'];
+    const defaults = ['Admin123','David123','Sabrina123','Eddy123','Willy123','Nate123','Kiley123','Sara123','Kate123',
+                      'admin123','david123','sabrina123','eddy123','willy123','nate123','kiley123','sara123','kate123'];
     if (defaults.includes(newPass)) { showError(errEl, 'Please choose a different password from your temporary one.'); return; }
     btn.textContent = 'SAVING…'; btn.disabled = true;
     try {
@@ -192,19 +190,16 @@
   window.doLogout = async function() {
     await signOut(auth);
     document.getElementById('app').classList.remove('visible');
-    // Reset login form
     document.getElementById('li-email').value = '';
     document.getElementById('li-pass').value  = '';
     document.getElementById('li-btn').textContent = 'LOG IN';
     document.getElementById('li-btn').disabled = false;
     document.getElementById('li-error').style.display = 'none';
-    // Reset role selector
     selectedLoginRole = '';
     ['opener','closer','admin'].forEach(r => {
       const btn = document.getElementById('rs-' + r);
       if (btn) btn.classList.remove('selected');
     });
-    // Show login screen cleanly
     const loginScreen = document.getElementById('login-screen');
     loginScreen.classList.remove('hidden');
     loginScreen.style.display = 'flex';
@@ -242,7 +237,7 @@
     document.getElementById('role-bar').style.display = role === 'admin' ? 'flex' : 'none';
     if (role === 'admin')  { switchPanel('admin'); }
     if (role === 'closer') { switchPanel('closer'); autoFillCloserName(); }
-    if (role === 'opener') { switchPanel('opener'); }
+    if (role === 'opener') { switchPanel('opener'); autoFillOpenerName(); }
     syncGlobals();
     loadData();
   }
@@ -313,6 +308,16 @@
   // ══════════════════════════════════════════
   //  OPENER SUBMIT
   // ══════════════════════════════════════════
+
+  // Auto-fill opener name from logged-in user
+  window.autoFillOpenerName = function() {
+    if (currentUser && currentUser.role === 'opener') {
+      const sel = document.getElementById('op-name');
+      sel.value = currentUser.name;
+      sel.disabled = true;
+    }
+  };
+
   window.handleTransferType = function() {
     const type = document.getElementById('op-type').value;
     const salesTypes = ['1st Closed','2nd Close','3rd Closed','4th Closed','pCcT'];
@@ -344,7 +349,6 @@
       if (wrap.querySelector('.empty')) wrap.innerHTML = '';
       wrap.insertAdjacentHTML('afterbegin', buildTransferCard(t));
       ['op-date','op-phone'].forEach(id => document.getElementById(id).value = '');
-      document.getElementById('op-name').value = '';
       document.getElementById('op-type').value = '';
       document.getElementById('op-closer').value = '';
       document.getElementById('op-closer-wrap').style.display = 'none';
@@ -376,7 +380,6 @@
     const base    = closerBaseComm(monthly);
     const dateStr = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
     const existing = await countCloserDealsOnDate(dateStr);
-    // existing = deals already saved for that day (not counting current entry)
     const multiplier = existing >= 1 ? 2 : 1;
     const comm = base * multiplier;
     document.getElementById('cl-commission').value = '$' + comm;
@@ -445,7 +448,6 @@
     document.getElementById('adm-approved').textContent = approved;
     document.getElementById('adm-pending').textContent  = pending;
 
-    // Render deals (with active filters)
     renderAdminDeals();
     renderAdminTransfers();
   };
@@ -460,13 +462,10 @@
   }
 
   function dealMatchesFilters(d, f) {
-    // Date range — compare against createdAt (YYYY-MM-DD prefix)
     const dateStr = (d.createdAt || '').slice(0, 10);
     if (f.from && dateStr < f.from) return false;
     if (f.to   && dateStr > f.to)   return false;
-    // Status
     if (f.status !== 'All' && d.status !== f.status) return false;
-    // Closer
     if (f.closer !== 'All' && d.name !== f.closer) return false;
     return true;
   }
@@ -476,7 +475,6 @@
     const wrap = document.getElementById('adm-deals');
     const filtered = deals.filter(d => dealMatchesFilters(d, f));
 
-    // Update result count
     const countEl = document.getElementById('f-count');
     if (countEl) {
       const hasFilter = f.from || f.to || f.status !== 'All' || f.closer !== 'All';
@@ -667,26 +665,12 @@ body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse
 .login-logo{font-family:'Bebas Neue',sans-serif;font-size:58px;letter-spacing:6px;background:linear-gradient(135deg,#fff 20%,var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;text-align:center;line-height:1;}
 .login-welcome{text-align:center;margin-top:8px;margin-bottom:6px;font-size:13px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
 .login-sub{text-align:center;font-size:12px;color:#1e3a52;letter-spacing:3px;text-transform:uppercase;margin-bottom:32px;font-style:italic;}
-/* ROLE SELECTOR */
-.role-selector{
-  display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:4px;
-}
-.role-sel-btn{
-  display:flex;flex-direction:column;align-items:center;gap:6px;
-  padding:12px 8px;border-radius:12px;border:1px solid var(--border);
-  background:var(--surface2);cursor:pointer;transition:all .2s;
-  color:var(--muted);
-}
+.role-selector{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:4px;}
+.role-sel-btn{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 8px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);cursor:pointer;transition:all .2s;color:var(--muted);}
 .role-sel-btn:hover{border-color:rgba(56,189,248,.4);color:var(--text);}
-.role-sel-btn.selected{
-  border-color:var(--accent);
-  background:linear-gradient(135deg,rgba(14,165,233,.15),rgba(56,189,248,.08));
-  color:var(--accent);
-  box-shadow:0 0 16px rgba(56,189,248,.15);
-}
+.role-sel-btn.selected{border-color:var(--accent);background:linear-gradient(135deg,rgba(14,165,233,.15),rgba(56,189,248,.08));color:var(--accent);box-shadow:0 0 16px rgba(56,189,248,.15);}
 .role-sel-icon{font-size:20px;line-height:1;}
 .role-sel-name{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;}
-
 .login-label{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:6px;margin-top:16px;display:block;}
 .login-input{width:100%;padding:13px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:11px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;outline:none;transition:border .2s,box-shadow .2s;}
 .login-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(56,189,248,.12);}
@@ -739,21 +723,15 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .status-approved{background:rgba(34,197,94,.15);color:var(--green);}
 .status-declined{background:rgba(239,68,68,.15);color:var(--red);}
 .status-pending{background:rgba(245,158,11,.15);color:var(--yellow);}
-
-/* COMM PREVIEW */
 .comm-preview{display:flex;align-items:center;gap:10px;background:rgba(56,189,248,.06);border:1px solid rgba(56,189,248,.15);border-radius:10px;padding:10px 16px;margin-top:10px;font-size:12px;color:var(--muted);}
 .comm-preview-val{font-family:'Bebas Neue',sans-serif;font-size:26px;color:var(--accent);letter-spacing:2px;}
 .tier-info{margin-top:7px;font-size:12px;font-weight:600;color:var(--muted);min-height:18px;}
-
-/* COMMISSION TABLE */
 .comm-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;}
 .comm-table th{background:rgba(28,43,66,.6);color:var(--muted);font-size:9px;letter-spacing:2px;text-transform:uppercase;padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);}
 .comm-table td{padding:8px 12px;border-bottom:1px solid rgba(28,43,66,.4);color:var(--text);}
 .comm-table tr:last-child td{border-bottom:none;}
 .comm-table .amt{color:var(--green);font-weight:600;}
 .comm-table .x2{color:var(--purple);font-weight:700;}
-
-/* ADMIN */
 .admin-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:4px;}
 .stat-box{background:var(--surface2);border-radius:12px;padding:16px;text-align:center;}
 .stat-label{font-size:10px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:4px;}
@@ -767,68 +745,25 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .btn-decline:hover{background:rgba(239,68,68,.28);}
 .deal-resolved{opacity:.5;}
 .divider{height:1px;background:var(--border);margin:22px 0;}
-
 #toast{position:fixed;top:22px;right:22px;padding:16px 22px;border-radius:14px;font-size:14px;font-weight:600;z-index:9999;display:none;max-width:340px;box-shadow:0 10px 40px rgba(0,0,0,.5);animation:slideIn .35s cubic-bezier(.22,1,.36,1);}
 @keyframes slideIn{from{transform:translateX(80px);opacity:0;}to{transform:translateX(0);opacity:1;}}
 .toast-error{background:#450a0a;border:1px solid var(--red);color:#fca5a5;}
 .toast-success{background:#052e16;border:1px solid var(--green);color:#86efac;}
 .toast-fire{background:linear-gradient(135deg,#05122a,#0a0f2e);border:1px solid var(--accent);color:#bae6fd;font-size:15px;text-align:center;}
 .empty{text-align:center;padding:28px;color:var(--muted);font-size:13px;letter-spacing:1px;}
-
-/* FILTER CARD */
-.filter-card{
-  background:var(--surface);border:1px solid var(--border);
-  border-radius:18px;padding:22px 26px 18px;margin-bottom:18px;
-  position:relative;overflow:hidden;
-}
-.filter-card::before{
-  content:'';position:absolute;inset:0;
-  background:linear-gradient(135deg,rgba(56,189,248,.03) 0%,rgba(99,102,241,.03) 100%);
-  pointer-events:none;
-}
-.filter-title{
-  font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:3px;
-  color:var(--accent);margin-bottom:16px;
-  border-bottom:1px solid var(--border);padding-bottom:10px;
-}
-.filter-grid{
-  display:grid;grid-template-columns:1fr 1fr;gap:12px;
-}
-.filter-field label.filter-label{
-  display:block;font-size:9px;font-weight:700;letter-spacing:2px;
-  text-transform:uppercase;color:var(--muted);margin-bottom:5px;margin-top:0;
-}
-.filter-actions{
-  display:flex;align-items:center;justify-content:space-between;
-  margin-top:14px;flex-wrap:wrap;gap:8px;
-}
-.btn-filter-clear{
-  padding:8px 18px;border:1px solid var(--border);border-radius:8px;
-  background:transparent;color:var(--muted);font-size:11px;font-weight:700;
-  letter-spacing:1px;text-transform:uppercase;cursor:pointer;
-  transition:border .2s,color .2s;
-}
+.filter-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:22px 26px 18px;margin-bottom:18px;position:relative;overflow:hidden;}
+.filter-card::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(56,189,248,.03) 0%,rgba(99,102,241,.03) 100%);pointer-events:none;}
+.filter-title{font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:3px;color:var(--accent);margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:10px;}
+.filter-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.filter-field label.filter-label{display:block;font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:5px;margin-top:0;}
+.filter-actions{display:flex;align-items:center;justify-content:space-between;margin-top:14px;flex-wrap:wrap;gap:8px;}
+.btn-filter-clear{padding:8px 18px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:border .2s,color .2s;}
 .btn-filter-clear:hover{border-color:var(--red);color:var(--red);}
-.filter-results-count{
-  font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.5px;
-}
+.filter-results-count{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.5px;}
 .filter-results-count span{color:var(--accent);font-family:'Bebas Neue',sans-serif;font-size:15px;}
-
-@media(max-width:540px){
-  .filter-grid{grid-template-columns:1fr;}
-}
-
-/* SHIFT COUNTDOWN */
-.shift-bar{
-  background:var(--surface);border:1px solid var(--border);
-  border-radius:14px;padding:16px 20px 14px;margin-bottom:18px;
-  position:relative;overflow:hidden;
-}
-.shift-bar::before{
-  content:'';position:absolute;inset:0;
-  background:linear-gradient(135deg,rgba(56,189,248,.04),rgba(99,102,241,.04));
-  pointer-events:none;
-}
+@media(max-width:540px){.filter-grid{grid-template-columns:1fr;}}
+.shift-bar{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px 20px 14px;margin-bottom:18px;position:relative;overflow:hidden;}
+.shift-bar::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(56,189,248,.04),rgba(99,102,241,.04));pointer-events:none;}
 .shift-info{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;}
 .shift-label{font-size:9px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);}
 .shift-timer{font-family:'Bebas Neue',sans-serif;font-size:32px;letter-spacing:3px;color:var(--accent);line-height:1;}
@@ -838,52 +773,18 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .shift-progress-wrap{height:5px;background:var(--border);border-radius:4px;overflow:hidden;margin-bottom:8px;}
 .shift-progress-bar{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width 1s linear;}
 .shift-tag{font-size:10px;color:var(--muted);letter-spacing:1px;}
-.shift-off-msg{font-size:12px;color:var(--muted);letter-spacing:.5px;margin-top:4px;}
-
-/* END OF SHIFT SUMMARY */
-.eod-summary{
-  background:linear-gradient(135deg,rgba(56,189,248,.06),rgba(99,102,241,.06));
-  border:1px solid rgba(56,189,248,.2);border-radius:14px;
-  padding:20px 22px;margin-bottom:18px;animation:fadeUp .4s ease;
-}
-.eod-title{
-  font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:3px;
-  color:var(--accent);margin-bottom:14px;
-  border-bottom:1px solid rgba(56,189,248,.15);padding-bottom:10px;
-}
+.eod-summary{background:linear-gradient(135deg,rgba(56,189,248,.06),rgba(99,102,241,.06));border:1px solid rgba(56,189,248,.2);border-radius:14px;padding:20px 22px;margin-bottom:18px;animation:fadeUp .4s ease;}
+.eod-title{font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:3px;color:var(--accent);margin-bottom:14px;border-bottom:1px solid rgba(56,189,248,.15);padding-bottom:10px;}
 .eod-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px;}
 .eod-stat{background:var(--surface2);border-radius:10px;padding:12px;text-align:center;}
 .eod-stat-val{font-family:'Bebas Neue',sans-serif;font-size:28px;color:var(--accent);}
 .eod-stat-label{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-top:2px;}
 .eod-msg{font-size:12px;color:var(--muted);text-align:center;letter-spacing:.5px;margin-top:6px;font-style:italic;}
-.app-footer{
-  width:100%;max-width:800px;
-  display:flex;align-items:center;justify-content:center;gap:14px;
-  padding:20px 24px 32px;
-  position:relative;z-index:1;
-  border-top:1px solid var(--border);
-  margin-top:12px;
-}
-.version-tag{
-  font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:3px;
-  background:linear-gradient(135deg,var(--accent2),var(--accent));
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-  border:1px solid rgba(56,189,248,.2);border-radius:6px;
-  padding:3px 10px;
-  /* fallback for non-webkit */
-  color:var(--accent);
-}
-.footer-name{
-  font-size:11px;font-weight:600;letter-spacing:2px;
-  text-transform:uppercase;color:var(--muted);
-}
-.footer-copy{
-  font-size:10px;letter-spacing:1px;color:#1e3050;
-}
-
-@media(max-width:540px){
-  .app-footer{flex-direction:column;gap:6px;text-align:center;}
-}
+.app-footer{width:100%;max-width:800px;display:flex;align-items:center;justify-content:center;gap:14px;padding:20px 24px 32px;position:relative;z-index:1;border-top:1px solid var(--border);margin-top:12px;}
+.version-tag{font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:3px;background:linear-gradient(135deg,var(--accent2),var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;border:1px solid rgba(56,189,248,.2);border-radius:6px;padding:3px 10px;color:var(--accent);}
+.footer-name{font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
+.footer-copy{font-size:10px;letter-spacing:1px;color:#1e3050;}
+@media(max-width:540px){.app-footer{flex-direction:column;gap:6px;text-align:center;}}
 </style>
 </head>
 <body>
@@ -963,8 +864,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
     <!-- OPENER PANEL -->
     <div class="panel" id="panel-opener">
-
-      <!-- SHIFT COUNTDOWN -->
       <div class="shift-bar" id="shift-bar-opener">
         <div class="shift-info">
           <span class="shift-label">⏱ SHIFT ENDS IN</span>
@@ -976,8 +875,8 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         <div class="shift-tag" id="shift-tag-opener">Egypt: 5PM – 2AM &nbsp;·&nbsp; Mon–Fri</div>
       </div>
 
-      <!-- END OF SHIFT SUMMARY (hidden until shift ends) -->
       <div class="eod-summary" id="eod-opener" style="display:none"></div>
+
       <div class="card">
         <div class="card-title">Opener Submission</div>
 
@@ -1013,7 +912,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
             <option value="Sabrina">Sabrina</option>
             <option value="Eddy">Eddy</option>
             <option value="Willy">Willy</option>
-            <option value="Nate">Nate</option>
+            <option value="Nathan">Nathan</option>
           </select>
         </div>
 
@@ -1052,8 +951,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
     <!-- CLOSER PANEL -->
     <div class="panel" id="panel-closer">
-
-      <!-- SHIFT COUNTDOWN -->
       <div class="shift-bar" id="shift-bar-closer">
         <div class="shift-info">
           <span class="shift-label">⏱ SHIFT ENDS IN</span>
@@ -1065,8 +962,8 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         <div class="shift-tag" id="shift-tag-closer">Egypt: 5PM – 2AM &nbsp;·&nbsp; Mon–Fri</div>
       </div>
 
-      <!-- END OF SHIFT SUMMARY -->
       <div class="eod-summary" id="eod-closer" style="display:none"></div>
+
       <div class="card">
         <div class="card-title">Closer Submission</div>
 
@@ -1077,7 +974,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <option value="Sabrina">Sabrina</option>
           <option value="Eddy">Eddy</option>
           <option value="Willy">Willy</option>
-          <option value="Nate">Nate</option>
+          <option value="Nathan">Nathan</option>
         </select>
 
         <label>Opener Name</label>
@@ -1156,7 +1053,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         </div>
       </div>
 
-      <!-- FILTER BAR -->
       <div class="filter-card">
         <div class="filter-title">🔍 Filter Records</div>
         <div class="filter-grid">
@@ -1185,7 +1081,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
               <option value="Sabrina">Sabrina</option>
               <option value="Eddy">Eddy</option>
               <option value="Willy">Willy</option>
-              <option value="Nate">Nate</option>
+              <option value="Nathan">Nathan</option>
             </select>
           </div>
         </div>
@@ -1206,7 +1102,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v1.0</span>
+    <span class="version-tag">v1.1</span>
     <span class="footer-name">United Funds Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
@@ -1228,25 +1124,19 @@ function updateStrength(val) {
   bar.style.background = val ? (colors[score-1] || '#ef4444') : 'transparent';
 }
 
-// ══════════════════════════════════════════
-//  SHIFT COUNTDOWN
-//  Shift: Mon–Fri, 5PM–2AM Egypt time (EET = UTC+2)
-//  2AM Egypt = midnight UTC (UTC+2, so 2AM - 2h = 0:00 UTC next day)
-// ══════════════════════════════════════════
 (function initShift() {
-  const SHIFT_START_H = 17; // 5 PM Egypt
-  const SHIFT_END_H   = 2;  // 2 AM Egypt (next day)
-  const SHIFT_DURATION_S = 9 * 3600; // 9 hours in seconds
+  const SHIFT_START_H = 17;
+  const SHIFT_END_H   = 2;
+  const SHIFT_DURATION_S = 9 * 3600;
 
   function getNowEgypt() {
-    // EET = UTC+2 (Egypt Standard Time, no DST)
     const now = new Date();
     const utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
-    return new Date(utcMs + (2 * 3600000)); // +2 hours
+    return new Date(utcMs + (2 * 3600000));
   }
 
   function isWeekday(d) {
-    const day = d.getDay(); // 0=Sun,1=Mon,...,6=Sat
+    const day = d.getDay();
     return day >= 1 && day <= 5;
   }
 
@@ -1255,8 +1145,6 @@ function updateStrength(val) {
     const h = egypt.getHours();
     const m = egypt.getMinutes();
     const s = egypt.getSeconds();
-    // Shift: 17:00:00 to next day 02:00:00
-    // Active if h >= 17 OR h < 2
     return (h >= SHIFT_START_H) || (h < SHIFT_END_H) || (h === SHIFT_END_H && m === 0 && s === 0);
   }
 
@@ -1264,17 +1152,11 @@ function updateStrength(val) {
     const h = egypt.getHours();
     const m = egypt.getMinutes();
     const s = egypt.getSeconds();
-    // End of shift is 02:00:00
-    let endH = SHIFT_END_H;
-    // Seconds from now until 02:00:00
     let nowSecs = h * 3600 + m * 60 + s;
-    let endSecs = endH * 3600;
+    let endSecs = SHIFT_END_H * 3600;
     if (nowSecs >= SHIFT_START_H * 3600) {
-      // We're in the PM portion — end is next day 2AM
-      // Seconds to midnight + 2 hours
       return (24 * 3600 - nowSecs) + endSecs;
     } else {
-      // We're past midnight, before 2AM
       return endSecs - nowSecs;
     }
   }
@@ -1287,29 +1169,18 @@ function updateStrength(val) {
   }
 
   function buildEODSummary(role) {
-    // Pull today's data from the global deals/transfers arrays
     const todayStr = getNowEgypt().toISOString().slice(0, 10);
-
     if (role === 'closer') {
-      const todayDeals    = (window._deals || []).filter(d => (d.createdAt||'').slice(0,10) === todayStr);
-      const approved      = todayDeals.filter(d => d.status === 'Approved');
-      const totalComm     = approved.reduce((s, d) => s + (d.comm||0), 0);
-      const totalDebt     = todayDeals.reduce((s, d) => s + (Number(d.debt)||0), 0);
+      const todayDeals = (window._deals || []).filter(d => (d.createdAt||'').slice(0,10) === todayStr);
+      const approved   = todayDeals.filter(d => d.status === 'Approved');
+      const totalComm  = approved.reduce((s, d) => s + (d.comm||0), 0);
+      const totalDebt  = todayDeals.reduce((s, d) => s + (Number(d.debt)||0), 0);
       return `
         <div class="eod-title">🏁 Shift Summary — Great Work!</div>
         <div class="eod-grid">
-          <div class="eod-stat">
-            <div class="eod-stat-val">${todayDeals.length}</div>
-            <div class="eod-stat-label">Deals Submitted</div>
-          </div>
-          <div class="eod-stat">
-            <div class="eod-stat-val">${approved.length}</div>
-            <div class="eod-stat-label">Approved</div>
-          </div>
-          <div class="eod-stat">
-            <div class="eod-stat-val">$${totalComm}</div>
-            <div class="eod-stat-label">Commission Earned</div>
-          </div>
+          <div class="eod-stat"><div class="eod-stat-val">${todayDeals.length}</div><div class="eod-stat-label">Deals Submitted</div></div>
+          <div class="eod-stat"><div class="eod-stat-val">${approved.length}</div><div class="eod-stat-label">Approved</div></div>
+          <div class="eod-stat"><div class="eod-stat-val">$${totalComm}</div><div class="eod-stat-label">Commission Earned</div></div>
         </div>
         <div class="eod-stat" style="margin-bottom:8px;background:var(--surface2);border-radius:10px;padding:10px;text-align:center;">
           <div class="eod-stat-val" style="font-size:22px;">$${totalDebt.toLocaleString()}</div>
@@ -1317,7 +1188,6 @@ function updateStrength(val) {
         </div>
         <div class="eod-msg">${approved.length > 0 ? '🔥 Incredible shift! See you tomorrow.' : '💪 Every shift is a new opportunity. Rest up!'}</div>`;
     }
-
     if (role === 'opener') {
       const todayTransfers = (window._transfers || []).filter(t => (t.createdAt||'').slice(0,10) === todayStr);
       const approved       = todayTransfers.filter(t => t.status === 'Approved');
@@ -1325,36 +1195,23 @@ function updateStrength(val) {
       return `
         <div class="eod-title">🏁 Shift Summary — Great Work!</div>
         <div class="eod-grid">
-          <div class="eod-stat">
-            <div class="eod-stat-val">${todayTransfers.length}</div>
-            <div class="eod-stat-label">Transfers Sent</div>
-          </div>
-          <div class="eod-stat">
-            <div class="eod-stat-val">${approved.length}</div>
-            <div class="eod-stat-label">Approved</div>
-          </div>
-          <div class="eod-stat">
-            <div class="eod-stat-val">$${totalComm}</div>
-            <div class="eod-stat-label">Commission</div>
-          </div>
+          <div class="eod-stat"><div class="eod-stat-val">${todayTransfers.length}</div><div class="eod-stat-label">Transfers Sent</div></div>
+          <div class="eod-stat"><div class="eod-stat-val">${approved.length}</div><div class="eod-stat-label">Approved</div></div>
+          <div class="eod-stat"><div class="eod-stat-val">$${totalComm}</div><div class="eod-stat-label">Commission</div></div>
         </div>
         <div class="eod-msg">${todayTransfers.length > 0 ? '🔥 Solid shift! Rest up and come back stronger.' : '💪 Tomorrow is a fresh start. You got this!'}</div>`;
     }
     return '';
   }
 
-  // ── refreshEOD: called after every submit & approval to update live stats ──
   window.refreshEOD = function() {
     const role = window._currentRole;
     if (!role || role === 'admin') return;
     const eodId = role === 'closer' ? 'eod-closer' : 'eod-opener';
     const eodEl = document.getElementById(eodId);
     if (!eodEl) return;
-
     const egypt  = getNowEgypt();
     const active = isShiftActive(egypt);
-
-    // During shift — show a compact live summary bar
     if (active) {
       const todayStr = egypt.toISOString().slice(0, 10);
       if (role === 'closer') {
@@ -1364,18 +1221,9 @@ function updateStrength(val) {
         eodEl.innerHTML = `
           <div class="eod-title" style="font-size:14px;margin-bottom:10px;">📊 Today's Progress</div>
           <div class="eod-grid">
-            <div class="eod-stat">
-              <div class="eod-stat-val">${todayDeals.length}</div>
-              <div class="eod-stat-label">Deals Submitted</div>
-            </div>
-            <div class="eod-stat">
-              <div class="eod-stat-val">${approved.length}</div>
-              <div class="eod-stat-label">Approved</div>
-            </div>
-            <div class="eod-stat">
-              <div class="eod-stat-val">$${totalComm}</div>
-              <div class="eod-stat-label">Earned Today</div>
-            </div>
+            <div class="eod-stat"><div class="eod-stat-val">${todayDeals.length}</div><div class="eod-stat-label">Deals Submitted</div></div>
+            <div class="eod-stat"><div class="eod-stat-val">${approved.length}</div><div class="eod-stat-label">Approved</div></div>
+            <div class="eod-stat"><div class="eod-stat-val">$${totalComm}</div><div class="eod-stat-label">Earned Today</div></div>
           </div>`;
         eodEl.style.display = todayDeals.length > 0 ? 'block' : 'none';
       } else {
@@ -1385,23 +1233,13 @@ function updateStrength(val) {
         eodEl.innerHTML = `
           <div class="eod-title" style="font-size:14px;margin-bottom:10px;">📊 Today's Progress</div>
           <div class="eod-grid">
-            <div class="eod-stat">
-              <div class="eod-stat-val">${todayTransfers.length}</div>
-              <div class="eod-stat-label">Transfers Sent</div>
-            </div>
-            <div class="eod-stat">
-              <div class="eod-stat-val">${approved.length}</div>
-              <div class="eod-stat-label">Approved</div>
-            </div>
-            <div class="eod-stat">
-              <div class="eod-stat-val">$${totalComm}</div>
-              <div class="eod-stat-label">Earned Today</div>
-            </div>
+            <div class="eod-stat"><div class="eod-stat-val">${todayTransfers.length}</div><div class="eod-stat-label">Transfers Sent</div></div>
+            <div class="eod-stat"><div class="eod-stat-val">${approved.length}</div><div class="eod-stat-label">Approved</div></div>
+            <div class="eod-stat"><div class="eod-stat-val">$${totalComm}</div><div class="eod-stat-label">Earned Today</div></div>
           </div>`;
         eodEl.style.display = todayTransfers.length > 0 ? 'block' : 'none';
       }
     } else {
-      // Shift over — show full end-of-shift summary
       eodEl.innerHTML    = buildEODSummary(role);
       eodEl.style.display = 'block';
     }
@@ -1412,46 +1250,31 @@ function updateStrength(val) {
     const active = isShiftActive(egypt);
     const role   = window._currentRole;
     if (!role || role === 'admin') return;
-
     const timerId = role === 'closer' ? 'shift-timer-closer'    : 'shift-timer-opener';
     const progId  = role === 'closer' ? 'shift-progress-closer' : 'shift-progress-opener';
     const tagId   = role === 'closer' ? 'shift-tag-closer'      : 'shift-tag-opener';
     const eodId   = role === 'closer' ? 'eod-closer'            : 'eod-opener';
-
     const timerEl = document.getElementById(timerId);
     const progEl  = document.getElementById(progId);
     const tagEl   = document.getElementById(tagId);
     const eodEl   = document.getElementById(eodId);
     if (!timerEl) return;
-
     if (active) {
       const secsLeft = getSecondsLeft(egypt);
       const pct      = Math.max(0, Math.min(100, ((SHIFT_DURATION_S - secsLeft) / SHIFT_DURATION_S) * 100));
       const urgent   = secsLeft <= 1800;
-
       timerEl.textContent = formatCountdown(secsLeft);
       timerEl.className   = 'shift-timer' + (urgent ? ' urgent' : '');
-
       if (progEl) {
         progEl.style.width      = pct + '%';
-        progEl.style.background = urgent
-          ? 'linear-gradient(90deg,#f43f5e,#fb923c)'
-          : 'linear-gradient(90deg,var(--accent2),var(--accent))';
+        progEl.style.background = urgent ? 'linear-gradient(90deg,#f43f5e,#fb923c)' : 'linear-gradient(90deg,var(--accent2),var(--accent))';
       }
-      if (tagEl) tagEl.textContent = urgent
-        ? '⚠️ Less than 30 minutes left — finish strong!'
-        : 'Egypt: 5PM – 2AM · Mon–Fri';
-
+      if (tagEl) tagEl.textContent = urgent ? '⚠️ Less than 30 minutes left — finish strong!' : 'Egypt: 5PM – 2AM · Mon–Fri';
     } else {
-      // Off shift
       timerEl.textContent = isWeekday(egypt) ? 'OFF SHIFT' : 'WEEKEND';
       timerEl.className   = 'shift-timer off';
       if (progEl) { progEl.style.width = '0%'; }
-      if (tagEl)  tagEl.textContent = isWeekday(egypt)
-        ? 'Next shift starts at 5PM Egypt time'
-        : 'Back Monday at 5PM Egypt time';
-
-      // Always keep EOD summary fresh when off shift
+      if (tagEl)  tagEl.textContent = isWeekday(egypt) ? 'Next shift starts at 5PM Egypt time' : 'Back Monday at 5PM Egypt time';
       if (eodEl && eodEl.style.display === 'none') {
         eodEl.innerHTML    = buildEODSummary(role);
         eodEl.style.display = 'block';
@@ -1459,7 +1282,6 @@ function updateStrength(val) {
     }
   }
 
-  // Start ticking once DOM is ready
   document.addEventListener('DOMContentLoaded', () => {
     setInterval(tick, 1000);
     tick();
