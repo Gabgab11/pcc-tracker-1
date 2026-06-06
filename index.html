@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -30,9 +30,6 @@
   const auth = getAuth(app);
   const db   = getFirestore(app);
 
-  // ══════════════════════════════════════════
-  //  ROLE MAP — Updated with all users
-  // ══════════════════════════════════════════
   const ROLE_MAP = {
     'info@unitedfund.net':   { role: 'admin',  name: 'Admin'   },
     'david@pcc.com':         { role: 'closer', name: 'David'   },
@@ -49,17 +46,13 @@
   let deals       = [];
   let transfers   = [];
 
-  // Expose to global scope so shift countdown can read today's data
   function syncGlobals() {
     window._deals       = deals;
     window._transfers   = transfers;
     window._currentRole = currentUser ? currentUser.role : null;
   }
 
-  // ══════════════════════════════════════════
-  //  COMMISSION LOGIC
-  // ══════════════════════════════════════════
-
+  // ── COMMISSION LOGIC ──────────────────────
   function closerBaseComm(monthly) {
     const m = Number(monthly);
     if (m >= 500) return 100;
@@ -96,9 +89,7 @@
     return map[type] || 0;
   }
 
-  // ══════════════════════════════════════════
-  //  AUTH
-  // ══════════════════════════════════════════
+  // ── AUTH ──────────────────────────────────
   onAuthStateChanged(auth, async (fbUser) => {
     if (fbUser) {
       const mapped = ROLE_MAP[fbUser.email];
@@ -106,9 +97,26 @@
       const name   = mapped ? mapped.name : fbUser.email.split('@')[0];
       currentUser  = { role, name, email: fbUser.email, uid: fbUser.uid };
 
-      const userDoc = await getDoc(doc(db, 'users', fbUser.uid));
-      if (!userDoc.exists() || userDoc.data().mustChangePassword === true) {
+      let mustChange = false;
+      try {
+        const userDoc = await getDoc(doc(db, 'users', fbUser.uid));
+        mustChange = !userDoc.exists() || userDoc.data().mustChangePassword === true;
+      } catch(e) {
+        // If Firestore read fails, still let them in rather than force-pw loop
+        mustChange = false;
+      }
+
+      if (mustChange) {
         showScreen('force-pw');
+        // Clear any stale error on the force-pw screen
+        const errEl = document.getElementById('fp-error');
+        if (errEl) errEl.style.display = 'none';
+        const fpNew = document.getElementById('fp-new');
+        const fpCon = document.getElementById('fp-confirm');
+        if (fpNew) fpNew.value = '';
+        if (fpCon) fpCon.value = '';
+        const bar = document.getElementById('pw-bar');
+        if (bar) { bar.style.width = '0%'; bar.style.background = 'transparent'; }
       } else {
         hideLogin();
         launchApp();
@@ -135,12 +143,8 @@
     const errEl  = document.getElementById('li-error');
     const btn    = document.getElementById('li-btn');
 
-    if (!selectedLoginRole) {
-      showError(errEl, 'Please select your role first.'); return;
-    }
-    if (!email || !pass) {
-      showError(errEl, 'Please enter email and password.'); return;
-    }
+    if (!selectedLoginRole) { showError(errEl, 'Please select your role first.'); return; }
+    if (!email || !pass)    { showError(errEl, 'Please enter email and password.'); return; }
 
     const mapped = ROLE_MAP[email];
     if (mapped && mapped.role !== selectedLoginRole) {
@@ -154,46 +158,63 @@
     } catch (err) {
       btn.textContent = 'LOG IN'; btn.disabled = false;
       let msg = 'Invalid email or password.';
-      if (err.code === 'auth/too-many-requests') msg = 'Too many attempts. Try again later.';
+      if (err.code === 'auth/too-many-requests')      msg = 'Too many attempts. Try again later.';
       if (err.code === 'auth/network-request-failed') msg = 'Network error. Check your connection.';
       showError(errEl, msg);
     }
   };
 
+  // ── FORCE PASSWORD CHANGE ─────────────────
+  // FIX: Only runs on explicit button click — never on page load
   window.doForcePasswordChange = async function() {
     const newPass = document.getElementById('fp-new').value;
     const confirm = document.getElementById('fp-confirm').value;
     const errEl   = document.getElementById('fp-error');
     const btn     = document.getElementById('fp-btn');
+
+    // Always hide error first
     errEl.style.display = 'none';
-    if (newPass.length < 8) { showError(errEl, 'Password must be at least 8 characters.'); return; }
-    if (newPass !== confirm) { showError(errEl, 'Passwords do not match.'); return; }
-    const defaults = ['Admin123','David123','Sabrina123','Eddy123','Willy123','Nate123','Kiley123','Sara123','Kate123',
-                      'admin123','david123','sabrina123','eddy123','willy123','nate123','kiley123','sara123','kate123'];
-    if (defaults.includes(newPass)) { showError(errEl, 'Please choose a different password from your temporary one.'); return; }
+
+    // Validate — these checks only fire when button is clicked
+    if (!newPass || newPass.length < 8) {
+      showError(errEl, 'Password must be at least 8 characters.'); return;
+    }
+    if (newPass !== confirm) {
+      showError(errEl, 'Passwords do not match.'); return;
+    }
+    const defaults = ['Admin123','David123','Sabrina123','Eddy123','Willy123','Nate123',
+                      'Kiley123','Sara123','Kate123',
+                      'admin123','david123','sabrina123','eddy123','willy123','nate123',
+                      'kiley123','sara123','kate123'];
+    if (defaults.includes(newPass)) {
+      showError(errEl, 'Please choose a different password from your temporary one.'); return;
+    }
+
     btn.textContent = 'SAVING…'; btn.disabled = true;
     try {
       await updatePassword(auth.currentUser, newPass);
       await setDoc(doc(db, 'users', auth.currentUser.uid), {
-        email: auth.currentUser.email, mustChangePassword: false, updatedAt: new Date().toISOString()
+        email: auth.currentUser.email,
+        mustChangePassword: false,
+        updatedAt: new Date().toISOString()
       }, { merge: true });
-      toast('Password updated!', 'success');
+      toast('Password updated! Welcome aboard 🎉', 'success');
       hideForcePassword();
       launchApp();
     } catch (err) {
       btn.textContent = 'SET PASSWORD'; btn.disabled = false;
       showError(errEl, err.code === 'auth/requires-recent-login'
-        ? 'Session expired. Log out and back in.' : 'Failed to update password.');
+        ? 'Session expired. Please log out and back in.' : 'Failed to update password. Try again.');
     }
   };
 
   window.doLogout = async function() {
     await signOut(auth);
     document.getElementById('app').classList.remove('visible');
-    document.getElementById('li-email').value = '';
-    document.getElementById('li-pass').value  = '';
+    document.getElementById('li-email').value     = '';
+    document.getElementById('li-pass').value      = '';
     document.getElementById('li-btn').textContent = 'LOG IN';
-    document.getElementById('li-btn').disabled = false;
+    document.getElementById('li-btn').disabled    = false;
     document.getElementById('li-error').style.display = 'none';
     selectedLoginRole = '';
     ['opener','closer','admin'].forEach(r => {
@@ -206,30 +227,22 @@
     document.getElementById('force-pw-screen').style.display = 'none';
   };
 
-  // ══════════════════════════════════════════
-  //  SCREENS
-  // ══════════════════════════════════════════
+  // ── SCREENS ───────────────────────────────
   function showScreen(name) {
     document.getElementById('login-screen').style.display    = name === 'login'    ? 'flex' : 'none';
     document.getElementById('force-pw-screen').style.display = name === 'force-pw' ? 'flex' : 'none';
     document.getElementById('app').classList.remove('visible');
   }
   function hideLogin() {
-    const loginScreen = document.getElementById('login-screen');
-    loginScreen.classList.remove('hidden');
-    loginScreen.classList.add('hidden');
-    setTimeout(() => {
-      loginScreen.style.display = 'none';
-      loginScreen.classList.remove('hidden');
-    }, 400);
+    const ls = document.getElementById('login-screen');
+    ls.classList.add('hidden');
+    setTimeout(() => { ls.style.display = 'none'; ls.classList.remove('hidden'); }, 400);
   }
   function hideForcePassword() {
     document.getElementById('force-pw-screen').style.display = 'none';
   }
 
-  // ══════════════════════════════════════════
-  //  LAUNCH
-  // ══════════════════════════════════════════
+  // ── LAUNCH ────────────────────────────────
   function launchApp() {
     document.getElementById('app').classList.add('visible');
     document.getElementById('user-pill').textContent = currentUser.name + ' · ' + currentUser.role.toUpperCase();
@@ -255,9 +268,7 @@
     if (name === 'admin') refreshAdmin();
   };
 
-  // ══════════════════════════════════════════
-  //  LOAD DATA
-  // ══════════════════════════════════════════
+  // ── LOAD DATA ─────────────────────────────
   async function loadData() {
     if (!currentUser) return;
     deals = []; transfers = [];
@@ -305,16 +316,11 @@
     if (role === 'admin') refreshAdmin();
   }
 
-  // ══════════════════════════════════════════
-  //  OPENER SUBMIT
-  // ══════════════════════════════════════════
-
-  // Auto-fill opener name from logged-in user
+  // ── OPENER ────────────────────────────────
   window.autoFillOpenerName = function() {
     if (currentUser && currentUser.role === 'opener') {
       const sel = document.getElementById('op-name');
-      sel.value = currentUser.name;
-      sel.disabled = true;
+      sel.value = currentUser.name; sel.disabled = true;
     }
   };
 
@@ -336,15 +342,12 @@
     const salesTypes = ['1st Closed','2nd Close','3rd Closed','4th Closed','pCcT'];
     if (salesTypes.includes(type) && !closer) { toast('Please select a Closer for this transfer type.'); return; }
     const comm = openerComm(type);
-    const t = {
-      name: openerName, type, date, phone, closer: closer || null,
-      comm, status: 'Pending', openerEmail: currentUser.email, createdAt: new Date().toISOString()
-    };
+    const t = { name: openerName, type, date, phone, closer: closer || null,
+      comm, status: 'Pending', openerEmail: currentUser.email, createdAt: new Date().toISOString() };
     try {
       const ref = await addDoc(collection(db, 'transfers'), t);
       t.id = ref.id; transfers.unshift(t);
-      const newTotal = transfers.reduce((s, x) => s + (x.comm || 0), 0);
-      document.getElementById('op-total').textContent = '$' + newTotal;
+      document.getElementById('op-total').textContent = '$' + transfers.reduce((s, x) => s + (x.comm || 0), 0);
       const wrap = document.getElementById('op-deals');
       if (wrap.querySelector('.empty')) wrap.innerHTML = '';
       wrap.insertAdjacentHTML('afterbegin', buildTransferCard(t));
@@ -354,14 +357,11 @@
       document.getElementById('op-closer-wrap').style.display = 'none';
       document.getElementById('op-comm-preview').textContent = '$—';
       toast('🔥 Nice one, keep going!', 'fire');
-      syncGlobals();
-      refreshEOD();
+      syncGlobals(); refreshEOD();
     } catch (err) { toast('Failed to submit. Check your connection.'); console.error(err); }
   };
 
-  // ══════════════════════════════════════════
-  //  CLOSER SUBMIT
-  // ══════════════════════════════════════════
+  // ── CLOSER ────────────────────────────────
   window.autoFillCloserName = function() {
     if (currentUser && currentUser.role === 'closer') {
       const sel = document.getElementById('cl-name');
@@ -370,15 +370,12 @@
   };
 
   window.autoCommission = async function() {
-    const monthly  = document.getElementById('cl-monthly').value;
-    const closing  = document.getElementById('cl-closing').value;
-    const tierEl   = document.getElementById('cl-tier-info');
-    if (!monthly) {
-      document.getElementById('cl-commission').value = '$0';
-      tierEl.textContent = ''; return;
-    }
-    const base    = closerBaseComm(monthly);
-    const dateStr = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
+    const monthly = document.getElementById('cl-monthly').value;
+    const closing = document.getElementById('cl-closing').value;
+    const tierEl  = document.getElementById('cl-tier-info');
+    if (!monthly) { document.getElementById('cl-commission').value = '$0'; tierEl.textContent = ''; return; }
+    const base     = closerBaseComm(monthly);
+    const dateStr  = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
     const existing = await countCloserDealsOnDate(dateStr);
     const multiplier = existing >= 1 ? 2 : 1;
     const comm = base * multiplier;
@@ -399,20 +396,15 @@
     const monthly = document.getElementById('cl-monthly').value;
     const firstpay= document.getElementById('cl-firstpay').value;
     const closing = document.getElementById('cl-closing').value;
-    if (!name || !opener || !client || !phone || !debt || !monthly) {
-      toast('Please complete all required fields.'); return;
-    }
-    const base    = closerBaseComm(monthly);
-    const dateStr = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
+    if (!name || !opener || !client || !phone || !debt || !monthly) { toast('Please complete all required fields.'); return; }
+    const base     = closerBaseComm(monthly);
+    const dateStr  = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
     const existing = await countCloserDealsOnDate(dateStr);
     const multiplier = existing >= 1 ? 2 : 1;
     const comm = base * multiplier;
-    const d = {
-      name, opener, client, phone, debt, monthly, firstpay, closing,
-      closingDate: dateStr,
-      comm, status: 'Pending', closerEmail: currentUser.email,
-      createdAt: new Date().toISOString()
-    };
+    const d = { name, opener, client, phone, debt, monthly, firstpay, closing,
+      closingDate: dateStr, comm, status: 'Pending', closerEmail: currentUser.email,
+      createdAt: new Date().toISOString() };
     try {
       const ref = await addDoc(collection(db, 'deals'), d);
       d.id = ref.id; deals.unshift(d);
@@ -425,31 +417,23 @@
       document.getElementById('cl-commission').value = '$0';
       document.getElementById('cl-tier-info').textContent = '';
       toast('🔥 Nice one, keep going!', 'fire');
-      syncGlobals();
-      refreshEOD();
+      syncGlobals(); refreshEOD();
     } catch (err) { toast('Failed to submit. Check your connection.'); console.error(err); }
   };
 
-  // ══════════════════════════════════════════
-  //  ADMIN
-  // ══════════════════════════════════════════
+  // ── ADMIN ─────────────────────────────────
   window.refreshAdmin = async function() {
     if (!currentUser || currentUser.role !== 'admin') return;
-
     const dSnap = await getDocs(query(collection(db, 'deals'), orderBy('createdAt', 'desc')));
     deals = []; dSnap.forEach(d => deals.push({ id: d.id, ...d.data() }));
-
     const tSnap = await getDocs(query(collection(db, 'transfers'), orderBy('createdAt', 'desc')));
     transfers = []; tSnap.forEach(t => transfers.push({ id: t.id, ...t.data() }));
-
     const pending  = deals.filter(d => d.status === 'Pending').length;
     const approved = deals.filter(d => d.status === 'Approved').length;
     document.getElementById('adm-total').textContent    = deals.length + transfers.length;
     document.getElementById('adm-approved').textContent = approved;
     document.getElementById('adm-pending').textContent  = pending;
-
-    renderAdminDeals();
-    renderAdminTransfers();
+    renderAdminDeals(); renderAdminTransfers();
   };
 
   function getFilters() {
@@ -471,29 +455,20 @@
   }
 
   function renderAdminDeals() {
-    const f    = getFilters();
-    const wrap = document.getElementById('adm-deals');
+    const f      = getFilters();
+    const wrap   = document.getElementById('adm-deals');
     const filtered = deals.filter(d => dealMatchesFilters(d, f));
-
     const countEl = document.getElementById('f-count');
     if (countEl) {
       const hasFilter = f.from || f.to || f.status !== 'All' || f.closer !== 'All';
-      countEl.innerHTML = hasFilter
-        ? `Showing <span>${filtered.length}</span> of ${deals.length} deals`
-        : '';
+      countEl.innerHTML = hasFilter ? `Showing <span>${filtered.length}</span> of ${deals.length} deals` : '';
     }
-
-    if (filtered.length === 0) {
-      wrap.innerHTML = '<div class="empty">No deals match the selected filters.</div>';
-      return;
-    }
-
+    if (filtered.length === 0) { wrap.innerHTML = '<div class="empty">No deals match the selected filters.</div>'; return; }
     wrap.innerHTML = '';
     const sorted = [...filtered].sort((a, b) => {
       const order = { Pending: 0, Approved: 1, Declined: 2 };
       return (order[a.status] || 0) - (order[b.status] || 0);
     });
-
     sorted.forEach(d => {
       const resolved = d.status !== 'Pending';
       wrap.insertAdjacentHTML('beforeend', `
@@ -510,8 +485,7 @@
                  <input class="admin-comm-edit" type="number" id="comm-${d.id}" value="${d.comm}" placeholder="Edit commission…"/>
                  <button class="btn-approve" onclick="adminAction('${d.id}','Approved')">✓ Approve</button>
                  <button class="btn-decline" onclick="adminAction('${d.id}','Declined')">✗ Decline</button>
-               </div>`
-          }
+               </div>`}
         </div>`);
     });
   }
@@ -519,19 +493,13 @@
   function renderAdminTransfers() {
     const f     = getFilters();
     const twrap = document.getElementById('adm-transfers');
-
     const filtered = transfers.filter(t => {
       const dateStr = (t.createdAt || t.date || '').slice(0, 10);
       if (f.from && dateStr < f.from) return false;
       if (f.to   && dateStr > f.to)   return false;
       return true;
     });
-
-    if (filtered.length === 0) {
-      twrap.innerHTML = '<div class="empty">No transfers match the selected filters.</div>';
-      return;
-    }
-
+    if (filtered.length === 0) { twrap.innerHTML = '<div class="empty">No transfers match the selected filters.</div>'; return; }
     twrap.innerHTML = '';
     filtered.forEach(t => {
       twrap.insertAdjacentHTML('beforeend', `
@@ -546,19 +514,14 @@
     });
   }
 
-  window.applyFilters = function() {
-    renderAdminDeals();
-    renderAdminTransfers();
-  };
-
-  window.clearFilters = function() {
+  window.applyFilters  = function() { renderAdminDeals(); renderAdminTransfers(); };
+  window.clearFilters  = function() {
     document.getElementById('f-from').value   = '';
     document.getElementById('f-to').value     = '';
     document.getElementById('f-status').value = 'All';
     document.getElementById('f-closer').value = 'All';
     document.getElementById('f-count').innerHTML = '';
-    renderAdminDeals();
-    renderAdminTransfers();
+    renderAdminDeals(); renderAdminTransfers();
   };
 
   window.adminAction = async function(id, action) {
@@ -569,24 +532,18 @@
     d.status = action;
     try {
       await updateDoc(doc(db, 'deals', id), { status: action, comm: d.comm });
-      refreshAdmin();
-      renderDashboard();
-      syncGlobals();
+      refreshAdmin(); renderDashboard(); syncGlobals();
       if (window.refreshEOD) window.refreshEOD();
       toast(action === 'Approved' ? '✅ Deal approved!' : '❌ Deal declined.',
             action === 'Approved' ? 'success' : 'error');
     } catch (err) { toast('Failed to update deal.'); console.error(err); }
   };
 
-  // ══════════════════════════════════════════
-  //  CARD BUILDERS
-  // ══════════════════════════════════════════
+  // ── CARD BUILDERS ─────────────────────────
   function buildTransferCard(t) {
     const status = t.status || 'Pending';
-    const sc = status === 'Approved' ? 'status-approved'
-             : status === 'Declined' ? 'status-declined' : 'status-pending';
-    const label = status === 'Approved' ? '✅ Approved!'
-                : status === 'Declined' ? '❌ Declined'  : 'Pending Admin Review';
+    const sc    = status === 'Approved' ? 'status-approved' : status === 'Declined' ? 'status-declined' : 'status-pending';
+    const label = status === 'Approved' ? '✅ Approved!' : status === 'Declined' ? '❌ Declined' : 'Pending Admin Review';
     return `<div class="deal ${status.toLowerCase()}">
       <span class="deal-status ${sc}">${label}</span><br>
       <b>${t.name}</b> &nbsp;·&nbsp; ${t.type}<br>
@@ -597,10 +554,8 @@
   }
 
   function buildCloserCard(d) {
-    const sc = d.status === 'Approved' ? 'status-approved'
-             : d.status === 'Declined' ? 'status-declined' : 'status-pending';
-    const label = d.status === 'Approved' ? '✅ Approved!'
-                : d.status === 'Declined' ? '❌ Declined'  : 'Pending Admin Review';
+    const sc    = d.status === 'Approved' ? 'status-approved' : d.status === 'Declined' ? 'status-declined' : 'status-pending';
+    const label = d.status === 'Approved' ? '✅ Approved!' : d.status === 'Declined' ? '❌ Declined' : 'Pending Admin Review';
     return `<div class="deal ${d.status.toLowerCase()}">
       <span class="deal-status ${sc}">${label}</span><br>
       <b>${d.name}</b> closed for <b>${d.client}</b><br>
@@ -611,9 +566,7 @@
     </div>`;
   }
 
-  // ══════════════════════════════════════════
-  //  HELPERS
-  // ══════════════════════════════════════════
+  // ── HELPERS ───────────────────────────────
   function statusClass(s) {
     if (s === 'Approved') return 'status-approved';
     if (s === 'Declined') return 'status-declined';
@@ -629,114 +582,321 @@
   window.toast = function(msg, type = 'error') {
     const t = document.getElementById('toast');
     t.textContent = msg; t.className = '';
-    if (type === 'fire')    t.classList.add('toast-fire');
+    if (type === 'fire')         t.classList.add('toast-fire');
     else if (type === 'success') t.classList.add('toast-success');
-    else t.classList.add('toast-error');
+    else                         t.classList.add('toast-error');
     t.style.display = 'block';
     clearTimeout(t._t);
     t._t = setTimeout(() => t.style.display = 'none', 4000);
   };
 
   document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('fp-confirm')?.addEventListener('keydown', e => { if (e.key === 'Enter') window.doForcePasswordChange(); });
-    document.getElementById('li-pass')?.addEventListener('keydown', e => { if (e.key === 'Enter') window.doLogin(); });
+    // Enter key shortcuts — only trigger if fields are non-empty
+    document.getElementById('fp-confirm')?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        const val = document.getElementById('fp-new')?.value || '';
+        if (val.length >= 8) window.doForcePasswordChange();
+      }
+    });
+    document.getElementById('li-pass')?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') window.doLogin();
+    });
   });
 </script>
 
 <style>
-:root{
+/* ══════════════════════════════════════════
+   THEME TOKENS
+══════════════════════════════════════════ */
+:root {
+  /* Dark theme (default) */
   --bg:#04080f; --surface:#080e1a; --surface2:#0c1424; --border:#112036;
   --accent:#38bdf8; --accent2:#0ea5e9; --accent3:#6366f1;
   --green:#22d3a0; --red:#f43f5e; --yellow:#f59e0b; --purple:#818cf8;
   --text:#e2eeff; --muted:#4a6080;
+  --card-shadow: 0 4px 24px rgba(0,0,0,.4);
+  --input-bg: var(--surface2);
+  --logo-from:#fff; --logo-to:var(--accent);
 }
-*{margin:0;padding:0;box-sizing:border-box;}
-body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;overflow-x:hidden;}
-body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");pointer-events:none;z-index:0;}
-body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(56,189,248,.07) 0%,transparent 60%),radial-gradient(ellipse 40% 30% at 80% 80%,rgba(99,102,241,.05) 0%,transparent 50%);pointer-events:none;z-index:0;}
+[data-theme="light"] {
+  --bg:#f0f4fa; --surface:#ffffff; --surface2:#e8eef8; --border:#d0daea;
+  --accent:#0284c7; --accent2:#0369a1; --accent3:#4f46e5;
+  --green:#059669; --red:#dc2626; --yellow:#d97706; --purple:#6d28d9;
+  --text:#0f1923; --muted:#7a90aa;
+  --card-shadow: 0 2px 16px rgba(0,40,80,.08);
+  --input-bg:#f8fafc;
+  --logo-from:#0f1923; --logo-to:var(--accent);
+}
 
-/* LOGIN */
-#login-screen,#force-pw-screen{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;background:var(--bg);padding:24px;animation:fadeIn .5s ease;}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:'DM Sans',sans-serif;
+  min-height:100vh;display:flex;flex-direction:column;align-items:center;
+  overflow-x:hidden;transition:background .3s,color .3s;
+}
+
+/* Noise + glow — hidden in light mode */
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  pointer-events:none;z-index:0;
+  transition:opacity .3s;
+}
+[data-theme="light"] body::before{opacity:0;}
+body::after{
+  content:'';position:fixed;inset:0;
+  background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(56,189,248,.07) 0%,transparent 60%),
+             radial-gradient(ellipse 40% 30% at 80% 80%,rgba(99,102,241,.05) 0%,transparent 50%);
+  pointer-events:none;z-index:0;
+  transition:opacity .3s;
+}
+[data-theme="light"] body::after{opacity:0;}
+
+/* ── THEME TOGGLE ── */
+.theme-toggle{
+  position:fixed;top:16px;right:16px;z-index:200;
+  width:48px;height:26px;border-radius:13px;
+  background:var(--surface2);border:1.5px solid var(--border);
+  cursor:pointer;padding:3px;
+  display:flex;align-items:center;
+  transition:background .3s,border-color .3s;
+  box-shadow:var(--card-shadow);
+}
+.theme-toggle:hover{ border-color:var(--accent); }
+.toggle-knob{
+  width:18px;height:18px;border-radius:50%;
+  background:linear-gradient(135deg,var(--accent3),var(--accent));
+  transition:transform .3s cubic-bezier(.34,1.56,.64,1);
+  display:flex;align-items:center;justify-content:center;
+  font-size:10px;line-height:1;
+  box-shadow:0 1px 4px rgba(0,0,0,.3);
+}
+[data-theme="dark"]  .toggle-knob{ transform:translateX(0px);    }
+[data-theme="light"] .toggle-knob{ transform:translateX(22px);   }
+[data-theme="light"] .toggle-knob{ background:linear-gradient(135deg,#f59e0b,#fbbf24); }
+
+/* ── LOGIN / FORCE-PW ── */
+#login-screen,#force-pw-screen{
+  position:fixed;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;z-index:100;
+  background:var(--bg);padding:24px;
+  animation:fadeIn .5s ease;
+  transition:background .3s;
+}
 #login-screen.hidden{animation:fadeOut .4s ease forwards;pointer-events:none;}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 @keyframes fadeOut{from{opacity:1}to{opacity:0}}
-.login-glow{position:absolute;width:700px;height:700px;border-radius:50%;background:radial-gradient(circle,rgba(56,189,248,.1) 0%,rgba(99,102,241,.05) 50%,transparent 70%);pointer-events:none;top:50%;left:50%;transform:translate(-50%,-60%);}
-.login-box{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:44px 40px 36px;width:100%;max-width:420px;position:relative;z-index:1;box-shadow:0 32px 80px rgba(0,0,0,.5);}
-.login-logo{font-family:'Bebas Neue',sans-serif;font-size:58px;letter-spacing:6px;background:linear-gradient(135deg,#fff 20%,var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;text-align:center;line-height:1;}
+
+.login-glow{
+  position:absolute;width:700px;height:700px;border-radius:50%;
+  background:radial-gradient(circle,rgba(56,189,248,.1) 0%,rgba(99,102,241,.05) 50%,transparent 70%);
+  pointer-events:none;top:50%;left:50%;transform:translate(-50%,-60%);
+  transition:opacity .3s;
+}
+[data-theme="light"] .login-glow{opacity:0;}
+
+.login-box{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:24px;padding:44px 40px 36px;
+  width:100%;max-width:420px;position:relative;z-index:1;
+  box-shadow:var(--card-shadow);
+  transition:background .3s,border-color .3s,box-shadow .3s;
+}
+.login-logo{
+  font-family:'Bebas Neue',sans-serif;font-size:58px;letter-spacing:6px;
+  background:linear-gradient(135deg,var(--logo-from) 20%,var(--accent));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  text-align:center;line-height:1;
+}
 .login-welcome{text-align:center;margin-top:8px;margin-bottom:6px;font-size:13px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
-.login-sub{text-align:center;font-size:12px;color:#1e3a52;letter-spacing:3px;text-transform:uppercase;margin-bottom:32px;font-style:italic;}
+.login-sub{text-align:center;font-size:12px;color:var(--muted);letter-spacing:3px;text-transform:uppercase;margin-bottom:32px;font-style:italic;opacity:.5;}
+
 .role-selector{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:4px;}
-.role-sel-btn{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 8px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);cursor:pointer;transition:all .2s;color:var(--muted);}
+.role-sel-btn{
+  display:flex;flex-direction:column;align-items:center;gap:6px;
+  padding:12px 8px;border-radius:12px;border:1px solid var(--border);
+  background:var(--surface2);cursor:pointer;transition:all .2s;color:var(--muted);
+}
 .role-sel-btn:hover{border-color:rgba(56,189,248,.4);color:var(--text);}
-.role-sel-btn.selected{border-color:var(--accent);background:linear-gradient(135deg,rgba(14,165,233,.15),rgba(56,189,248,.08));color:var(--accent);box-shadow:0 0 16px rgba(56,189,248,.15);}
+.role-sel-btn.selected{
+  border-color:var(--accent);
+  background:linear-gradient(135deg,rgba(14,165,233,.15),rgba(56,189,248,.08));
+  color:var(--accent);box-shadow:0 0 16px rgba(56,189,248,.15);
+}
+[data-theme="light"] .role-sel-btn.selected{
+  background:linear-gradient(135deg,rgba(2,132,199,.1),rgba(14,165,233,.06));
+  box-shadow:0 0 12px rgba(2,132,199,.12);
+}
 .role-sel-icon{font-size:20px;line-height:1;}
 .role-sel-name{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;}
+
 .login-label{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:6px;margin-top:16px;display:block;}
-.login-input{width:100%;padding:13px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:11px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;outline:none;transition:border .2s,box-shadow .2s;}
+.login-input{
+  width:100%;padding:13px 16px;background:var(--input-bg);
+  border:1px solid var(--border);border-radius:11px;color:var(--text);
+  font-family:'DM Sans',sans-serif;font-size:14px;outline:none;
+  transition:border .2s,box-shadow .2s,background .3s;
+}
 .login-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(56,189,248,.12);}
-.login-btn{width:100%;margin-top:28px;padding:15px;border:none;border-radius:12px;background:linear-gradient(135deg,var(--accent3),var(--accent2),var(--accent));color:#fff;font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:4px;cursor:pointer;transition:opacity .2s,box-shadow .2s;box-shadow:0 4px 28px rgba(14,165,233,.35);}
+[data-theme="light"] .login-input:focus{box-shadow:0 0 0 3px rgba(2,132,199,.1);}
+
+.login-btn{
+  width:100%;margin-top:28px;padding:15px;border:none;border-radius:12px;
+  background:linear-gradient(135deg,var(--accent3),var(--accent2),var(--accent));
+  color:#fff;font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:4px;
+  cursor:pointer;transition:opacity .2s,box-shadow .2s;
+  box-shadow:0 4px 28px rgba(14,165,233,.35);
+}
 .login-btn:hover{opacity:.9;box-shadow:0 6px 36px rgba(56,189,248,.45);}
 .login-btn:disabled{opacity:.5;cursor:not-allowed;}
 .login-error{margin-top:14px;text-align:center;font-size:12px;color:var(--red);font-weight:600;letter-spacing:1px;display:none;}
-.fp-note{margin-bottom:20px;padding:14px 16px;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);border-radius:10px;font-size:12px;color:#fcd34d;line-height:1.7;text-align:center;}
+
+.fp-note{
+  margin-bottom:20px;padding:14px 16px;
+  background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);
+  border-radius:10px;font-size:12px;color:#fcd34d;line-height:1.7;text-align:center;
+}
+[data-theme="light"] .fp-note{background:rgba(217,119,6,.08);color:#92400e;border-color:rgba(217,119,6,.3);}
 .fp-note strong{display:block;font-size:13px;margin-bottom:4px;letter-spacing:1px;text-transform:uppercase;}
 .pw-strength{margin-top:6px;height:3px;border-radius:4px;background:var(--border);overflow:hidden;}
 .pw-strength-bar{height:100%;width:0%;transition:width .3s,background .3s;border-radius:4px;}
 
-/* APP */
+/* ── APP ── */
 #app{display:none;flex-direction:column;align-items:center;width:100%;}
 #app.visible{display:flex;}
 header{width:100%;max-width:800px;padding:36px 24px 0;text-align:center;position:relative;z-index:1;}
-.logo{font-family:'Bebas Neue',sans-serif;font-size:clamp(38px,8vw,72px);letter-spacing:4px;background:linear-gradient(135deg,#fff 30%,var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;line-height:1;}
+.logo{
+  font-family:'Bebas Neue',sans-serif;font-size:clamp(38px,8vw,72px);
+  letter-spacing:4px;
+  background:linear-gradient(135deg,var(--logo-from) 30%,var(--accent));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;line-height:1;
+}
 .tagline{font-size:11px;letter-spacing:4px;text-transform:uppercase;color:var(--muted);margin-top:5px;}
 .user-bar{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:14px;}
-.user-pill{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:6px 16px;font-size:12px;font-weight:600;letter-spacing:1px;color:var(--accent);}
-.logout-btn{background:none;border:1px solid var(--border);border-radius:20px;padding:6px 16px;font-size:11px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);cursor:pointer;transition:border .2s,color .2s;}
+.user-pill{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:20px;padding:6px 16px;font-size:12px;font-weight:600;
+  letter-spacing:1px;color:var(--accent);transition:background .3s,border-color .3s;
+}
+.logout-btn{
+  background:none;border:1px solid var(--border);border-radius:20px;
+  padding:6px 16px;font-size:11px;font-weight:600;letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--muted);cursor:pointer;transition:border .2s,color .2s;
+}
 .logout-btn:hover{border-color:var(--red);color:var(--red);}
-.role-bar{display:flex;gap:8px;margin:24px auto 0;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:5px;width:fit-content;}
-.role-btn{font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:9px 24px;border-radius:10px;border:none;cursor:pointer;background:transparent;color:var(--muted);transition:all .25s;}
-.role-btn.active{background:linear-gradient(135deg,var(--accent3),var(--accent2),var(--accent));color:#fff;box-shadow:0 0 20px rgba(56,189,248,.3);}
+
+.role-bar{
+  display:flex;gap:8px;margin:24px auto 0;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:14px;padding:5px;width:fit-content;
+  transition:background .3s,border-color .3s;
+}
+.role-btn{
+  font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;
+  letter-spacing:1.5px;text-transform:uppercase;padding:9px 24px;
+  border-radius:10px;border:none;cursor:pointer;
+  background:transparent;color:var(--muted);transition:all .25s;
+}
+.role-btn.active{
+  background:linear-gradient(135deg,var(--accent3),var(--accent2),var(--accent));
+  color:#fff;box-shadow:0 0 20px rgba(56,189,248,.3);
+}
+
 .panel-wrap{width:100%;max-width:800px;padding:24px;position:relative;z-index:1;flex:1;}
 .panel{display:none;}
 .panel.active{display:block;animation:fadeUp .35s ease both;}
 @keyframes fadeUp{from{opacity:0;transform:translateY(16px);}to{opacity:1;transform:translateY(0);}}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:26px 26px 22px;margin-bottom:18px;}
+
+.card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:18px;padding:26px 26px 22px;margin-bottom:18px;
+  box-shadow:var(--card-shadow);
+  transition:background .3s,border-color .3s,box-shadow .3s;
+}
 .card-title{font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;color:var(--accent);margin-bottom:18px;border-bottom:1px solid var(--border);padding-bottom:11px;}
+
 label{display:block;font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:5px;margin-top:14px;}
-input,select{width:100%;padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;outline:none;transition:border .2s,box-shadow .2s;}
+input,select{
+  width:100%;padding:12px 14px;background:var(--input-bg);
+  border:1px solid var(--border);border-radius:10px;color:var(--text);
+  font-family:'DM Sans',sans-serif;font-size:14px;outline:none;
+  transition:border .2s,box-shadow .2s,background .3s,color .3s;
+}
 input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(56,189,248,.1);}
+[data-theme="light"] input:focus,[data-theme="light"] select:focus{box-shadow:0 0 0 3px rgba(2,132,199,.08);}
 select option{background:var(--surface);}
 input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248,.25);cursor:default;}
+[data-theme="light"] input[readonly]{color:var(--accent2);}
+
 .row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-.btn-submit{width:100%;margin-top:22px;padding:14px;border:none;border-radius:12px;background:linear-gradient(135deg,var(--accent3),var(--accent2),var(--accent));color:#fff;font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;cursor:pointer;transition:opacity .2s,box-shadow .2s;box-shadow:0 4px 22px rgba(14,165,233,.3);}
+.btn-submit{
+  width:100%;margin-top:22px;padding:14px;border:none;border-radius:12px;
+  background:linear-gradient(135deg,var(--accent3),var(--accent2),var(--accent));
+  color:#fff;font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;
+  cursor:pointer;transition:opacity .2s,box-shadow .2s;
+  box-shadow:0 4px 22px rgba(14,165,233,.3);
+}
 .btn-submit:hover{opacity:.9;box-shadow:0 6px 32px rgba(56,189,248,.4);}
-.earnings{display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,rgba(14,165,233,.1),rgba(56,189,248,.04));border:1px solid rgba(56,189,248,.2);border-radius:12px;padding:16px 20px;margin-top:20px;}
+
+.earnings{
+  display:flex;align-items:center;justify-content:space-between;
+  background:linear-gradient(135deg,rgba(14,165,233,.1),rgba(56,189,248,.04));
+  border:1px solid rgba(56,189,248,.2);border-radius:12px;padding:16px 20px;margin-top:20px;
+  transition:background .3s;
+}
+[data-theme="light"] .earnings{
+  background:linear-gradient(135deg,rgba(2,132,199,.07),rgba(14,165,233,.03));
+  border-color:rgba(2,132,199,.2);
+}
 .earnings-label{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
 .earnings-value{font-family:'Bebas Neue',sans-serif;font-size:38px;letter-spacing:2px;color:var(--accent);}
+
 .section-label{font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);margin:20px 0 10px;}
-.deal{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-top:10px;font-size:13px;line-height:1.8;position:relative;overflow:hidden;}
+
+.deal{
+  background:var(--surface2);border:1px solid var(--border);
+  border-radius:12px;padding:14px 16px;margin-top:10px;
+  font-size:13px;line-height:1.8;position:relative;overflow:hidden;
+  transition:background .3s,border-color .3s;
+}
 .deal::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--muted);}
 .deal.approved::before{background:var(--green);}
 .deal.declined::before{background:var(--red);}
 .deal.pending::before{background:var(--yellow);}
+
 .deal-status{display:inline-block;font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:3px 10px;border-radius:20px;margin-bottom:6px;}
 .status-approved{background:rgba(34,197,94,.15);color:var(--green);}
 .status-declined{background:rgba(239,68,68,.15);color:var(--red);}
 .status-pending{background:rgba(245,158,11,.15);color:var(--yellow);}
-.comm-preview{display:flex;align-items:center;gap:10px;background:rgba(56,189,248,.06);border:1px solid rgba(56,189,248,.15);border-radius:10px;padding:10px 16px;margin-top:10px;font-size:12px;color:var(--muted);}
+[data-theme="light"] .status-approved{background:rgba(5,150,105,.12);}
+[data-theme="light"] .status-declined{background:rgba(220,38,38,.1);}
+[data-theme="light"] .status-pending{background:rgba(217,119,6,.1);}
+
+.comm-preview{
+  display:flex;align-items:center;gap:10px;
+  background:rgba(56,189,248,.06);border:1px solid rgba(56,189,248,.15);
+  border-radius:10px;padding:10px 16px;margin-top:10px;font-size:12px;color:var(--muted);
+}
+[data-theme="light"] .comm-preview{background:rgba(2,132,199,.05);border-color:rgba(2,132,199,.15);}
 .comm-preview-val{font-family:'Bebas Neue',sans-serif;font-size:26px;color:var(--accent);letter-spacing:2px;}
 .tier-info{margin-top:7px;font-size:12px;font-weight:600;color:var(--muted);min-height:18px;}
+
 .comm-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;}
 .comm-table th{background:rgba(28,43,66,.6);color:var(--muted);font-size:9px;letter-spacing:2px;text-transform:uppercase;padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);}
+[data-theme="light"] .comm-table th{background:rgba(208,218,234,.5);}
 .comm-table td{padding:8px 12px;border-bottom:1px solid rgba(28,43,66,.4);color:var(--text);}
+[data-theme="light"] .comm-table td{border-bottom-color:rgba(208,218,234,.6);}
 .comm-table tr:last-child td{border-bottom:none;}
 .comm-table .amt{color:var(--green);font-weight:600;}
-.comm-table .x2{color:var(--purple);font-weight:700;}
+
+/* ADMIN */
 .admin-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:4px;}
-.stat-box{background:var(--surface2);border-radius:12px;padding:16px;text-align:center;}
+.stat-box{background:var(--surface2);border-radius:12px;padding:16px;text-align:center;transition:background .3s;}
 .stat-label{font-size:10px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:4px;}
 .stat-value{font-family:'Bebas Neue',sans-serif;font-size:34px;}
-.admin-deal{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-top:10px;font-size:13px;line-height:1.85;}
+
+.admin-deal{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-top:10px;font-size:13px;line-height:1.85;transition:background .3s,border-color .3s;}
 .admin-actions{display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap;}
 .admin-comm-edit{flex:1;min-width:120px;padding:9px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;}
 .btn-approve{padding:9px 20px;border:none;border-radius:8px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);color:var(--green);font-weight:700;font-size:11px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:background .2s;}
@@ -745,25 +905,29 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .btn-decline:hover{background:rgba(239,68,68,.28);}
 .deal-resolved{opacity:.5;}
 .divider{height:1px;background:var(--border);margin:22px 0;}
-#toast{position:fixed;top:22px;right:22px;padding:16px 22px;border-radius:14px;font-size:14px;font-weight:600;z-index:9999;display:none;max-width:340px;box-shadow:0 10px 40px rgba(0,0,0,.5);animation:slideIn .35s cubic-bezier(.22,1,.36,1);}
-@keyframes slideIn{from{transform:translateX(80px);opacity:0;}to{transform:translateX(0);opacity:1;}}
-.toast-error{background:#450a0a;border:1px solid var(--red);color:#fca5a5;}
-.toast-success{background:#052e16;border:1px solid var(--green);color:#86efac;}
-.toast-fire{background:linear-gradient(135deg,#05122a,#0a0f2e);border:1px solid var(--accent);color:#bae6fd;font-size:15px;text-align:center;}
-.empty{text-align:center;padding:28px;color:var(--muted);font-size:13px;letter-spacing:1px;}
-.filter-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:22px 26px 18px;margin-bottom:18px;position:relative;overflow:hidden;}
+
+/* FILTER */
+.filter-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:22px 26px 18px;margin-bottom:18px;position:relative;overflow:hidden;box-shadow:var(--card-shadow);transition:background .3s,border-color .3s;}
 .filter-card::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(56,189,248,.03) 0%,rgba(99,102,241,.03) 100%);pointer-events:none;}
+[data-theme="light"] .filter-card::before{opacity:0;}
 .filter-title{font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:3px;color:var(--accent);margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:10px;}
 .filter-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 .filter-field label.filter-label{display:block;font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:5px;margin-top:0;}
 .filter-actions{display:flex;align-items:center;justify-content:space-between;margin-top:14px;flex-wrap:wrap;gap:8px;}
 .btn-filter-clear{padding:8px 18px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:border .2s,color .2s;}
 .btn-filter-clear:hover{border-color:var(--red);color:var(--red);}
-.filter-results-count{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.5px;}
+.filter-results-count{font-size:11px;font-weight:600;color:var(--muted);}
 .filter-results-count span{color:var(--accent);font-family:'Bebas Neue',sans-serif;font-size:15px;}
-@media(max-width:540px){.filter-grid{grid-template-columns:1fr;}}
-.shift-bar{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px 20px 14px;margin-bottom:18px;position:relative;overflow:hidden;}
+
+/* SHIFT BAR */
+.shift-bar{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:14px;padding:16px 20px 14px;margin-bottom:18px;
+  position:relative;overflow:hidden;box-shadow:var(--card-shadow);
+  transition:background .3s,border-color .3s;
+}
 .shift-bar::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(56,189,248,.04),rgba(99,102,241,.04));pointer-events:none;}
+[data-theme="light"] .shift-bar::before{opacity:0;}
 .shift-info{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;}
 .shift-label{font-size:9px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);}
 .shift-timer{font-family:'Bebas Neue',sans-serif;font-size:32px;letter-spacing:3px;color:var(--accent);line-height:1;}
@@ -773,21 +937,73 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .shift-progress-wrap{height:5px;background:var(--border);border-radius:4px;overflow:hidden;margin-bottom:8px;}
 .shift-progress-bar{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width 1s linear;}
 .shift-tag{font-size:10px;color:var(--muted);letter-spacing:1px;}
-.eod-summary{background:linear-gradient(135deg,rgba(56,189,248,.06),rgba(99,102,241,.06));border:1px solid rgba(56,189,248,.2);border-radius:14px;padding:20px 22px;margin-bottom:18px;animation:fadeUp .4s ease;}
+
+/* EOD */
+.eod-summary{
+  background:linear-gradient(135deg,rgba(56,189,248,.06),rgba(99,102,241,.06));
+  border:1px solid rgba(56,189,248,.2);border-radius:14px;
+  padding:20px 22px;margin-bottom:18px;animation:fadeUp .4s ease;
+  transition:background .3s,border-color .3s;
+}
+[data-theme="light"] .eod-summary{
+  background:linear-gradient(135deg,rgba(2,132,199,.05),rgba(79,70,229,.04));
+  border-color:rgba(2,132,199,.2);
+}
 .eod-title{font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:3px;color:var(--accent);margin-bottom:14px;border-bottom:1px solid rgba(56,189,248,.15);padding-bottom:10px;}
 .eod-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px;}
-.eod-stat{background:var(--surface2);border-radius:10px;padding:12px;text-align:center;}
+.eod-stat{background:var(--surface2);border-radius:10px;padding:12px;text-align:center;transition:background .3s;}
 .eod-stat-val{font-family:'Bebas Neue',sans-serif;font-size:28px;color:var(--accent);}
 .eod-stat-label{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-top:2px;}
 .eod-msg{font-size:12px;color:var(--muted);text-align:center;letter-spacing:.5px;margin-top:6px;font-style:italic;}
-.app-footer{width:100%;max-width:800px;display:flex;align-items:center;justify-content:center;gap:14px;padding:20px 24px 32px;position:relative;z-index:1;border-top:1px solid var(--border);margin-top:12px;}
-.version-tag{font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:3px;background:linear-gradient(135deg,var(--accent2),var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;border:1px solid rgba(56,189,248,.2);border-radius:6px;padding:3px 10px;color:var(--accent);}
+
+/* TOAST */
+#toast{
+  position:fixed;top:22px;right:22px;padding:16px 22px;border-radius:14px;
+  font-size:14px;font-weight:600;z-index:9999;display:none;max-width:340px;
+  box-shadow:0 10px 40px rgba(0,0,0,.5);animation:slideIn .35s cubic-bezier(.22,1,.36,1);
+}
+@keyframes slideIn{from{transform:translateX(80px);opacity:0;}to{transform:translateX(0);opacity:1;}}
+.toast-error{background:#450a0a;border:1px solid var(--red);color:#fca5a5;}
+.toast-success{background:#052e16;border:1px solid var(--green);color:#86efac;}
+.toast-fire{background:linear-gradient(135deg,#05122a,#0a0f2e);border:1px solid var(--accent);color:#bae6fd;font-size:15px;text-align:center;}
+[data-theme="light"] .toast-error{background:#fef2f2;color:#991b1b;}
+[data-theme="light"] .toast-success{background:#f0fdf4;color:#166534;}
+[data-theme="light"] .toast-fire{background:linear-gradient(135deg,#eff6ff,#eef2ff);color:var(--accent2);}
+
+.empty{text-align:center;padding:28px;color:var(--muted);font-size:13px;letter-spacing:1px;}
+
+/* FOOTER */
+.app-footer{
+  width:100%;max-width:800px;display:flex;align-items:center;justify-content:center;
+  gap:14px;padding:20px 24px 32px;position:relative;z-index:1;
+  border-top:1px solid var(--border);margin-top:12px;
+  transition:border-color .3s;
+}
+.version-tag{
+  font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:3px;
+  background:linear-gradient(135deg,var(--accent2),var(--accent));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  border:1px solid rgba(56,189,248,.2);border-radius:6px;padding:3px 10px;color:var(--accent);
+}
 .footer-name{font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
-.footer-copy{font-size:10px;letter-spacing:1px;color:#1e3050;}
-@media(max-width:540px){.app-footer{flex-direction:column;gap:6px;text-align:center;}}
+.footer-copy{font-size:10px;letter-spacing:1px;color:var(--muted);opacity:.4;}
+
+@media(max-width:540px){
+  .filter-grid{grid-template-columns:1fr;}
+  .app-footer{flex-direction:column;gap:6px;text-align:center;}
+  .login-box{padding:32px 24px 28px;}
+  .theme-toggle{top:12px;right:12px;}
+}
 </style>
 </head>
 <body>
+
+<!-- THEME TOGGLE -->
+<button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" aria-label="Toggle theme">
+  <div class="toggle-knob" id="toggle-knob">
+    <span id="toggle-icon">🌙</span>
+  </div>
+</button>
 
 <div id="toast"></div>
 
@@ -824,7 +1040,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   </div>
 </div>
 
-<!-- FORCE PASSWORD -->
+<!-- FORCE PASSWORD CHANGE -->
 <div id="force-pw-screen" style="display:none;">
   <div class="login-glow"></div>
   <div class="login-box">
@@ -832,14 +1048,15 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
     <div class="login-welcome">Set Your Password</div>
     <div class="fp-note">
       <strong>🔐 First Login Detected</strong>
-      You must set a new personal password before continuing. At least 8 characters.
+      Choose a new personal password. Must be at least 8 characters and different from your temp password.
     </div>
     <label class="login-label" for="fp-new">New Password</label>
     <input class="login-input" id="fp-new" type="password" placeholder="Min. 8 characters" oninput="updateStrength(this.value)"/>
     <div class="pw-strength"><div class="pw-strength-bar" id="pw-bar"></div></div>
     <label class="login-label" for="fp-confirm">Confirm Password</label>
-    <input class="login-input" id="fp-confirm" type="password" placeholder="Repeat password"/>
-    <div class="login-error" id="fp-error"></div>
+    <input class="login-input" id="fp-confirm" type="password" placeholder="Repeat your new password"/>
+    <!-- Error only shows after button click, never on load -->
+    <div class="login-error" id="fp-error" style="display:none;"></div>
     <button class="login-btn" id="fp-btn" onclick="doForcePasswordChange()">SET PASSWORD</button>
   </div>
 </div>
@@ -864,7 +1081,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
     <!-- OPENER PANEL -->
     <div class="panel" id="panel-opener">
-      <div class="shift-bar" id="shift-bar-opener">
+      <div class="shift-bar">
         <div class="shift-info">
           <span class="shift-label">⏱ SHIFT ENDS IN</span>
           <span class="shift-timer" id="shift-timer-opener">—</span>
@@ -874,12 +1091,10 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         </div>
         <div class="shift-tag" id="shift-tag-opener">Egypt: 5PM – 2AM &nbsp;·&nbsp; Mon–Fri</div>
       </div>
-
       <div class="eod-summary" id="eod-opener" style="display:none"></div>
 
       <div class="card">
         <div class="card-title">Opener Submission</div>
-
         <label>Opener Name</label>
         <select id="op-name">
           <option value="">Select your name…</option>
@@ -887,7 +1102,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <option value="Sara">Sara</option>
           <option value="Kate">Kate</option>
         </select>
-
         <label>Lead Source / Transfer Type</label>
         <select id="op-type" onchange="handleTransferType()">
           <option value="">Select type…</option>
@@ -899,11 +1113,9 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <option value="PCCTsub10">PCCTsub10 — $2</option>
           <option value="Student Loan">Student Loan — $2</option>
         </select>
-
         <div class="comm-preview">
           Commission for this transfer: <span class="comm-preview-val" id="op-comm-preview">$—</span>
         </div>
-
         <div id="op-closer-wrap" style="display:none">
           <label>Assign to Closer</label>
           <select id="op-closer">
@@ -915,13 +1127,10 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
             <option value="Nathan">Nathan</option>
           </select>
         </div>
-
         <label>Transfer Date</label>
         <input id="op-date" type="date"/>
-
         <label>Phone Number</label>
         <input id="op-phone" placeholder="Client phone number"/>
-
         <button class="btn-submit" onclick="submitOpener()">SUBMIT TRANSFER</button>
       </div>
 
@@ -951,7 +1160,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
     <!-- CLOSER PANEL -->
     <div class="panel" id="panel-closer">
-      <div class="shift-bar" id="shift-bar-closer">
+      <div class="shift-bar">
         <div class="shift-info">
           <span class="shift-label">⏱ SHIFT ENDS IN</span>
           <span class="shift-timer" id="shift-timer-closer">—</span>
@@ -961,12 +1170,10 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         </div>
         <div class="shift-tag" id="shift-tag-closer">Egypt: 5PM – 2AM &nbsp;·&nbsp; Mon–Fri</div>
       </div>
-
       <div class="eod-summary" id="eod-closer" style="display:none"></div>
 
       <div class="card">
         <div class="card-title">Closer Submission</div>
-
         <label>Closer Name</label>
         <select id="cl-name">
           <option value="">Select your name…</option>
@@ -976,7 +1183,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <option value="Willy">Willy</option>
           <option value="Nathan">Nathan</option>
         </select>
-
         <label>Opener Name</label>
         <select id="cl-opener">
           <option value="">Select opener…</option>
@@ -984,44 +1190,21 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <option value="Sara">Sara</option>
           <option value="Kate">Kate</option>
         </select>
-
         <div class="row">
-          <div>
-            <label>Client Name</label>
-            <input id="cl-client" placeholder="Full name"/>
-          </div>
-          <div>
-            <label>Client Phone</label>
-            <input id="cl-phone" placeholder="Phone number"/>
-          </div>
+          <div><label>Client Name</label><input id="cl-client" placeholder="Full name"/></div>
+          <div><label>Client Phone</label><input id="cl-phone" placeholder="Phone number"/></div>
         </div>
-
         <div class="row">
-          <div>
-            <label>Amount of Debt ($)</label>
-            <input id="cl-debt" type="number" placeholder="0.00"/>
-          </div>
-          <div>
-            <label>Monthly Payment ($)</label>
-            <input id="cl-monthly" type="number" placeholder="0.00" oninput="autoCommission()"/>
-          </div>
+          <div><label>Amount of Debt ($)</label><input id="cl-debt" type="number" placeholder="0.00"/></div>
+          <div><label>Monthly Payment ($)</label><input id="cl-monthly" type="number" placeholder="0.00" oninput="autoCommission()"/></div>
         </div>
-
         <div class="row">
-          <div>
-            <label>First Payment Date</label>
-            <input id="cl-firstpay" type="date"/>
-          </div>
-          <div>
-            <label>Closing Date &amp; Time</label>
-            <input id="cl-closing" type="datetime-local" onchange="autoCommission()"/>
-          </div>
+          <div><label>First Payment Date</label><input id="cl-firstpay" type="date"/></div>
+          <div><label>Closing Date &amp; Time</label><input id="cl-closing" type="datetime-local" onchange="autoCommission()"/></div>
         </div>
-
         <label>Commission (To be decided by Admin)</label>
         <input id="cl-commission" readonly placeholder="$0"/>
         <div class="tier-info" id="cl-tier-info"></div>
-
         <button class="btn-submit" onclick="submitCloser()">SUBMIT DEAL</button>
       </div>
 
@@ -1093,7 +1276,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
       <div class="section-label">Closer Deals — Approve or Decline</div>
       <div id="adm-deals"><div class="empty">No deals submitted yet.</div></div>
-
       <div class="divider"></div>
       <div class="section-label">Opener Transfers</div>
       <div id="adm-transfers"><div class="empty">No transfers submitted yet.</div></div>
@@ -1102,21 +1284,40 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v1.1</span>
+    <span class="version-tag">v1.2</span>
     <span class="footer-name">United Funds Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
-
 </div>
 
 <script>
+// ── THEME TOGGLE ──────────────────────────────────────────
+(function() {
+  const saved = localStorage.getItem('uf-theme') || 'dark';
+  applyTheme(saved);
+})();
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const icon = document.getElementById('toggle-icon');
+  if (icon) icon.textContent = theme === 'dark' ? '🌙' : '☀️';
+  localStorage.setItem('uf-theme', theme);
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+}
+
+// ── PASSWORD STRENGTH ─────────────────────────────────────
 function updateStrength(val) {
   const bar = document.getElementById('pw-bar');
+  if (!bar) return;
   let score = 0;
-  if (val.length >= 8)  score++;
-  if (val.length >= 12) score++;
-  if (/[A-Z]/.test(val)) score++;
-  if (/[0-9]/.test(val)) score++;
+  if (val.length >= 8)        score++;
+  if (val.length >= 12)       score++;
+  if (/[A-Z]/.test(val))      score++;
+  if (/[0-9]/.test(val))      score++;
   if (/[^A-Za-z0-9]/.test(val)) score++;
   const colors = ['#ef4444','#f59e0b','#f59e0b','#22c55e','#22c55e'];
   const widths  = ['20%','40%','60%','80%','100%'];
@@ -1124,57 +1325,43 @@ function updateStrength(val) {
   bar.style.background = val ? (colors[score-1] || '#ef4444') : 'transparent';
 }
 
+// ── SHIFT COUNTDOWN ───────────────────────────────────────
 (function initShift() {
-  const SHIFT_START_H = 17;
-  const SHIFT_END_H   = 2;
+  const SHIFT_START_H    = 17;
+  const SHIFT_END_H      = 2;
   const SHIFT_DURATION_S = 9 * 3600;
 
   function getNowEgypt() {
-    const now = new Date();
+    const now   = new Date();
     const utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
     return new Date(utcMs + (2 * 3600000));
   }
-
-  function isWeekday(d) {
-    const day = d.getDay();
-    return day >= 1 && day <= 5;
-  }
-
+  function isWeekday(d) { const day = d.getDay(); return day >= 1 && day <= 5; }
   function isShiftActive(egypt) {
     if (!isWeekday(egypt)) return false;
-    const h = egypt.getHours();
-    const m = egypt.getMinutes();
-    const s = egypt.getSeconds();
+    const h = egypt.getHours(), m = egypt.getMinutes(), s = egypt.getSeconds();
     return (h >= SHIFT_START_H) || (h < SHIFT_END_H) || (h === SHIFT_END_H && m === 0 && s === 0);
   }
-
   function getSecondsLeft(egypt) {
-    const h = egypt.getHours();
-    const m = egypt.getMinutes();
-    const s = egypt.getSeconds();
-    let nowSecs = h * 3600 + m * 60 + s;
-    let endSecs = SHIFT_END_H * 3600;
-    if (nowSecs >= SHIFT_START_H * 3600) {
-      return (24 * 3600 - nowSecs) + endSecs;
-    } else {
-      return endSecs - nowSecs;
-    }
+    const h = egypt.getHours(), m = egypt.getMinutes(), s = egypt.getSeconds();
+    const nowSecs = h * 3600 + m * 60 + s;
+    const endSecs = SHIFT_END_H * 3600;
+    return nowSecs >= SHIFT_START_H * 3600
+      ? (24 * 3600 - nowSecs) + endSecs
+      : endSecs - nowSecs;
   }
-
   function formatCountdown(secs) {
-    const h = Math.floor(secs / 3600);
-    const m = Math.floor((secs % 3600) / 60);
-    const s = secs % 60;
+    const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   }
 
   function buildEODSummary(role) {
     const todayStr = getNowEgypt().toISOString().slice(0, 10);
     if (role === 'closer') {
-      const todayDeals = (window._deals || []).filter(d => (d.createdAt||'').slice(0,10) === todayStr);
-      const approved   = todayDeals.filter(d => d.status === 'Approved');
-      const totalComm  = approved.reduce((s, d) => s + (d.comm||0), 0);
-      const totalDebt  = todayDeals.reduce((s, d) => s + (Number(d.debt)||0), 0);
+      const todayDeals = (window._deals||[]).filter(d=>(d.createdAt||'').slice(0,10)===todayStr);
+      const approved   = todayDeals.filter(d=>d.status==='Approved');
+      const totalComm  = approved.reduce((s,d)=>s+(d.comm||0),0);
+      const totalDebt  = todayDeals.reduce((s,d)=>s+(Number(d.debt)||0),0);
       return `
         <div class="eod-title">🏁 Shift Summary — Great Work!</div>
         <div class="eod-grid">
@@ -1186,26 +1373,26 @@ function updateStrength(val) {
           <div class="eod-stat-val" style="font-size:22px;">$${totalDebt.toLocaleString()}</div>
           <div class="eod-stat-label">Total Debt Enrolled Today</div>
         </div>
-        <div class="eod-msg">${approved.length > 0 ? '🔥 Incredible shift! See you tomorrow.' : '💪 Every shift is a new opportunity. Rest up!'}</div>`;
+        <div class="eod-msg">${approved.length>0?'🔥 Incredible shift! See you tomorrow.':'💪 Every shift is a new opportunity. Rest up!'}</div>`;
     }
     if (role === 'opener') {
-      const todayTransfers = (window._transfers || []).filter(t => (t.createdAt||'').slice(0,10) === todayStr);
-      const approved       = todayTransfers.filter(t => t.status === 'Approved');
-      const totalComm      = todayTransfers.reduce((s, t) => s + (t.comm||0), 0);
+      const todayT   = (window._transfers||[]).filter(t=>(t.createdAt||'').slice(0,10)===todayStr);
+      const approved = todayT.filter(t=>t.status==='Approved');
+      const totalComm= todayT.reduce((s,t)=>s+(t.comm||0),0);
       return `
         <div class="eod-title">🏁 Shift Summary — Great Work!</div>
         <div class="eod-grid">
-          <div class="eod-stat"><div class="eod-stat-val">${todayTransfers.length}</div><div class="eod-stat-label">Transfers Sent</div></div>
+          <div class="eod-stat"><div class="eod-stat-val">${todayT.length}</div><div class="eod-stat-label">Transfers Sent</div></div>
           <div class="eod-stat"><div class="eod-stat-val">${approved.length}</div><div class="eod-stat-label">Approved</div></div>
           <div class="eod-stat"><div class="eod-stat-val">$${totalComm}</div><div class="eod-stat-label">Commission</div></div>
         </div>
-        <div class="eod-msg">${todayTransfers.length > 0 ? '🔥 Solid shift! Rest up and come back stronger.' : '💪 Tomorrow is a fresh start. You got this!'}</div>`;
+        <div class="eod-msg">${todayT.length>0?'🔥 Solid shift! Rest up and come back stronger.':'💪 Tomorrow is a fresh start. You got this!'}</div>`;
     }
     return '';
   }
 
   window.refreshEOD = function() {
-    const role = window._currentRole;
+    const role  = window._currentRole;
     if (!role || role === 'admin') return;
     const eodId = role === 'closer' ? 'eod-closer' : 'eod-opener';
     const eodEl = document.getElementById(eodId);
@@ -1215,32 +1402,32 @@ function updateStrength(val) {
     if (active) {
       const todayStr = egypt.toISOString().slice(0, 10);
       if (role === 'closer') {
-        const todayDeals = (window._deals || []).filter(d => (d.createdAt||'').slice(0,10) === todayStr);
-        const approved   = todayDeals.filter(d => d.status === 'Approved');
-        const totalComm  = approved.reduce((s, d) => s + (d.comm||0), 0);
+        const td = (window._deals||[]).filter(d=>(d.createdAt||'').slice(0,10)===todayStr);
+        const ap = td.filter(d=>d.status==='Approved');
+        const tc = ap.reduce((s,d)=>s+(d.comm||0),0);
         eodEl.innerHTML = `
           <div class="eod-title" style="font-size:14px;margin-bottom:10px;">📊 Today's Progress</div>
           <div class="eod-grid">
-            <div class="eod-stat"><div class="eod-stat-val">${todayDeals.length}</div><div class="eod-stat-label">Deals Submitted</div></div>
-            <div class="eod-stat"><div class="eod-stat-val">${approved.length}</div><div class="eod-stat-label">Approved</div></div>
-            <div class="eod-stat"><div class="eod-stat-val">$${totalComm}</div><div class="eod-stat-label">Earned Today</div></div>
+            <div class="eod-stat"><div class="eod-stat-val">${td.length}</div><div class="eod-stat-label">Deals Submitted</div></div>
+            <div class="eod-stat"><div class="eod-stat-val">${ap.length}</div><div class="eod-stat-label">Approved</div></div>
+            <div class="eod-stat"><div class="eod-stat-val">$${tc}</div><div class="eod-stat-label">Earned Today</div></div>
           </div>`;
-        eodEl.style.display = todayDeals.length > 0 ? 'block' : 'none';
+        eodEl.style.display = td.length > 0 ? 'block' : 'none';
       } else {
-        const todayTransfers = (window._transfers || []).filter(t => (t.createdAt||'').slice(0,10) === todayStr);
-        const approved       = todayTransfers.filter(t => t.status === 'Approved');
-        const totalComm      = todayTransfers.reduce((s, t) => s + (t.comm||0), 0);
+        const tt = (window._transfers||[]).filter(t=>(t.createdAt||'').slice(0,10)===todayStr);
+        const ap = tt.filter(t=>t.status==='Approved');
+        const tc = tt.reduce((s,t)=>s+(t.comm||0),0);
         eodEl.innerHTML = `
           <div class="eod-title" style="font-size:14px;margin-bottom:10px;">📊 Today's Progress</div>
           <div class="eod-grid">
-            <div class="eod-stat"><div class="eod-stat-val">${todayTransfers.length}</div><div class="eod-stat-label">Transfers Sent</div></div>
-            <div class="eod-stat"><div class="eod-stat-val">${approved.length}</div><div class="eod-stat-label">Approved</div></div>
-            <div class="eod-stat"><div class="eod-stat-val">$${totalComm}</div><div class="eod-stat-label">Earned Today</div></div>
+            <div class="eod-stat"><div class="eod-stat-val">${tt.length}</div><div class="eod-stat-label">Transfers Sent</div></div>
+            <div class="eod-stat"><div class="eod-stat-val">${ap.length}</div><div class="eod-stat-label">Approved</div></div>
+            <div class="eod-stat"><div class="eod-stat-val">$${tc}</div><div class="eod-stat-label">Earned Today</div></div>
           </div>`;
-        eodEl.style.display = todayTransfers.length > 0 ? 'block' : 'none';
+        eodEl.style.display = tt.length > 0 ? 'block' : 'none';
       }
     } else {
-      eodEl.innerHTML    = buildEODSummary(role);
+      eodEl.innerHTML = buildEODSummary(role);
       eodEl.style.display = 'block';
     }
   };
@@ -1250,10 +1437,10 @@ function updateStrength(val) {
     const active = isShiftActive(egypt);
     const role   = window._currentRole;
     if (!role || role === 'admin') return;
-    const timerId = role === 'closer' ? 'shift-timer-closer'    : 'shift-timer-opener';
-    const progId  = role === 'closer' ? 'shift-progress-closer' : 'shift-progress-opener';
-    const tagId   = role === 'closer' ? 'shift-tag-closer'      : 'shift-tag-opener';
-    const eodId   = role === 'closer' ? 'eod-closer'            : 'eod-opener';
+    const timerId = role==='closer'?'shift-timer-closer':'shift-timer-opener';
+    const progId  = role==='closer'?'shift-progress-closer':'shift-progress-opener';
+    const tagId   = role==='closer'?'shift-tag-closer':'shift-tag-opener';
+    const eodId   = role==='closer'?'eod-closer':'eod-opener';
     const timerEl = document.getElementById(timerId);
     const progEl  = document.getElementById(progId);
     const tagEl   = document.getElementById(tagId);
@@ -1261,31 +1448,28 @@ function updateStrength(val) {
     if (!timerEl) return;
     if (active) {
       const secsLeft = getSecondsLeft(egypt);
-      const pct      = Math.max(0, Math.min(100, ((SHIFT_DURATION_S - secsLeft) / SHIFT_DURATION_S) * 100));
+      const pct      = Math.max(0,Math.min(100,((SHIFT_DURATION_S-secsLeft)/SHIFT_DURATION_S)*100));
       const urgent   = secsLeft <= 1800;
       timerEl.textContent = formatCountdown(secsLeft);
-      timerEl.className   = 'shift-timer' + (urgent ? ' urgent' : '');
+      timerEl.className   = 'shift-timer'+(urgent?' urgent':'');
       if (progEl) {
-        progEl.style.width      = pct + '%';
-        progEl.style.background = urgent ? 'linear-gradient(90deg,#f43f5e,#fb923c)' : 'linear-gradient(90deg,var(--accent2),var(--accent))';
+        progEl.style.width      = pct+'%';
+        progEl.style.background = urgent?'linear-gradient(90deg,#f43f5e,#fb923c)':'linear-gradient(90deg,var(--accent2),var(--accent))';
       }
-      if (tagEl) tagEl.textContent = urgent ? '⚠️ Less than 30 minutes left — finish strong!' : 'Egypt: 5PM – 2AM · Mon–Fri';
+      if (tagEl) tagEl.textContent = urgent?'⚠️ Less than 30 minutes left — finish strong!':'Egypt: 5PM – 2AM · Mon–Fri';
     } else {
-      timerEl.textContent = isWeekday(egypt) ? 'OFF SHIFT' : 'WEEKEND';
+      timerEl.textContent = isWeekday(egypt)?'OFF SHIFT':'WEEKEND';
       timerEl.className   = 'shift-timer off';
-      if (progEl) { progEl.style.width = '0%'; }
-      if (tagEl)  tagEl.textContent = isWeekday(egypt) ? 'Next shift starts at 5PM Egypt time' : 'Back Monday at 5PM Egypt time';
-      if (eodEl && eodEl.style.display === 'none') {
+      if (progEl) progEl.style.width = '0%';
+      if (tagEl)  tagEl.textContent  = isWeekday(egypt)?'Next shift starts at 5PM Egypt time':'Back Monday at 5PM Egypt time';
+      if (eodEl && eodEl.style.display==='none') {
         eodEl.innerHTML    = buildEODSummary(role);
         eodEl.style.display = 'block';
       }
     }
   }
 
-  document.addEventListener('DOMContentLoaded', () => {
-    setInterval(tick, 1000);
-    tick();
-  });
+  document.addEventListener('DOMContentLoaded', () => { setInterval(tick, 1000); tick(); });
 })();
 </script>
 </body>
