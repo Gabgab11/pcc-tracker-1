@@ -102,13 +102,11 @@
         const userDoc = await getDoc(doc(db, 'users', fbUser.uid));
         mustChange = !userDoc.exists() || userDoc.data().mustChangePassword === true;
       } catch(e) {
-        // If Firestore read fails, still let them in rather than force-pw loop
         mustChange = false;
       }
 
       if (mustChange) {
         showScreen('force-pw');
-        // Clear any stale error on the force-pw screen
         const errEl = document.getElementById('fp-error');
         if (errEl) errEl.style.display = 'none';
         const fpNew = document.getElementById('fp-new');
@@ -165,17 +163,14 @@
   };
 
   // ── FORCE PASSWORD CHANGE ─────────────────
-  // FIX: Only runs on explicit button click — never on page load
   window.doForcePasswordChange = async function() {
     const newPass = document.getElementById('fp-new').value;
     const confirm = document.getElementById('fp-confirm').value;
     const errEl   = document.getElementById('fp-error');
     const btn     = document.getElementById('fp-btn');
 
-    // Always hide error first
     errEl.style.display = 'none';
 
-    // Validate — these checks only fire when button is clicked
     if (!newPass || newPass.length < 8) {
       showError(errEl, 'Password must be at least 8 characters.'); return;
     }
@@ -203,11 +198,34 @@
       launchApp();
     } catch (err) {
       btn.textContent = 'SET PASSWORD'; btn.disabled = false;
-      showError(errEl, err.code === 'auth/requires-recent-login'
-        ? 'Session expired. Please log out and back in.' : 'Failed to update password. Try again.');
+
+      // ── FIX: Session expired → auto sign-out and redirect to login ──
+      if (err.code === 'auth/requires-recent-login') {
+        toast('Session expired. Signing you out — please log in again.', 'error');
+        setTimeout(async () => {
+          await signOut(auth);
+          showScreen('login');
+          // Reset login form
+          document.getElementById('li-email').value     = '';
+          document.getElementById('li-pass').value      = '';
+          document.getElementById('li-btn').textContent = 'LOG IN';
+          document.getElementById('li-btn').disabled    = false;
+          selectedLoginRole = '';
+          ['opener','closer','admin'].forEach(r => {
+            const b = document.getElementById('rs-' + r);
+            if (b) b.classList.remove('selected');
+          });
+          // Show message on login screen
+          const loginErr = document.getElementById('li-error');
+          showError(loginErr, '⚠️ Session expired — please log in again to set your password.');
+        }, 1800);
+      } else {
+        showError(errEl, 'Failed to update password. Try again.');
+      }
     }
   };
 
+  // ── LOGOUT ────────────────────────────────
   window.doLogout = async function() {
     await signOut(auth);
     document.getElementById('app').classList.remove('visible');
@@ -591,7 +609,6 @@
   };
 
   document.addEventListener('DOMContentLoaded', () => {
-    // Enter key shortcuts — only trigger if fields are non-empty
     document.getElementById('fp-confirm')?.addEventListener('keydown', e => {
       if (e.key === 'Enter') {
         const val = document.getElementById('fp-new')?.value || '';
@@ -609,7 +626,6 @@
    THEME TOKENS
 ══════════════════════════════════════════ */
 :root {
-  /* Dark theme (default) */
   --bg:#04080f; --surface:#080e1a; --surface2:#0c1424; --border:#112036;
   --accent:#38bdf8; --accent2:#0ea5e9; --accent3:#6366f1;
   --green:#22d3a0; --red:#f43f5e; --yellow:#f59e0b; --purple:#818cf8;
@@ -636,7 +652,6 @@ body{
   overflow-x:hidden;transition:background .3s,color .3s;
 }
 
-/* Noise + glow — hidden in light mode */
 body::before{
   content:'';position:fixed;inset:0;
   background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
@@ -752,6 +767,7 @@ body::after{
 .login-btn:disabled{opacity:.5;cursor:not-allowed;}
 .login-error{margin-top:14px;text-align:center;font-size:12px;color:var(--red);font-weight:600;letter-spacing:1px;display:none;}
 
+/* ── FORCE PW NOTE ── */
 .fp-note{
   margin-bottom:20px;padding:14px 16px;
   background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);
@@ -761,6 +777,22 @@ body::after{
 .fp-note strong{display:block;font-size:13px;margin-bottom:4px;letter-spacing:1px;text-transform:uppercase;}
 .pw-strength{margin-top:6px;height:3px;border-radius:4px;background:var(--border);overflow:hidden;}
 .pw-strength-bar{height:100%;width:0%;transition:width .3s,background .3s;border-radius:4px;}
+
+/* ── LOGOUT BTN on force-pw screen ── */
+.fp-logout-btn{
+  display:block;width:100%;margin-top:12px;padding:13px;
+  border:1.5px solid rgba(244,63,94,.4);border-radius:12px;
+  background:rgba(244,63,94,.08);
+  color:var(--red);font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:3px;
+  cursor:pointer;transition:all .2s;text-align:center;
+}
+.fp-logout-btn:hover{
+  background:rgba(244,63,94,.18);border-color:var(--red);
+  box-shadow:0 0 18px rgba(244,63,94,.25);
+}
+[data-theme="light"] .fp-logout-btn{
+  background:rgba(220,38,38,.06);border-color:rgba(220,38,38,.3);color:var(--red);
+}
 
 /* ── APP ── */
 #app{display:none;flex-direction:column;align-items:center;width:100%;}
@@ -1055,9 +1087,11 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
     <div class="pw-strength"><div class="pw-strength-bar" id="pw-bar"></div></div>
     <label class="login-label" for="fp-confirm">Confirm Password</label>
     <input class="login-input" id="fp-confirm" type="password" placeholder="Repeat your new password"/>
-    <!-- Error only shows after button click, never on load -->
+    <!-- Error shown only after button click -->
     <div class="login-error" id="fp-error" style="display:none;"></div>
     <button class="login-btn" id="fp-btn" onclick="doForcePasswordChange()">SET PASSWORD</button>
+    <!-- PROMINENT LOGOUT BUTTON — always visible on this screen -->
+    <button class="fp-logout-btn" onclick="doLogout()">🚪 LOG OUT &amp; START OVER</button>
   </div>
 </div>
 
@@ -1284,7 +1318,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v1.2</span>
+    <span class="version-tag">v1.3</span>
     <span class="footer-name">United Funds Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
