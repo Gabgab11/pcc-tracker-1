@@ -80,12 +80,10 @@
     } catch (e) { return 0; }
   }
 
-  // ── OPENER COMMISSION: tier by closed-deal count today ──
-  // The 1st closed = $5, 2nd = $7.50, 3rd = $10, 4th+ = $15
-  // Non-closed types (PCCTsub10, Student Loan) always flat.
+  // ── OPENER COMMISSION ──
   const CLOSED_TYPES = ['1st Closed','2nd Close','3rd Closed','4th Closed','pCcT'];
   const FLAT_COMM    = { 'PCCTsub10': 2, 'Student Loan': 2 };
-  const TIER_RATES   = [5, 7.5, 10, 15]; // index 0=1st deal, 1=2nd, 2=3rd, 3=4th+
+  const TIER_RATES   = [5, 7.5, 10, 15];
 
   function countClosedTransfersToday() {
     const todayStr = new Date().toISOString().slice(0, 10);
@@ -123,9 +121,7 @@
       try {
         const userDoc = await getDoc(doc(db, 'users', fbUser.uid));
         mustChange = !userDoc.exists() || userDoc.data().mustChangePassword === true;
-      } catch(e) {
-        mustChange = false;
-      }
+      } catch(e) { mustChange = false; }
 
       if (mustChange) {
         showScreen('force-pw');
@@ -191,24 +187,16 @@
     const btn     = document.getElementById('fp-btn');
 
     errEl.style.display = 'none';
+    if (!newPass || newPass.length < 8) { showError(errEl, 'Password must be at least 8 characters.'); return; }
+    if (newPass !== confirm) { showError(errEl, 'Passwords do not match.'); return; }
 
-    if (!newPass || newPass.length < 8) {
-      showError(errEl, 'Password must be at least 8 characters.'); return;
-    }
-    if (newPass !== confirm) {
-      showError(errEl, 'Passwords do not match.'); return;
-    }
     const defaults = [
       'Admin123','David123','Sabrina123','Eddy123','Willy123','Nate123',
-      'Kiley123','Sara123','Kate123',
-      'Mona123','Sean123','Emmanuel123','Tom123',
+      'Kiley123','Sara123','Kate123','Mona123','Sean123','Emmanuel123','Tom123',
       'admin123','david123','sabrina123','eddy123','willy123','nate123',
-      'kiley123','sara123','kate123',
-      'mona123','sean123','emmanuel123','tom123'
+      'kiley123','sara123','kate123','mona123','sean123','emmanuel123','tom123'
     ];
-    if (defaults.includes(newPass)) {
-      showError(errEl, 'Please choose a different password from your temporary one.'); return;
-    }
+    if (defaults.includes(newPass)) { showError(errEl, 'Please choose a different password from your temporary one.'); return; }
 
     btn.textContent = 'SAVING…'; btn.disabled = true;
     try {
@@ -228,17 +216,16 @@
         setTimeout(async () => {
           await signOut(auth);
           showScreen('login');
-          document.getElementById('li-email').value     = '';
-          document.getElementById('li-pass').value      = '';
+          document.getElementById('li-email').value = '';
+          document.getElementById('li-pass').value = '';
           document.getElementById('li-btn').textContent = 'LOG IN';
-          document.getElementById('li-btn').disabled    = false;
+          document.getElementById('li-btn').disabled = false;
           selectedLoginRole = '';
           ['opener','closer','admin'].forEach(r => {
             const b = document.getElementById('rs-' + r);
             if (b) b.classList.remove('selected');
           });
-          const loginErr = document.getElementById('li-error');
-          showError(loginErr, '⚠️ Session expired — please log in again to set your password.');
+          showError(document.getElementById('li-error'), '⚠️ Session expired — please log in again to set your password.');
         }, 1800);
       } else {
         showError(errEl, 'Failed to update password. Try again.');
@@ -248,11 +235,13 @@
 
   window.doLogout = async function() {
     await signOut(auth);
+    deals = []; transfers = [];
+    syncGlobals();
     document.getElementById('app').classList.remove('visible');
-    document.getElementById('li-email').value     = '';
-    document.getElementById('li-pass').value      = '';
+    document.getElementById('li-email').value = '';
+    document.getElementById('li-pass').value = '';
     document.getElementById('li-btn').textContent = 'LOG IN';
-    document.getElementById('li-btn').disabled    = false;
+    document.getElementById('li-btn').disabled = false;
     document.getElementById('li-error').style.display = 'none';
     selectedLoginRole = '';
     ['opener','closer','admin'].forEach(r => {
@@ -301,34 +290,48 @@
     document.querySelectorAll('.role-btn').forEach((b, i) => {
       b.classList.toggle('active', ['opener','closer','admin'][i] === name);
     });
-    if (name === 'admin') refreshAdmin();
+    // Always re-fetch fresh data when switching to admin panel
+    if (name === 'admin') loadData();
   };
 
+  // ── CORE DATA LOAD — fetches everything from Firestore ──
   async function loadData() {
     if (!currentUser) return;
-    deals = []; transfers = [];
     const role = currentUser.role;
 
+    // Show loading state
+    if (role === 'admin') {
+      document.getElementById('adm-deals').innerHTML     = '<div class="empty">Loading deals…</div>';
+      document.getElementById('adm-transfers').innerHTML = '<div class="empty">Loading transfers…</div>';
+    }
+
+    // Always fetch deals for admin & closer
     if (role === 'admin' || role === 'closer') {
-      const q = role === 'admin'
-        ? query(collection(db, 'deals'), orderBy('createdAt', 'desc'))
-        : query(collection(db, 'deals'), where('closerEmail', '==', currentUser.email), orderBy('createdAt', 'desc'));
-      const snap = await getDocs(q);
-      snap.forEach(d => deals.push({ id: d.id, ...d.data() }));
+      try {
+        const q = role === 'admin'
+          ? query(collection(db, 'deals'), orderBy('createdAt', 'desc'))
+          : query(collection(db, 'deals'), where('closerEmail', '==', currentUser.email), orderBy('createdAt', 'desc'));
+        const snap = await getDocs(q);
+        deals = [];
+        snap.forEach(d => deals.push({ id: d.id, ...d.data() }));
+      } catch(e) { console.error('Error loading deals:', e); }
     }
 
+    // Always fetch transfers for admin & opener
     if (role === 'admin' || role === 'opener') {
-      const q = role === 'admin'
-        ? query(collection(db, 'transfers'), orderBy('createdAt', 'desc'))
-        : query(collection(db, 'transfers'), where('openerEmail', '==', currentUser.email), orderBy('createdAt', 'desc'));
-      const snap = await getDocs(q);
-      snap.forEach(t => transfers.push({ id: t.id, ...t.data() }));
+      try {
+        const q = role === 'admin'
+          ? query(collection(db, 'transfers'), orderBy('createdAt', 'desc'))
+          : query(collection(db, 'transfers'), where('openerEmail', '==', currentUser.email), orderBy('createdAt', 'desc'));
+        const snap = await getDocs(q);
+        transfers = [];
+        snap.forEach(t => transfers.push({ id: t.id, ...t.data() }));
+      } catch(e) { console.error('Error loading transfers:', e); }
     }
 
-    renderDashboard();
     syncGlobals();
+    renderDashboard();
     if (window.refreshEOD) window.refreshEOD();
-    // Refresh commission preview with updated transfer count
     if (role === 'opener') updateOpenerCommPreview();
   }
 
@@ -345,23 +348,22 @@
     if (role === 'opener') {
       renderOpenerDashboard();
     }
-    if (role === 'admin') refreshAdmin();
+    if (role === 'admin') {
+      renderAdminStats();
+      renderAdminDeals();
+      renderAdminTransfers();
+    }
   }
 
   // ── OPENER DASHBOARD ─────────────────────
   function renderOpenerDashboard() {
     const total = transfers.reduce((s, t) => s + (t.comm || 0), 0);
     document.getElementById('op-total').textContent = '$' + total;
-
-    // Build today's tier summary
     const todayStr = new Date().toISOString().slice(0, 10);
     const todayClosedCount = transfers.filter(t =>
       CLOSED_TYPES.includes(t.type) && (t.createdAt || '').slice(0, 10) === todayStr
     ).length;
-
-    // Update the tier tracker display
     renderTierTracker(todayClosedCount);
-
     const wrap = document.getElementById('op-deals');
     wrap.innerHTML = transfers.length === 0
       ? '<div class="empty">No transfers yet — get to work! 💪</div>'
@@ -400,7 +402,6 @@
       }</div>`;
   }
 
-  // Call whenever type changes to show correct next commission
   function updateOpenerCommPreview() {
     const type = document.getElementById('op-type')?.value;
     if (!type) {
@@ -429,21 +430,20 @@
   };
 
   window.submitOpener = async function() {
-    const openerName    = document.getElementById('op-name').value;
-    const type          = document.getElementById('op-type').value;
-    const transferType  = document.getElementById('op-transfer-type').value;
-    const date          = document.getElementById('op-date').value;
-    const phone         = document.getElementById('op-phone').value.trim();
-    const closer        = document.getElementById('op-closer').value;
+    const openerName   = document.getElementById('op-name').value;
+    const type         = document.getElementById('op-type').value;
+    const transferType = document.getElementById('op-transfer-type').value;
+    const date         = document.getElementById('op-date').value;
+    const phone        = document.getElementById('op-phone').value.trim();
+    const closer       = document.getElementById('op-closer').value;
+
     if (!openerName || !type || !transferType || !date || !phone) {
       toast('Please complete all required fields.'); return;
     }
     const salesTypes = ['1st Closed','2nd Close','3rd Closed','4th Closed','pCcT'];
     if (salesTypes.includes(type) && !closer) { toast('Please select a Closer for this transfer type.'); return; }
 
-    // Calculate commission based on current count BEFORE adding this one
     const comm = openerCommForNext(type);
-
     const t = {
       name: openerName, type, transferType, date, phone,
       closer: closer || null, comm, status: 'Pending',
@@ -452,16 +452,13 @@
     try {
       const ref = await addDoc(collection(db, 'transfers'), t);
       t.id = ref.id;
-      transfers.unshift(t); // Add to front so count is updated for next preview
+      transfers.unshift(t);
+      syncGlobals();
 
-      // Update total earnings
       const total = transfers.reduce((s, x) => s + (x.comm || 0), 0);
       document.getElementById('op-total').textContent = '$' + total;
-
-      // Re-render the full dashboard to update tier tracker + list
       renderOpenerDashboard();
 
-      // Reset form
       ['op-date','op-phone'].forEach(id => document.getElementById(id).value = '');
       document.getElementById('op-type').value = '';
       document.getElementById('op-transfer-type').value = '';
@@ -469,12 +466,10 @@
       document.getElementById('op-closer-wrap').style.display = 'none';
       document.getElementById('op-comm-preview').textContent = '$—';
       document.getElementById('op-tier-label').textContent = '';
-
-      // Update the commission preview for the NEXT transfer
       updateOpenerCommPreview();
 
       toast('🔥 Nice one, keep going!', 'fire');
-      syncGlobals(); refreshEOD();
+      if (window.refreshEOD) window.refreshEOD();
     } catch (err) { toast('Failed to submit. Check your connection.'); console.error(err); }
   };
 
@@ -487,13 +482,13 @@
   };
 
   window.autoCommission = async function() {
-    const monthly = document.getElementById('cl-monthly').value;
-    const closing = document.getElementById('cl-closing').value;
-    const tierEl  = document.getElementById('cl-tier-info');
+    const monthly  = document.getElementById('cl-monthly').value;
+    const closing  = document.getElementById('cl-closing').value;
+    const tierEl   = document.getElementById('cl-tier-info');
     if (!monthly) { document.getElementById('cl-commission').value = '$0'; tierEl.textContent = ''; return; }
-    const base      = closerBaseComm(monthly);
-    const dateStr   = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
-    const existing  = await countCloserDealsOnDate(dateStr);
+    const base     = closerBaseComm(monthly);
+    const dateStr  = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
+    const existing = await countCloserDealsOnDate(dateStr);
     const multiplier = existing >= 1 ? 2 : 1;
     const comm = base * multiplier;
     document.getElementById('cl-commission').value = '$' + comm;
@@ -505,23 +500,25 @@
   };
 
   window.submitCloser = async function() {
-    const name          = document.getElementById('cl-name').value;
-    const opener        = document.getElementById('cl-opener').value;
-    const transferType  = document.getElementById('cl-transfer-type').value;
-    const client        = document.getElementById('cl-client').value.trim();
-    const phone         = document.getElementById('cl-phone').value.trim();
-    const debt          = document.getElementById('cl-debt').value;
-    const monthly       = document.getElementById('cl-monthly').value;
-    const firstpay      = document.getElementById('cl-firstpay').value;
-    const closing       = document.getElementById('cl-closing').value;
+    const name         = document.getElementById('cl-name').value;
+    const opener       = document.getElementById('cl-opener').value;
+    const transferType = document.getElementById('cl-transfer-type').value;
+    const client       = document.getElementById('cl-client').value.trim();
+    const phone        = document.getElementById('cl-phone').value.trim();
+    const debt         = document.getElementById('cl-debt').value;
+    const monthly      = document.getElementById('cl-monthly').value;
+    const firstpay     = document.getElementById('cl-firstpay').value;
+    const closing      = document.getElementById('cl-closing').value;
+
     if (!name || !opener || !transferType || !client || !phone || !debt || !monthly) {
       toast('Please complete all required fields.'); return;
     }
-    const base      = closerBaseComm(monthly);
-    const dateStr   = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
-    const existing  = await countCloserDealsOnDate(dateStr);
+    const base       = closerBaseComm(monthly);
+    const dateStr    = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
+    const existing   = await countCloserDealsOnDate(dateStr);
     const multiplier = existing >= 1 ? 2 : 1;
-    const comm = base * multiplier;
+    const comm       = base * multiplier;
+
     const d = {
       name, opener, transferType, client, phone, debt, monthly, firstpay, closing,
       closingDate: dateStr, comm, status: 'Pending',
@@ -529,34 +526,40 @@
     };
     try {
       const ref = await addDoc(collection(db, 'deals'), d);
-      d.id = ref.id; deals.unshift(d);
+      d.id = ref.id;
+      deals.unshift(d);
+      syncGlobals();
+
+      // Update closer dashboard immediately
       const wrap = document.getElementById('cl-deals');
       if (wrap.querySelector('.empty')) wrap.innerHTML = '';
       wrap.insertAdjacentHTML('afterbegin', buildCloserCard(d));
+
       ['cl-client','cl-phone','cl-debt','cl-monthly','cl-firstpay','cl-closing'].forEach(id => document.getElementById(id).value = '');
       document.getElementById('cl-opener').value = '';
       document.getElementById('cl-transfer-type').value = '';
-      if (currentUser.role !== 'closer') document.getElementById('cl-name').value = '';
       document.getElementById('cl-commission').value = '$0';
       document.getElementById('cl-tier-info').textContent = '';
-      toast('🔥 Nice one, keep going!', 'fire');
-      syncGlobals(); refreshEOD();
+
+      toast('🔥 Deal submitted! Pending admin approval.', 'fire');
+      if (window.refreshEOD) window.refreshEOD();
     } catch (err) { toast('Failed to submit. Check your connection.'); console.error(err); }
   };
 
   // ── ADMIN ─────────────────────────────────
-  window.refreshAdmin = async function() {
-    if (!currentUser || currentUser.role !== 'admin') return;
-    const dSnap = await getDocs(query(collection(db, 'deals'), orderBy('createdAt', 'desc')));
-    deals = []; dSnap.forEach(d => deals.push({ id: d.id, ...d.data() }));
-    const tSnap = await getDocs(query(collection(db, 'transfers'), orderBy('createdAt', 'desc')));
-    transfers = []; tSnap.forEach(t => transfers.push({ id: t.id, ...t.data() }));
+  // renderAdminStats — updates the three stat boxes
+  function renderAdminStats() {
     const pending  = deals.filter(d => d.status === 'Pending').length;
     const approved = deals.filter(d => d.status === 'Approved').length;
     document.getElementById('adm-total').textContent    = deals.length + transfers.length;
     document.getElementById('adm-approved').textContent = approved;
     document.getElementById('adm-pending').textContent  = pending;
-    renderAdminDeals(); renderAdminTransfers();
+  }
+
+  // Full admin refresh — re-fetches ALL data from Firestore
+  window.refreshAdmin = async function() {
+    if (!currentUser || currentUser.role !== 'admin') return;
+    await loadData();
   };
 
   function getFilters() {
@@ -582,33 +585,53 @@
     const wrap     = document.getElementById('adm-deals');
     const filtered = deals.filter(d => dealMatchesFilters(d, f));
     const countEl  = document.getElementById('f-count');
+
     if (countEl) {
       const hasFilter = f.from || f.to || f.status !== 'All' || f.closer !== 'All';
       countEl.innerHTML = hasFilter ? `Showing <span>${filtered.length}</span> of ${deals.length} deals` : '';
     }
-    if (filtered.length === 0) { wrap.innerHTML = '<div class="empty">No deals match the selected filters.</div>'; return; }
-    wrap.innerHTML = '';
+
+    if (filtered.length === 0) {
+      wrap.innerHTML = '<div class="empty">No deals match the selected filters.</div>';
+      return;
+    }
+
+    // Sort: Pending first, then Approved, then Declined
     const sorted = [...filtered].sort((a, b) => {
       const order = { Pending: 0, Approved: 1, Declined: 2 };
       return (order[a.status] || 0) - (order[b.status] || 0);
     });
+
+    wrap.innerHTML = '';
     sorted.forEach(d => {
       const resolved = d.status !== 'Pending';
       wrap.insertAdjacentHTML('beforeend', `
         <div class="admin-deal ${resolved ? 'deal-resolved' : ''}">
-          <span class="deal-status ${statusClass(d.status)}">${d.status}</span>
-          <span style="float:right;font-size:11px;color:var(--muted)">${fmtDate(d.createdAt)}</span><br>
-          <b>Closer:</b> ${d.name} &nbsp;|&nbsp; <b>Client:</b> ${d.client}<br>
-          <b>Opener:</b> ${d.opener} &nbsp;|&nbsp; <b>Transfer Type:</b> ${d.transferType || '—'}<br>
-          <b>Phone:</b> ${d.phone}<br>
-          Debt: $${Number(d.debt).toLocaleString()} &nbsp;·&nbsp; Monthly: $${d.monthly || '—'}<br>
-          First Pay: ${fmtDate(d.firstpay)} &nbsp;·&nbsp; Closing: ${fmtDate(d.closing)}<br>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span class="deal-status ${statusClass(d.status)}">${d.status}</span>
+            <span style="font-size:11px;color:var(--muted)">${fmtDate(d.createdAt)}</span>
+          </div>
+          <div style="line-height:1.9;font-size:13px;">
+            <b>Closer:</b> ${d.name} &nbsp;|&nbsp; <b>Client:</b> ${d.client || '—'}<br>
+            <b>Opener:</b> ${d.opener || '—'} &nbsp;|&nbsp; <b>Transfer Type:</b> ${d.transferType || '—'}<br>
+            <b>Phone:</b> ${d.phone || '—'}<br>
+            <b>Debt:</b> $${Number(d.debt||0).toLocaleString()} &nbsp;·&nbsp; <b>Monthly:</b> $${d.monthly || '—'}<br>
+            <b>First Pay:</b> ${fmtDate(d.firstpay)} &nbsp;·&nbsp; <b>Closing:</b> ${fmtDate(d.closing)}<br>
+          </div>
           ${resolved
-            ? `Commission: <b>$${d.comm}</b>`
+            ? `<div style="margin-top:8px;padding:8px 12px;background:var(--surface);border-radius:8px;font-size:13px;">
+                 Commission: <b style="color:var(--green)">$${d.comm}</b>
+                 <span style="font-size:11px;color:var(--muted);margin-left:8px;">(${d.status})</span>
+               </div>`
             : `<div class="admin-actions">
-                 <input class="admin-comm-edit" type="number" id="comm-${d.id}" value="${d.comm}" placeholder="Edit commission…"/>
-                 <button class="btn-approve" onclick="adminAction('${d.id}','Approved')">✓ Approve</button>
-                 <button class="btn-decline" onclick="adminAction('${d.id}','Declined')">✗ Decline</button>
+                 <div class="comm-edit-wrap">
+                   <label style="font-size:9px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;display:block;margin-bottom:4px;">Edit Commission ($)</label>
+                   <input class="admin-comm-edit" type="number" id="comm-${d.id}" value="${d.comm}" placeholder="Commission amount…"/>
+                 </div>
+                 <div class="action-btns">
+                   <button class="btn-approve" onclick="adminAction('${d.id}','Approved')">✓ Approve</button>
+                   <button class="btn-decline" onclick="adminAction('${d.id}','Declined')">✗ Decline</button>
+                 </div>
                </div>`}
         </div>`);
     });
@@ -623,18 +646,27 @@
       if (f.to   && dateStr > f.to)   return false;
       return true;
     });
-    if (filtered.length === 0) { twrap.innerHTML = '<div class="empty">No transfers match the selected filters.</div>'; return; }
+
+    if (filtered.length === 0) {
+      twrap.innerHTML = '<div class="empty">No transfers match the selected filters.</div>';
+      return;
+    }
+
     twrap.innerHTML = '';
     filtered.forEach(t => {
       twrap.insertAdjacentHTML('beforeend', `
         <div class="admin-deal">
-          <span class="deal-status status-pending">Transfer</span>
-          <span style="float:right;font-size:11px;color:var(--muted)">${fmtDate(t.date)}</span><br>
-          <b>Opener:</b> ${t.name} &nbsp;|&nbsp; <b>Type:</b> ${t.type}<br>
-          <b>Transfer Type:</b> ${t.transferType || '—'}<br>
-          ${t.closer ? `Closer: <b>${t.closer}</b><br>` : ''}
-          Phone: ${t.phone}<br>
-          Commission: <b>$${t.comm}</b>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span class="deal-status status-pending">Transfer</span>
+            <span style="font-size:11px;color:var(--muted)">${fmtDate(t.date || t.createdAt)}</span>
+          </div>
+          <div style="line-height:1.9;font-size:13px;">
+            <b>Opener:</b> ${t.name} &nbsp;|&nbsp; <b>Type:</b> ${t.type}<br>
+            <b>Transfer Amount Type:</b> ${t.transferType || '—'}<br>
+            ${t.closer ? `<b>Assigned Closer:</b> ${t.closer}<br>` : ''}
+            <b>Phone:</b> ${t.phone}<br>
+            <b>Commission:</b> <span style="color:var(--green);font-weight:700;">$${t.comm}</span>
+          </div>
         </div>`);
     });
   }
@@ -649,26 +681,49 @@
     renderAdminDeals(); renderAdminTransfers();
   };
 
+  // ── ADMIN ACTION: Approve or Decline with editable commission ──
   window.adminAction = async function(id, action) {
     const d = deals.find(x => x.id === id);
-    if (!d) return;
+    if (!d) { toast('Deal not found. Try refreshing.', 'error'); return; }
+
+    // Read the edited commission value from the input field
     const editEl = document.getElementById('comm-' + id);
-    if (editEl) d.comm = Number(editEl.value) || d.comm;
-    d.status = action;
+    const finalComm = editEl ? (Number(editEl.value) || 0) : (d.comm || 0);
+
     try {
-      await updateDoc(doc(db, 'deals', id), { status: action, comm: d.comm });
-      refreshAdmin(); renderDashboard(); syncGlobals();
-      if (window.refreshEOD) window.refreshEOD();
-      toast(action === 'Approved' ? '✅ Deal approved!' : '❌ Deal declined.',
-            action === 'Approved' ? 'success' : 'error');
-    } catch (err) { toast('Failed to update deal.'); console.error(err); }
+      // Update in Firestore
+      await updateDoc(doc(db, 'deals', id), {
+        status: action,
+        comm: finalComm,
+        resolvedAt: new Date().toISOString()
+      });
+
+      // Update local state immediately
+      d.status = action;
+      d.comm   = finalComm;
+      syncGlobals();
+
+      // Re-render admin UI
+      renderAdminStats();
+      renderAdminDeals();
+
+      toast(
+        action === 'Approved'
+          ? `✅ Deal approved! Commission set to $${finalComm}`
+          : '❌ Deal declined.',
+        action === 'Approved' ? 'success' : 'error'
+      );
+    } catch (err) {
+      toast('Failed to update deal. Check your connection.', 'error');
+      console.error(err);
+    }
   };
 
   // ── CARD BUILDERS ─────────────────────────
   function buildTransferCard(t) {
     const status = t.status || 'Pending';
     const sc     = status === 'Approved' ? 'status-approved' : status === 'Declined' ? 'status-declined' : 'status-pending';
-    const label  = status === 'Approved' ? '✅ Approved!' : status === 'Declined' ? '❌ Declined' : 'Pending Admin Review';
+    const label  = status === 'Approved' ? '✅ Approved!' : status === 'Declined' ? '❌ Declined' : '⏳ Pending Admin Review';
     return `<div class="deal ${status.toLowerCase()}">
       <span class="deal-status ${sc}">${label}</span><br>
       <b>${t.name}</b> &nbsp;·&nbsp; ${t.type}<br>
@@ -681,15 +736,15 @@
 
   function buildCloserCard(d) {
     const sc    = d.status === 'Approved' ? 'status-approved' : d.status === 'Declined' ? 'status-declined' : 'status-pending';
-    const label = d.status === 'Approved' ? '✅ Approved!' : d.status === 'Declined' ? '❌ Declined' : 'Pending Admin Review';
+    const label = d.status === 'Approved' ? '✅ Approved!' : d.status === 'Declined' ? '❌ Declined' : '⏳ Pending Admin Review';
     return `<div class="deal ${d.status.toLowerCase()}">
       <span class="deal-status ${sc}">${label}</span><br>
       <b>${d.name}</b> closed for <b>${d.client}</b><br>
       Opener: ${d.opener} &nbsp;·&nbsp; Phone: ${d.phone}<br>
       <span style="font-size:12px;color:var(--muted)">Transfer type: <b style="color:var(--text)">${d.transferType || '—'}</b></span><br>
-      Debt: $${Number(d.debt).toLocaleString()} &nbsp;·&nbsp; Monthly: $${d.monthly || '—'}<br>
+      Debt: $${Number(d.debt||0).toLocaleString()} &nbsp;·&nbsp; Monthly: $${d.monthly || '—'}<br>
       First Pay: ${fmtDate(d.firstpay)} &nbsp;·&nbsp; Closing: ${fmtDate(d.closing)}<br>
-      Commission: <b>$${d.comm}</b>
+      Commission: <b>$${d.comm}</b> <span style="font-size:11px;color:var(--muted)">(${d.status})</span>
     </div>`;
   }
 
@@ -703,7 +758,7 @@
     const d = new Date(s);
     return isNaN(d) ? s : d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
   }
-  function showError(el, msg) { el.textContent = msg; el.style.display = 'block'; }
+  function showError(el, msg) { if (el) { el.textContent = msg; el.style.display = 'block'; } }
 
   window.toast = function(msg, type = 'error') {
     const t = document.getElementById('toast');
@@ -785,6 +840,8 @@ body::after{
 }
 [data-theme="dark"]  .toggle-knob{transform:translateX(0px);}
 [data-theme="light"] .toggle-knob{transform:translateX(22px);background:linear-gradient(135deg,#f59e0b,#fbbf24);}
+
+/* ── LOGIN ── */
 #login-screen,#force-pw-screen{
   position:fixed;inset:0;display:flex;flex-direction:column;
   align-items:center;justify-content:center;z-index:100;
@@ -825,10 +882,7 @@ body::after{
   background:linear-gradient(135deg,rgba(14,165,233,.15),rgba(56,189,248,.08));
   color:var(--accent);box-shadow:0 0 16px rgba(56,189,248,.15);
 }
-[data-theme="light"] .role-sel-btn.selected{
-  background:linear-gradient(135deg,rgba(2,132,199,.1),rgba(14,165,233,.06));
-  box-shadow:0 0 12px rgba(2,132,199,.12);
-}
+[data-theme="light"] .role-sel-btn.selected{background:linear-gradient(135deg,rgba(2,132,199,.1),rgba(14,165,233,.06));box-shadow:0 0 12px rgba(2,132,199,.12);}
 .role-sel-icon{font-size:20px;line-height:1;}
 .role-sel-name{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;}
 .login-label{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:6px;margin-top:16px;display:block;}
@@ -867,7 +921,8 @@ body::after{
   cursor:pointer;transition:all .2s;text-align:center;
 }
 .fp-logout-btn:hover{background:rgba(244,63,94,.18);border-color:var(--red);box-shadow:0 0 18px rgba(244,63,94,.25);}
-[data-theme="light"] .fp-logout-btn{background:rgba(220,38,38,.06);border-color:rgba(220,38,38,.3);color:var(--red);}
+
+/* ── APP ── */
 #app{display:none;flex-direction:column;align-items:center;width:100%;}
 #app.visible{display:flex;}
 header{width:100%;max-width:800px;padding:36px 24px 0;text-align:center;position:relative;z-index:1;}
@@ -908,6 +963,8 @@ header{width:100%;max-width:800px;padding:36px 24px 0;text-align:center;position
 .panel{display:none;}
 .panel.active{display:block;animation:fadeUp .35s ease both;}
 @keyframes fadeUp{from{opacity:0;transform:translateY(16px);}to{opacity:1;transform:translateY(0);}}
+
+/* ── CARDS ── */
 .card{
   background:var(--surface);border:1px solid var(--border);
   border-radius:18px;padding:26px 26px 22px;margin-bottom:18px;
@@ -944,6 +1001,8 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .earnings-label{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
 .earnings-value{font-family:'Bebas Neue',sans-serif;font-size:38px;letter-spacing:2px;color:var(--accent);}
 .section-label{font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);margin:20px 0 10px;}
+
+/* ── DEAL CARDS ── */
 .deal{
   background:var(--surface2);border:1px solid var(--border);
   border-radius:12px;padding:14px 16px;margin-top:10px;
@@ -961,6 +1020,8 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 [data-theme="light"] .status-approved{background:rgba(5,150,105,.12);}
 [data-theme="light"] .status-declined{background:rgba(220,38,38,.1);}
 [data-theme="light"] .status-pending{background:rgba(217,119,6,.1);}
+
+/* ── COMMISSION PREVIEW ── */
 .comm-preview{
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   background:rgba(56,189,248,.06);border:1px solid rgba(56,189,248,.15);
@@ -985,19 +1046,11 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   padding:10px 6px;border-radius:10px;border:1px solid var(--border);
   background:var(--surface2);transition:all .25s;text-align:center;
 }
-.tier-step.done{
-  border-color:rgba(34,211,160,.4);background:rgba(34,211,160,.08);
-}
+.tier-step.done{border-color:rgba(34,211,160,.4);background:rgba(34,211,160,.08);}
 [data-theme="light"] .tier-step.done{background:rgba(5,150,105,.07);border-color:rgba(5,150,105,.3);}
-.tier-step.next{
-  border-color:rgba(56,189,248,.5);background:rgba(56,189,248,.08);
-  box-shadow:0 0 14px rgba(56,189,248,.12);
-}
+.tier-step.next{border-color:rgba(56,189,248,.5);background:rgba(56,189,248,.08);box-shadow:0 0 14px rgba(56,189,248,.12);}
 [data-theme="light"] .tier-step.next{background:rgba(2,132,199,.07);border-color:rgba(2,132,199,.4);}
-.tier-dot{
-  width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-  font-size:11px;font-weight:700;background:var(--border);color:var(--muted);
-}
+.tier-dot{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;background:var(--border);color:var(--muted);}
 .tier-step.done .tier-dot{background:var(--green);color:#fff;}
 .tier-step.next .tier-dot{background:var(--accent);color:#fff;}
 .tier-info-wrap{display:flex;flex-direction:column;gap:2px;}
@@ -1009,6 +1062,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .tier-step.next .tier-step-rate{color:var(--accent);}
 .tier-status{font-size:12px;font-weight:600;color:var(--muted);text-align:center;letter-spacing:.3px;}
 
+/* ── COMMISSION TABLE ── */
 .comm-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;}
 .comm-table th{background:rgba(28,43,66,.6);color:var(--muted);font-size:9px;letter-spacing:2px;text-transform:uppercase;padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);}
 [data-theme="light"] .comm-table th{background:rgba(208,218,234,.5);}
@@ -1016,30 +1070,72 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 [data-theme="light"] .comm-table td{border-bottom-color:rgba(208,218,234,.6);}
 .comm-table tr:last-child td{border-bottom:none;}
 .comm-table .amt{color:var(--green);font-weight:600;}
+
+/* ── ADMIN ── */
 .admin-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:4px;}
 .stat-box{background:var(--surface2);border-radius:12px;padding:16px;text-align:center;transition:background .3s;}
 .stat-label{font-size:10px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:4px;}
 .stat-value{font-family:'Bebas Neue',sans-serif;font-size:34px;}
-.admin-deal{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-top:10px;font-size:13px;line-height:1.85;transition:background .3s,border-color .3s;}
-.admin-actions{display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap;}
-.admin-comm-edit{flex:1;min-width:120px;padding:9px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;}
-.btn-approve{padding:9px 20px;border:none;border-radius:8px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);color:var(--green);font-weight:700;font-size:11px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:background .2s;}
+
+.admin-deal{
+  background:var(--surface2);border:1px solid var(--border);
+  border-radius:12px;padding:18px;margin-top:10px;
+  font-size:13px;transition:background .3s,border-color .3s;
+}
+.admin-actions{margin-top:14px;border-top:1px solid var(--border);padding-top:14px;}
+.comm-edit-wrap{margin-bottom:10px;}
+.comm-edit-wrap label{margin-top:0 !important;}
+.action-btns{display:flex;gap:8px;}
+.admin-comm-edit{
+  width:100%;padding:10px 12px;background:var(--surface);
+  border:1.5px solid rgba(56,189,248,.3);border-radius:8px;color:var(--text);
+  font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;outline:none;
+  transition:border .2s,box-shadow .2s;
+}
+.admin-comm-edit:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(56,189,248,.1);}
+.btn-approve{
+  flex:1;padding:11px 20px;border:none;border-radius:8px;
+  background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);color:var(--green);
+  font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:background .2s;
+}
 .btn-approve:hover{background:rgba(34,197,94,.28);}
-.btn-decline{padding:9px 20px;border:none;border-radius:8px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:var(--red);font-weight:700;font-size:11px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:background .2s;}
+.btn-decline{
+  flex:1;padding:11px 20px;border:none;border-radius:8px;
+  background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:var(--red);
+  font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:background .2s;
+}
 .btn-decline:hover{background:rgba(239,68,68,.28);}
-.deal-resolved{opacity:.5;}
+.deal-resolved{opacity:.55;}
 .divider{height:1px;background:var(--border);margin:22px 0;}
-.filter-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:22px 26px 18px;margin-bottom:18px;position:relative;overflow:hidden;box-shadow:var(--card-shadow);transition:background .3s,border-color .3s;}
+
+/* ── FILTER ── */
+.filter-card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:18px;padding:22px 26px 18px;margin-bottom:18px;
+  position:relative;overflow:hidden;box-shadow:var(--card-shadow);transition:background .3s,border-color .3s;
+}
 .filter-card::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(56,189,248,.03) 0%,rgba(99,102,241,.03) 100%);pointer-events:none;}
 [data-theme="light"] .filter-card::before{opacity:0;}
 .filter-title{font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:3px;color:var(--accent);margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:10px;}
 .filter-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
-.filter-field label.filter-label{display:block;font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:5px;margin-top:0;}
+.filter-field label{margin-top:0 !important;}
 .filter-actions{display:flex;align-items:center;justify-content:space-between;margin-top:14px;flex-wrap:wrap;gap:8px;}
 .btn-filter-clear{padding:8px 18px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:border .2s,color .2s;}
 .btn-filter-clear:hover{border-color:var(--red);color:var(--red);}
 .filter-results-count{font-size:11px;font-weight:600;color:var(--muted);}
 .filter-results-count span{color:var(--accent);font-family:'Bebas Neue',sans-serif;font-size:15px;}
+
+/* ── REFRESH BTN ── */
+.admin-refresh-btn{
+  display:flex;align-items:center;gap:8px;
+  padding:10px 18px;border:1px solid var(--border);border-radius:10px;
+  background:var(--surface2);color:var(--accent);font-size:11px;font-weight:700;
+  letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;transition:all .2s;
+  margin-bottom:14px;
+}
+.admin-refresh-btn:hover{border-color:var(--accent);box-shadow:0 0 12px rgba(56,189,248,.15);}
+
+/* ── SHIFT BAR ── */
 .shift-bar{
   background:var(--surface);border:1px solid var(--border);
   border-radius:14px;padding:16px 20px 14px;margin-bottom:18px;
@@ -1056,6 +1152,8 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .shift-progress-wrap{height:5px;background:var(--border);border-radius:4px;overflow:hidden;margin-bottom:8px;}
 .shift-progress-bar{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width 1s linear;}
 .shift-tag{font-size:10px;color:var(--muted);letter-spacing:1px;}
+
+/* ── EOD SUMMARY ── */
 .eod-summary{
   background:linear-gradient(135deg,rgba(56,189,248,.06),rgba(99,102,241,.06));
   border:1px solid rgba(56,189,248,.2);border-radius:14px;
@@ -1068,6 +1166,8 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .eod-stat-val{font-family:'Bebas Neue',sans-serif;font-size:28px;color:var(--accent);}
 .eod-stat-label{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-top:2px;}
 .eod-msg{font-size:12px;color:var(--muted);text-align:center;letter-spacing:.5px;margin-top:6px;font-style:italic;}
+
+/* ── TOAST ── */
 #toast{
   position:fixed;top:22px;right:22px;padding:16px 22px;border-radius:14px;
   font-size:14px;font-weight:600;z-index:9999;display:none;max-width:340px;
@@ -1080,6 +1180,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 [data-theme="light"] .toast-error{background:#fef2f2;color:#991b1b;}
 [data-theme="light"] .toast-success{background:#f0fdf4;color:#166534;}
 [data-theme="light"] .toast-fire{background:linear-gradient(135deg,#eff6ff,#eef2ff);color:var(--accent2);}
+
 .empty{text-align:center;padding:28px;color:var(--muted);font-size:13px;letter-spacing:1px;}
 .app-footer{
   width:100%;max-width:800px;display:flex;align-items:center;justify-content:center;
@@ -1094,12 +1195,15 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 }
 .footer-name{font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
 .footer-copy{font-size:10px;letter-spacing:1px;color:var(--muted);opacity:.4;}
+
 @media(max-width:540px){
   .filter-grid{grid-template-columns:1fr;}
   .tier-steps{grid-template-columns:repeat(2,1fr);}
   .app-footer{flex-direction:column;gap:6px;text-align:center;}
   .login-box{padding:32px 24px 28px;}
   .theme-toggle{top:12px;right:12px;}
+  .action-btns{flex-direction:column;}
+  .row{grid-template-columns:1fr;}
 }
 </style>
 </head>
@@ -1172,7 +1276,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
   <div class="panel-wrap">
 
-    <!-- OPENER PANEL -->
+    <!-- ── OPENER PANEL ── -->
     <div class="panel" id="panel-opener">
       <div class="shift-bar">
         <div class="shift-info">
@@ -1184,7 +1288,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
       </div>
       <div class="eod-summary" id="eod-opener" style="display:none"></div>
 
-      <!-- TIER TRACKER -->
       <div class="tier-tracker" id="op-tier-tracker">
         <div class="tier-title">📈 Today's Commission Tier</div>
         <div class="tier-steps">
@@ -1198,7 +1301,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
       <div class="card">
         <div class="card-title">Opener Submission</div>
-
         <label>Opener Name</label>
         <select id="op-name">
           <option value="">Select your name…</option>
@@ -1283,7 +1385,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
       <div id="op-deals"><div class="empty">No transfers yet — get to work! 💪</div></div>
     </div>
 
-    <!-- CLOSER PANEL -->
+    <!-- ── CLOSER PANEL ── -->
     <div class="panel" id="panel-closer">
       <div class="shift-bar">
         <div class="shift-info">
@@ -1343,7 +1445,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <div><label>First Payment Date</label><input id="cl-firstpay" type="date"/></div>
           <div><label>Closing Date &amp; Time</label><input id="cl-closing" type="datetime-local" onchange="autoCommission()"/></div>
         </div>
-        <label>Commission (To be decided by Admin)</label>
+        <label>Estimated Commission (Admin will finalize)</label>
         <input id="cl-commission" readonly placeholder="$0"/>
         <div class="tier-info" id="cl-tier-info"></div>
         <button class="btn-submit" onclick="submitCloser()">SUBMIT DEAL</button>
@@ -1357,7 +1459,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
       <div id="cl-deals"><div class="empty">No deals yet — close something! 🔥</div></div>
     </div>
 
-    <!-- ADMIN PANEL -->
+    <!-- ── ADMIN PANEL ── -->
     <div class="panel" id="panel-admin">
       <div class="card">
         <div class="card-title">Admin Overview</div>
@@ -1368,13 +1470,17 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         </div>
       </div>
 
+      <button class="admin-refresh-btn" onclick="refreshAdmin()">
+        🔄 Refresh Data
+      </button>
+
       <div class="filter-card">
         <div class="filter-title">🔍 Filter Records</div>
         <div class="filter-grid">
-          <div class="filter-field"><label class="filter-label">From Date</label><input type="date" id="f-from" onchange="applyFilters()"/></div>
-          <div class="filter-field"><label class="filter-label">To Date</label><input type="date" id="f-to" onchange="applyFilters()"/></div>
+          <div class="filter-field"><label>From Date</label><input type="date" id="f-from" onchange="applyFilters()"/></div>
+          <div class="filter-field"><label>To Date</label><input type="date" id="f-to" onchange="applyFilters()"/></div>
           <div class="filter-field">
-            <label class="filter-label">Status</label>
+            <label>Status</label>
             <select id="f-status" onchange="applyFilters()">
               <option value="All">All Statuses</option>
               <option value="Pending">Pending</option>
@@ -1383,7 +1489,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
             </select>
           </div>
           <div class="filter-field">
-            <label class="filter-label">Closer</label>
+            <label>Closer</label>
             <select id="f-closer" onchange="applyFilters()">
               <option value="All">All Closers</option>
               <option value="David">David</option>
@@ -1400,9 +1506,11 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         </div>
       </div>
 
-      <div class="section-label">Closer Deals — Approve or Decline</div>
+      <div class="section-label">Closer Deals — Review &amp; Approve</div>
       <div id="adm-deals"><div class="empty">No deals submitted yet.</div></div>
+
       <div class="divider"></div>
+
       <div class="section-label">Opener Transfers</div>
       <div id="adm-transfers"><div class="empty">No transfers submitted yet.</div></div>
     </div>
@@ -1410,13 +1518,14 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v1.5</span>
+    <span class="version-tag">v2.0</span>
     <span class="footer-name">United Funds Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
 </div>
 
 <script>
+// ── THEME ──
 (function() {
   const saved = localStorage.getItem('uf-theme') || 'dark';
   applyTheme(saved);
@@ -1431,6 +1540,8 @@ function toggleTheme() {
   const current = document.documentElement.getAttribute('data-theme') || 'dark';
   applyTheme(current === 'dark' ? 'light' : 'dark');
 }
+
+// ── PASSWORD STRENGTH ──
 function updateStrength(val) {
   const bar = document.getElementById('pw-bar');
   if (!bar) return;
@@ -1446,7 +1557,7 @@ function updateStrength(val) {
   bar.style.background = val ? (colors[score-1] || '#ef4444') : 'transparent';
 }
 
-// ── SHIFT COUNTDOWN ────────────────────────────────────────
+// ── SHIFT COUNTDOWN ──
 (function initShift() {
   const SHIFT_START_H    = 17;
   const SHIFT_END_H      = 2;
@@ -1475,6 +1586,7 @@ function updateStrength(val) {
     const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   }
+
   function buildEODSummary(role) {
     const todayStr = getNowEgypt().toISOString().slice(0, 10);
     if (role === 'closer') {
@@ -1519,6 +1631,7 @@ function updateStrength(val) {
     if (!eodEl) return;
     const egypt  = getNowEgypt();
     const active = isShiftActive(egypt);
+
     if (active) {
       const todayStr = egypt.toISOString().slice(0, 10);
       if (role === 'closer') {
@@ -1557,39 +1670,47 @@ function updateStrength(val) {
     const active = isShiftActive(egypt);
     const role   = window._currentRole;
     if (!role || role === 'admin') return;
-    const timerId = role==='closer'?'shift-timer-closer':'shift-timer-opener';
-    const progId  = role==='closer'?'shift-progress-closer':'shift-progress-opener';
-    const tagId   = role==='closer'?'shift-tag-closer':'shift-tag-opener';
-    const eodId   = role==='closer'?'eod-closer':'eod-opener';
+
+    const timerId = role === 'closer' ? 'shift-timer-closer' : 'shift-timer-opener';
+    const progId  = role === 'closer' ? 'shift-progress-closer' : 'shift-progress-opener';
+    const tagId   = role === 'closer' ? 'shift-tag-closer' : 'shift-tag-opener';
+    const eodId   = role === 'closer' ? 'eod-closer' : 'eod-opener';
+
     const timerEl = document.getElementById(timerId);
     const progEl  = document.getElementById(progId);
     const tagEl   = document.getElementById(tagId);
     const eodEl   = document.getElementById(eodId);
     if (!timerEl) return;
+
     if (active) {
       const secsLeft = getSecondsLeft(egypt);
-      const pct      = Math.max(0,Math.min(100,((SHIFT_DURATION_S-secsLeft)/SHIFT_DURATION_S)*100));
+      const pct      = Math.max(0, Math.min(100, ((SHIFT_DURATION_S - secsLeft) / SHIFT_DURATION_S) * 100));
       const urgent   = secsLeft <= 1800;
       timerEl.textContent = formatCountdown(secsLeft);
-      timerEl.className   = 'shift-timer'+(urgent?' urgent':'');
+      timerEl.className   = 'shift-timer' + (urgent ? ' urgent' : '');
       if (progEl) {
-        progEl.style.width      = pct+'%';
-        progEl.style.background = urgent?'linear-gradient(90deg,#f43f5e,#fb923c)':'linear-gradient(90deg,var(--accent2),var(--accent))';
+        progEl.style.width      = pct + '%';
+        progEl.style.background = urgent
+          ? 'linear-gradient(90deg,#f43f5e,#fb923c)'
+          : 'linear-gradient(90deg,var(--accent2),var(--accent))';
       }
-      if (tagEl) tagEl.textContent = urgent?'⚠️ Less than 30 minutes left — finish strong!':'Egypt: 5PM – 2AM · Mon–Fri';
+      if (tagEl) tagEl.textContent = urgent ? '⚠️ Less than 30 minutes left — finish strong!' : 'Egypt: 5PM – 2AM · Mon–Fri';
     } else {
-      timerEl.textContent = isWeekday(egypt)?'OFF SHIFT':'WEEKEND';
+      timerEl.textContent = isWeekday(egypt) ? 'OFF SHIFT' : 'WEEKEND';
       timerEl.className   = 'shift-timer off';
       if (progEl) progEl.style.width = '0%';
-      if (tagEl)  tagEl.textContent  = isWeekday(egypt)?'Next shift starts at 5PM Egypt time':'Back Monday at 5PM Egypt time';
-      if (eodEl && eodEl.style.display==='none') {
+      if (tagEl)  tagEl.textContent  = isWeekday(egypt) ? 'Next shift starts at 5PM Egypt time' : 'Back Monday at 5PM Egypt time';
+      if (eodEl && eodEl.style.display === 'none') {
         eodEl.innerHTML    = buildEODSummary(role);
         eodEl.style.display = 'block';
       }
     }
   }
 
-  document.addEventListener('DOMContentLoaded', () => { setInterval(tick, 1000); tick(); });
+  document.addEventListener('DOMContentLoaded', () => {
+    setInterval(tick, 1000);
+    tick();
+  });
 })();
 </script>
 </body>
