@@ -30,7 +30,6 @@
   const auth = getAuth(app);
   const db   = getFirestore(app);
 
-  // ── ROLE MAP — add new users here ─────────────────────────
   const ROLE_MAP = {
     'info@unitedfund.net':      { role: 'admin',  name: 'Admin'     },
     'david@pcc.com':            { role: 'closer', name: 'David'     },
@@ -41,7 +40,6 @@
     'kiley@unitedfunds.com':    { role: 'opener', name: 'Kiley'     },
     'sara@unitedfunds.com':     { role: 'opener', name: 'Sara'      },
     'kate@unitedfunds.com':     { role: 'opener', name: 'Kate'      },
-    // ── NEW OPENERS ──
     'mona@pcc.com':             { role: 'opener', name: 'Mona'      },
     'sean@pcc.com':             { role: 'opener', name: 'Sean'      },
     'emmanuel@pcc.com':         { role: 'opener', name: 'Emmanuel'  },
@@ -82,23 +80,35 @@
     } catch (e) { return 0; }
   }
 
-  function openerComm(type) {
-    const map = {
-      '1st Closed':        5,
-      '2nd Close':         7.5,
-      '3rd Closed':        10,
-      '4th Closed':        15,
-      'pCcT':              5,
-      'PCCTsub10':         2,
-      'Student Loan':      2,
-      // ── NEW TRANSFER TYPES ──
-      'Above 10K':         0,
-      '5K+ & Above':       0,
-      'TAX 10K+':          0,
-      'TAX 5K+':           0,
-      'Federal Student Loan': 0,
-    };
-    return map[type] ?? 0;
+  // ── OPENER COMMISSION: tier by closed-deal count today ──
+  // The 1st closed = $5, 2nd = $7.50, 3rd = $10, 4th+ = $15
+  // Non-closed types (PCCTsub10, Student Loan) always flat.
+  const CLOSED_TYPES = ['1st Closed','2nd Close','3rd Closed','4th Closed','pCcT'];
+  const FLAT_COMM    = { 'PCCTsub10': 2, 'Student Loan': 2 };
+  const TIER_RATES   = [5, 7.5, 10, 15]; // index 0=1st deal, 1=2nd, 2=3rd, 3=4th+
+
+  function countClosedTransfersToday() {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    return (transfers || []).filter(t =>
+      CLOSED_TYPES.includes(t.type) &&
+      (t.createdAt || '').slice(0, 10) === todayStr
+    ).length;
+  }
+
+  function openerCommForNext(type) {
+    if (FLAT_COMM[type] !== undefined) return FLAT_COMM[type];
+    if (!CLOSED_TYPES.includes(type)) return 0;
+    const idx = Math.min(countClosedTransfersToday(), TIER_RATES.length - 1);
+    return TIER_RATES[idx];
+  }
+
+  function tierLabel(type) {
+    if (FLAT_COMM[type] !== undefined) return `Flat rate — $${FLAT_COMM[type]} per transfer`;
+    if (!CLOSED_TYPES.includes(type)) return '';
+    const count = countClosedTransfersToday();
+    const ordinals = ['1st', '2nd', '3rd', '4th+'];
+    const label = ordinals[Math.min(count, 3)];
+    return `${label} closed deal today — $${TIER_RATES[Math.min(count, 3)]} commission`;
   }
 
   // ── AUTH ──────────────────────────────────
@@ -174,7 +184,6 @@
     }
   };
 
-  // ── FORCE PASSWORD CHANGE ─────────────────
   window.doForcePasswordChange = async function() {
     const newPass = document.getElementById('fp-new').value;
     const confirm = document.getElementById('fp-confirm').value;
@@ -237,7 +246,6 @@
     }
   };
 
-  // ── LOGOUT ────────────────────────────────
   window.doLogout = async function() {
     await signOut(auth);
     document.getElementById('app').classList.remove('visible');
@@ -257,7 +265,6 @@
     document.getElementById('force-pw-screen').style.display = 'none';
   };
 
-  // ── SCREENS ───────────────────────────────
   function showScreen(name) {
     document.getElementById('login-screen').style.display    = name === 'login'    ? 'flex' : 'none';
     document.getElementById('force-pw-screen').style.display = name === 'force-pw' ? 'flex' : 'none';
@@ -272,7 +279,6 @@
     document.getElementById('force-pw-screen').style.display = 'none';
   }
 
-  // ── LAUNCH ────────────────────────────────
   function launchApp() {
     document.getElementById('app').classList.add('visible');
     document.getElementById('user-pill').textContent = currentUser.name + ' · ' + currentUser.role.toUpperCase();
@@ -298,7 +304,6 @@
     if (name === 'admin') refreshAdmin();
   };
 
-  // ── LOAD DATA ─────────────────────────────
   async function loadData() {
     if (!currentUser) return;
     deals = []; transfers = [];
@@ -323,6 +328,8 @@
     renderDashboard();
     syncGlobals();
     if (window.refreshEOD) window.refreshEOD();
+    // Refresh commission preview with updated transfer count
+    if (role === 'opener') updateOpenerCommPreview();
   }
 
   function renderDashboard() {
@@ -336,14 +343,74 @@
         : deals.map(buildCloserCard).join('');
     }
     if (role === 'opener') {
-      const total = transfers.reduce((s, t) => s + (t.comm || 0), 0);
-      document.getElementById('op-total').textContent = '$' + total;
-      const wrap = document.getElementById('op-deals');
-      wrap.innerHTML = transfers.length === 0
-        ? '<div class="empty">No transfers yet — get to work! 💪</div>'
-        : transfers.map(buildTransferCard).join('');
+      renderOpenerDashboard();
     }
     if (role === 'admin') refreshAdmin();
+  }
+
+  // ── OPENER DASHBOARD ─────────────────────
+  function renderOpenerDashboard() {
+    const total = transfers.reduce((s, t) => s + (t.comm || 0), 0);
+    document.getElementById('op-total').textContent = '$' + total;
+
+    // Build today's tier summary
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayClosedCount = transfers.filter(t =>
+      CLOSED_TYPES.includes(t.type) && (t.createdAt || '').slice(0, 10) === todayStr
+    ).length;
+
+    // Update the tier tracker display
+    renderTierTracker(todayClosedCount);
+
+    const wrap = document.getElementById('op-deals');
+    wrap.innerHTML = transfers.length === 0
+      ? '<div class="empty">No transfers yet — get to work! 💪</div>'
+      : transfers.map(buildTransferCard).join('');
+  }
+
+  function renderTierTracker(count) {
+    const el = document.getElementById('op-tier-tracker');
+    if (!el) return;
+    const tiers = [
+      { label: '1st Close', rate: '$5',    done: count >= 1 },
+      { label: '2nd Close', rate: '$7.50', done: count >= 2 },
+      { label: '3rd Close', rate: '$10',   done: count >= 3 },
+      { label: '4th+ Close',rate: '$15',   done: count >= 4 },
+    ];
+    const nextIdx = Math.min(count, 3);
+    el.innerHTML = `
+      <div class="tier-title">📈 Today's Commission Tier</div>
+      <div class="tier-steps">
+        ${tiers.map((t, i) => `
+          <div class="tier-step ${t.done ? 'done' : i === nextIdx ? 'next' : ''}">
+            <div class="tier-dot">${t.done ? '✓' : i + 1}</div>
+            <div class="tier-info-wrap">
+              <span class="tier-step-label">${t.label}</span>
+              <span class="tier-step-rate">${t.rate}</span>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      <div class="tier-status">${
+        count === 0
+          ? 'Submit your first closed deal to start earning!'
+          : count >= 4
+          ? `🔥 Max tier unlocked! Every close is now $15`
+          : `Next close earns you $${TIER_RATES[count]} — keep going!`
+      }</div>`;
+  }
+
+  // Call whenever type changes to show correct next commission
+  function updateOpenerCommPreview() {
+    const type = document.getElementById('op-type')?.value;
+    if (!type) {
+      document.getElementById('op-comm-preview').textContent = '$—';
+      document.getElementById('op-tier-label').textContent = '';
+      return;
+    }
+    const comm = openerCommForNext(type);
+    document.getElementById('op-comm-preview').textContent = '$' + comm;
+    document.getElementById('op-tier-label').textContent = tierLabel(type);
   }
 
   // ── OPENER ────────────────────────────────
@@ -358,8 +425,7 @@
     const type = document.getElementById('op-type').value;
     const salesTypes = ['1st Closed','2nd Close','3rd Closed','4th Closed','pCcT'];
     document.getElementById('op-closer-wrap').style.display = salesTypes.includes(type) ? 'block' : 'none';
-    const comm = openerComm(type);
-    document.getElementById('op-comm-preview').textContent = type ? '$' + comm : '$—';
+    updateOpenerCommPreview();
   };
 
   window.submitOpener = async function() {
@@ -374,7 +440,10 @@
     }
     const salesTypes = ['1st Closed','2nd Close','3rd Closed','4th Closed','pCcT'];
     if (salesTypes.includes(type) && !closer) { toast('Please select a Closer for this transfer type.'); return; }
-    const comm = openerComm(type);
+
+    // Calculate commission based on current count BEFORE adding this one
+    const comm = openerCommForNext(type);
+
     const t = {
       name: openerName, type, transferType, date, phone,
       closer: closer || null, comm, status: 'Pending',
@@ -382,17 +451,28 @@
     };
     try {
       const ref = await addDoc(collection(db, 'transfers'), t);
-      t.id = ref.id; transfers.unshift(t);
-      document.getElementById('op-total').textContent = '$' + transfers.reduce((s, x) => s + (x.comm || 0), 0);
-      const wrap = document.getElementById('op-deals');
-      if (wrap.querySelector('.empty')) wrap.innerHTML = '';
-      wrap.insertAdjacentHTML('afterbegin', buildTransferCard(t));
+      t.id = ref.id;
+      transfers.unshift(t); // Add to front so count is updated for next preview
+
+      // Update total earnings
+      const total = transfers.reduce((s, x) => s + (x.comm || 0), 0);
+      document.getElementById('op-total').textContent = '$' + total;
+
+      // Re-render the full dashboard to update tier tracker + list
+      renderOpenerDashboard();
+
+      // Reset form
       ['op-date','op-phone'].forEach(id => document.getElementById(id).value = '');
       document.getElementById('op-type').value = '';
       document.getElementById('op-transfer-type').value = '';
       document.getElementById('op-closer').value = '';
       document.getElementById('op-closer-wrap').style.display = 'none';
       document.getElementById('op-comm-preview').textContent = '$—';
+      document.getElementById('op-tier-label').textContent = '';
+
+      // Update the commission preview for the NEXT transfer
+      updateOpenerCommPreview();
+
       toast('🔥 Nice one, keep going!', 'fire');
       syncGlobals(); refreshEOD();
     } catch (err) { toast('Failed to submit. Check your connection.'); console.error(err); }
@@ -613,7 +693,6 @@
     </div>`;
   }
 
-  // ── HELPERS ───────────────────────────────
   function statusClass(s) {
     if (s === 'Approved') return 'status-approved';
     if (s === 'Declined') return 'status-declined';
@@ -883,13 +962,53 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 [data-theme="light"] .status-declined{background:rgba(220,38,38,.1);}
 [data-theme="light"] .status-pending{background:rgba(217,119,6,.1);}
 .comm-preview{
-  display:flex;align-items:center;gap:10px;
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   background:rgba(56,189,248,.06);border:1px solid rgba(56,189,248,.15);
   border-radius:10px;padding:10px 16px;margin-top:10px;font-size:12px;color:var(--muted);
 }
 [data-theme="light"] .comm-preview{background:rgba(2,132,199,.05);border-color:rgba(2,132,199,.15);}
 .comm-preview-val{font-family:'Bebas Neue',sans-serif;font-size:26px;color:var(--accent);letter-spacing:2px;}
+.comm-tier-label{font-size:11px;color:var(--accent);font-weight:600;width:100%;margin-top:2px;letter-spacing:.3px;}
 .tier-info{margin-top:7px;font-size:12px;font-weight:600;color:var(--muted);min-height:18px;}
+
+/* ── TIER TRACKER ── */
+.tier-tracker{
+  background:linear-gradient(135deg,rgba(99,102,241,.08),rgba(56,189,248,.05));
+  border:1px solid rgba(99,102,241,.2);border-radius:14px;
+  padding:16px 18px;margin-bottom:18px;transition:background .3s,border-color .3s;
+}
+[data-theme="light"] .tier-tracker{background:linear-gradient(135deg,rgba(79,70,229,.06),rgba(2,132,199,.04));border-color:rgba(79,70,229,.2);}
+.tier-title{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:12px;}
+.tier-steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px;}
+.tier-step{
+  display:flex;flex-direction:column;align-items:center;gap:5px;
+  padding:10px 6px;border-radius:10px;border:1px solid var(--border);
+  background:var(--surface2);transition:all .25s;text-align:center;
+}
+.tier-step.done{
+  border-color:rgba(34,211,160,.4);background:rgba(34,211,160,.08);
+}
+[data-theme="light"] .tier-step.done{background:rgba(5,150,105,.07);border-color:rgba(5,150,105,.3);}
+.tier-step.next{
+  border-color:rgba(56,189,248,.5);background:rgba(56,189,248,.08);
+  box-shadow:0 0 14px rgba(56,189,248,.12);
+}
+[data-theme="light"] .tier-step.next{background:rgba(2,132,199,.07);border-color:rgba(2,132,199,.4);}
+.tier-dot{
+  width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;background:var(--border);color:var(--muted);
+}
+.tier-step.done .tier-dot{background:var(--green);color:#fff;}
+.tier-step.next .tier-dot{background:var(--accent);color:#fff;}
+.tier-info-wrap{display:flex;flex-direction:column;gap:2px;}
+.tier-step-label{font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.5px;}
+.tier-step.done .tier-step-label{color:var(--green);}
+.tier-step.next .tier-step-label{color:var(--accent);}
+.tier-step-rate{font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:1px;color:var(--text);}
+.tier-step.done .tier-step-rate{color:var(--green);}
+.tier-step.next .tier-step-rate{color:var(--accent);}
+.tier-status{font-size:12px;font-weight:600;color:var(--muted);text-align:center;letter-spacing:.3px;}
+
 .comm-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;}
 .comm-table th{background:rgba(28,43,66,.6);color:var(--muted);font-size:9px;letter-spacing:2px;text-transform:uppercase;padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);}
 [data-theme="light"] .comm-table th{background:rgba(208,218,234,.5);}
@@ -977,6 +1096,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .footer-copy{font-size:10px;letter-spacing:1px;color:var(--muted);opacity:.4;}
 @media(max-width:540px){
   .filter-grid{grid-template-columns:1fr;}
+  .tier-steps{grid-template-columns:repeat(2,1fr);}
   .app-footer{flex-direction:column;gap:6px;text-align:center;}
   .login-box{padding:32px 24px 28px;}
   .theme-toggle{top:12px;right:12px;}
@@ -1064,6 +1184,18 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
       </div>
       <div class="eod-summary" id="eod-opener" style="display:none"></div>
 
+      <!-- TIER TRACKER -->
+      <div class="tier-tracker" id="op-tier-tracker">
+        <div class="tier-title">📈 Today's Commission Tier</div>
+        <div class="tier-steps">
+          <div class="tier-step next"><div class="tier-dot">1</div><div class="tier-info-wrap"><span class="tier-step-label">1st Close</span><span class="tier-step-rate">$5</span></div></div>
+          <div class="tier-step"><div class="tier-dot">2</div><div class="tier-info-wrap"><span class="tier-step-label">2nd Close</span><span class="tier-step-rate">$7.50</span></div></div>
+          <div class="tier-step"><div class="tier-dot">3</div><div class="tier-info-wrap"><span class="tier-step-label">3rd Close</span><span class="tier-step-rate">$10</span></div></div>
+          <div class="tier-step"><div class="tier-dot">4</div><div class="tier-info-wrap"><span class="tier-step-label">4th+ Close</span><span class="tier-step-rate">$15</span></div></div>
+        </div>
+        <div class="tier-status">Submit your first closed deal to start earning!</div>
+      </div>
+
       <div class="card">
         <div class="card-title">Opener Submission</div>
 
@@ -1092,7 +1224,9 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         </select>
 
         <div class="comm-preview">
-          Commission for this transfer: <span class="comm-preview-val" id="op-comm-preview">$—</span>
+          <span>Commission for this transfer:</span>
+          <span class="comm-preview-val" id="op-comm-preview">$—</span>
+          <span class="comm-tier-label" id="op-tier-label"></span>
         </div>
 
         <label>Transfer Amount Type</label>
@@ -1114,6 +1248,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
             <option value="Eddy">Eddy</option>
             <option value="Willy">Willy</option>
             <option value="Nathan">Nathan</option>
+            <option value="Outsource">Outsource</option>
           </select>
         </div>
 
@@ -1127,15 +1262,15 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
       <div class="card">
         <div class="card-title">Commission Reference</div>
         <table class="comm-table">
-          <thead><tr><th>Lead Source</th><th>Commission</th></tr></thead>
+          <thead><tr><th>Lead Source</th><th>Commission</th><th>Notes</th></tr></thead>
           <tbody>
-            <tr><td>1st Closed</td><td class="amt">$5</td></tr>
-            <tr><td>2nd Close</td><td class="amt">$7.50</td></tr>
-            <tr><td>3rd Closed</td><td class="amt">$10</td></tr>
-            <tr><td>4th Closed</td><td class="amt">$15</td></tr>
-            <tr><td>pCcT</td><td class="amt">$5</td></tr>
-            <tr><td>PCCTsub10</td><td class="amt">$2</td></tr>
-            <tr><td>Student Loan</td><td class="amt">$2</td></tr>
+            <tr><td>1st Closed</td><td class="amt">$5</td><td style="color:var(--muted);font-size:11px">1st closed deal today</td></tr>
+            <tr><td>2nd Close</td><td class="amt">$7.50</td><td style="color:var(--muted);font-size:11px">2nd closed deal today</td></tr>
+            <tr><td>3rd Closed</td><td class="amt">$10</td><td style="color:var(--muted);font-size:11px">3rd closed deal today</td></tr>
+            <tr><td>4th Closed</td><td class="amt">$15</td><td style="color:var(--muted);font-size:11px">4th+ closed deal today</td></tr>
+            <tr><td>pCcT</td><td class="amt">$5</td><td style="color:var(--muted);font-size:11px">Flat rate</td></tr>
+            <tr><td>PCCTsub10</td><td class="amt">$2</td><td style="color:var(--muted);font-size:11px">Flat rate</td></tr>
+            <tr><td>Student Loan</td><td class="amt">$2</td><td style="color:var(--muted);font-size:11px">Flat rate</td></tr>
           </tbody>
         </table>
       </div>
@@ -1275,7 +1410,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v1.4</span>
+    <span class="version-tag">v1.5</span>
     <span class="footer-name">United Funds Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
