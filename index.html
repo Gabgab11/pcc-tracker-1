@@ -30,16 +30,22 @@
   const auth = getAuth(app);
   const db   = getFirestore(app);
 
+  // ── ROLE MAP — add new users here ─────────────────────────
   const ROLE_MAP = {
-    'info@unitedfund.net':   { role: 'admin',  name: 'Admin'   },
-    'david@pcc.com':         { role: 'closer', name: 'David'   },
-    'sabrina@pcc.com':       { role: 'closer', name: 'Sabrina' },
-    'eddy@pcc.com':          { role: 'closer', name: 'Eddy'    },
-    'willy@pcc.com':         { role: 'closer', name: 'Willy'   },
-    'nate@pcc.com':          { role: 'closer', name: 'Nathan'  },
-    'kiley@unitedfunds.com': { role: 'opener', name: 'Kiley'   },
-    'sara@unitedfunds.com':  { role: 'opener', name: 'Sara'    },
-    'kate@unitedfunds.com':  { role: 'opener', name: 'Kate'    },
+    'info@unitedfund.net':      { role: 'admin',  name: 'Admin'     },
+    'david@pcc.com':            { role: 'closer', name: 'David'     },
+    'sabrina@pcc.com':          { role: 'closer', name: 'Sabrina'   },
+    'eddy@pcc.com':             { role: 'closer', name: 'Eddy'      },
+    'willy@pcc.com':            { role: 'closer', name: 'Willy'     },
+    'nate@pcc.com':             { role: 'closer', name: 'Nathan'    },
+    'kiley@unitedfunds.com':    { role: 'opener', name: 'Kiley'     },
+    'sara@unitedfunds.com':     { role: 'opener', name: 'Sara'      },
+    'kate@unitedfunds.com':     { role: 'opener', name: 'Kate'      },
+    // ── NEW OPENERS ──
+    'mona@pcc.com':             { role: 'opener', name: 'Mona'      },
+    'sean@pcc.com':             { role: 'opener', name: 'Sean'      },
+    'emmanuel@pcc.com':         { role: 'opener', name: 'Emmanuel'  },
+    'tom@pcc.com':              { role: 'opener', name: 'Tom'       },
   };
 
   let currentUser = null;
@@ -78,21 +84,27 @@
 
   function openerComm(type) {
     const map = {
-      '1st Closed':  5,
-      '2nd Close':   7.5,
-      '3rd Closed':  10,
-      '4th Closed':  15,
-      'pCcT':        5,
-      'PCCTsub10':   2,
-      'Student Loan':2,
+      '1st Closed':        5,
+      '2nd Close':         7.5,
+      '3rd Closed':        10,
+      '4th Closed':        15,
+      'pCcT':              5,
+      'PCCTsub10':         2,
+      'Student Loan':      2,
+      // ── NEW TRANSFER TYPES ──
+      'Above 10K':         0,
+      '5K+ & Above':       0,
+      'TAX 10K+':          0,
+      'TAX 5K+':           0,
+      'Federal Student Loan': 0,
     };
-    return map[type] || 0;
+    return map[type] ?? 0;
   }
 
   // ── AUTH ──────────────────────────────────
   onAuthStateChanged(auth, async (fbUser) => {
     if (fbUser) {
-      const mapped = ROLE_MAP[fbUser.email];
+      const mapped = ROLE_MAP[fbUser.email.toLowerCase()];
       const role   = mapped ? mapped.role : (selectedLoginRole || 'opener');
       const name   = mapped ? mapped.name : fbUser.email.split('@')[0];
       currentUser  = { role, name, email: fbUser.email, uid: fbUser.uid };
@@ -177,10 +189,14 @@
     if (newPass !== confirm) {
       showError(errEl, 'Passwords do not match.'); return;
     }
-    const defaults = ['Admin123','David123','Sabrina123','Eddy123','Willy123','Nate123',
-                      'Kiley123','Sara123','Kate123',
-                      'admin123','david123','sabrina123','eddy123','willy123','nate123',
-                      'kiley123','sara123','kate123'];
+    const defaults = [
+      'Admin123','David123','Sabrina123','Eddy123','Willy123','Nate123',
+      'Kiley123','Sara123','Kate123',
+      'Mona123','Sean123','Emmanuel123','Tom123',
+      'admin123','david123','sabrina123','eddy123','willy123','nate123',
+      'kiley123','sara123','kate123',
+      'mona123','sean123','emmanuel123','tom123'
+    ];
     if (defaults.includes(newPass)) {
       showError(errEl, 'Please choose a different password from your temporary one.'); return;
     }
@@ -198,14 +214,11 @@
       launchApp();
     } catch (err) {
       btn.textContent = 'SET PASSWORD'; btn.disabled = false;
-
-      // ── FIX: Session expired → auto sign-out and redirect to login ──
       if (err.code === 'auth/requires-recent-login') {
         toast('Session expired. Signing you out — please log in again.', 'error');
         setTimeout(async () => {
           await signOut(auth);
           showScreen('login');
-          // Reset login form
           document.getElementById('li-email').value     = '';
           document.getElementById('li-pass').value      = '';
           document.getElementById('li-btn').textContent = 'LOG IN';
@@ -215,7 +228,6 @@
             const b = document.getElementById('rs-' + r);
             if (b) b.classList.remove('selected');
           });
-          // Show message on login screen
           const loginErr = document.getElementById('li-error');
           showError(loginErr, '⚠️ Session expired — please log in again to set your password.');
         }, 1800);
@@ -351,17 +363,23 @@
   };
 
   window.submitOpener = async function() {
-    const openerName = document.getElementById('op-name').value;
-    const type   = document.getElementById('op-type').value;
-    const date   = document.getElementById('op-date').value;
-    const phone  = document.getElementById('op-phone').value.trim();
-    const closer = document.getElementById('op-closer').value;
-    if (!openerName || !type || !date || !phone) { toast('Please complete all required fields.'); return; }
+    const openerName    = document.getElementById('op-name').value;
+    const type          = document.getElementById('op-type').value;
+    const transferType  = document.getElementById('op-transfer-type').value;
+    const date          = document.getElementById('op-date').value;
+    const phone         = document.getElementById('op-phone').value.trim();
+    const closer        = document.getElementById('op-closer').value;
+    if (!openerName || !type || !transferType || !date || !phone) {
+      toast('Please complete all required fields.'); return;
+    }
     const salesTypes = ['1st Closed','2nd Close','3rd Closed','4th Closed','pCcT'];
     if (salesTypes.includes(type) && !closer) { toast('Please select a Closer for this transfer type.'); return; }
     const comm = openerComm(type);
-    const t = { name: openerName, type, date, phone, closer: closer || null,
-      comm, status: 'Pending', openerEmail: currentUser.email, createdAt: new Date().toISOString() };
+    const t = {
+      name: openerName, type, transferType, date, phone,
+      closer: closer || null, comm, status: 'Pending',
+      openerEmail: currentUser.email, createdAt: new Date().toISOString()
+    };
     try {
       const ref = await addDoc(collection(db, 'transfers'), t);
       t.id = ref.id; transfers.unshift(t);
@@ -371,6 +389,7 @@
       wrap.insertAdjacentHTML('afterbegin', buildTransferCard(t));
       ['op-date','op-phone'].forEach(id => document.getElementById(id).value = '');
       document.getElementById('op-type').value = '';
+      document.getElementById('op-transfer-type').value = '';
       document.getElementById('op-closer').value = '';
       document.getElementById('op-closer-wrap').style.display = 'none';
       document.getElementById('op-comm-preview').textContent = '$—';
@@ -392,9 +411,9 @@
     const closing = document.getElementById('cl-closing').value;
     const tierEl  = document.getElementById('cl-tier-info');
     if (!monthly) { document.getElementById('cl-commission').value = '$0'; tierEl.textContent = ''; return; }
-    const base     = closerBaseComm(monthly);
-    const dateStr  = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
-    const existing = await countCloserDealsOnDate(dateStr);
+    const base      = closerBaseComm(monthly);
+    const dateStr   = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
+    const existing  = await countCloserDealsOnDate(dateStr);
     const multiplier = existing >= 1 ? 2 : 1;
     const comm = base * multiplier;
     document.getElementById('cl-commission').value = '$' + comm;
@@ -406,23 +425,28 @@
   };
 
   window.submitCloser = async function() {
-    const name    = document.getElementById('cl-name').value;
-    const opener  = document.getElementById('cl-opener').value;
-    const client  = document.getElementById('cl-client').value.trim();
-    const phone   = document.getElementById('cl-phone').value.trim();
-    const debt    = document.getElementById('cl-debt').value;
-    const monthly = document.getElementById('cl-monthly').value;
-    const firstpay= document.getElementById('cl-firstpay').value;
-    const closing = document.getElementById('cl-closing').value;
-    if (!name || !opener || !client || !phone || !debt || !monthly) { toast('Please complete all required fields.'); return; }
-    const base     = closerBaseComm(monthly);
-    const dateStr  = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
-    const existing = await countCloserDealsOnDate(dateStr);
+    const name          = document.getElementById('cl-name').value;
+    const opener        = document.getElementById('cl-opener').value;
+    const transferType  = document.getElementById('cl-transfer-type').value;
+    const client        = document.getElementById('cl-client').value.trim();
+    const phone         = document.getElementById('cl-phone').value.trim();
+    const debt          = document.getElementById('cl-debt').value;
+    const monthly       = document.getElementById('cl-monthly').value;
+    const firstpay      = document.getElementById('cl-firstpay').value;
+    const closing       = document.getElementById('cl-closing').value;
+    if (!name || !opener || !transferType || !client || !phone || !debt || !monthly) {
+      toast('Please complete all required fields.'); return;
+    }
+    const base      = closerBaseComm(monthly);
+    const dateStr   = closing ? closing.split('T')[0] : new Date().toISOString().split('T')[0];
+    const existing  = await countCloserDealsOnDate(dateStr);
     const multiplier = existing >= 1 ? 2 : 1;
     const comm = base * multiplier;
-    const d = { name, opener, client, phone, debt, monthly, firstpay, closing,
-      closingDate: dateStr, comm, status: 'Pending', closerEmail: currentUser.email,
-      createdAt: new Date().toISOString() };
+    const d = {
+      name, opener, transferType, client, phone, debt, monthly, firstpay, closing,
+      closingDate: dateStr, comm, status: 'Pending',
+      closerEmail: currentUser.email, createdAt: new Date().toISOString()
+    };
     try {
       const ref = await addDoc(collection(db, 'deals'), d);
       d.id = ref.id; deals.unshift(d);
@@ -431,6 +455,7 @@
       wrap.insertAdjacentHTML('afterbegin', buildCloserCard(d));
       ['cl-client','cl-phone','cl-debt','cl-monthly','cl-firstpay','cl-closing'].forEach(id => document.getElementById(id).value = '');
       document.getElementById('cl-opener').value = '';
+      document.getElementById('cl-transfer-type').value = '';
       if (currentUser.role !== 'closer') document.getElementById('cl-name').value = '';
       document.getElementById('cl-commission').value = '$0';
       document.getElementById('cl-tier-info').textContent = '';
@@ -473,10 +498,10 @@
   }
 
   function renderAdminDeals() {
-    const f      = getFilters();
-    const wrap   = document.getElementById('adm-deals');
+    const f        = getFilters();
+    const wrap     = document.getElementById('adm-deals');
     const filtered = deals.filter(d => dealMatchesFilters(d, f));
-    const countEl = document.getElementById('f-count');
+    const countEl  = document.getElementById('f-count');
     if (countEl) {
       const hasFilter = f.from || f.to || f.status !== 'All' || f.closer !== 'All';
       countEl.innerHTML = hasFilter ? `Showing <span>${filtered.length}</span> of ${deals.length} deals` : '';
@@ -494,7 +519,8 @@
           <span class="deal-status ${statusClass(d.status)}">${d.status}</span>
           <span style="float:right;font-size:11px;color:var(--muted)">${fmtDate(d.createdAt)}</span><br>
           <b>Closer:</b> ${d.name} &nbsp;|&nbsp; <b>Client:</b> ${d.client}<br>
-          <b>Opener:</b> ${d.opener} &nbsp;|&nbsp; <b>Phone:</b> ${d.phone}<br>
+          <b>Opener:</b> ${d.opener} &nbsp;|&nbsp; <b>Transfer Type:</b> ${d.transferType || '—'}<br>
+          <b>Phone:</b> ${d.phone}<br>
           Debt: $${Number(d.debt).toLocaleString()} &nbsp;·&nbsp; Monthly: $${d.monthly || '—'}<br>
           First Pay: ${fmtDate(d.firstpay)} &nbsp;·&nbsp; Closing: ${fmtDate(d.closing)}<br>
           ${resolved
@@ -509,8 +535,8 @@
   }
 
   function renderAdminTransfers() {
-    const f     = getFilters();
-    const twrap = document.getElementById('adm-transfers');
+    const f      = getFilters();
+    const twrap  = document.getElementById('adm-transfers');
     const filtered = transfers.filter(t => {
       const dateStr = (t.createdAt || t.date || '').slice(0, 10);
       if (f.from && dateStr < f.from) return false;
@@ -525,6 +551,7 @@
           <span class="deal-status status-pending">Transfer</span>
           <span style="float:right;font-size:11px;color:var(--muted)">${fmtDate(t.date)}</span><br>
           <b>Opener:</b> ${t.name} &nbsp;|&nbsp; <b>Type:</b> ${t.type}<br>
+          <b>Transfer Type:</b> ${t.transferType || '—'}<br>
           ${t.closer ? `Closer: <b>${t.closer}</b><br>` : ''}
           Phone: ${t.phone}<br>
           Commission: <b>$${t.comm}</b>
@@ -532,8 +559,8 @@
     });
   }
 
-  window.applyFilters  = function() { renderAdminDeals(); renderAdminTransfers(); };
-  window.clearFilters  = function() {
+  window.applyFilters = function() { renderAdminDeals(); renderAdminTransfers(); };
+  window.clearFilters = function() {
     document.getElementById('f-from').value   = '';
     document.getElementById('f-to').value     = '';
     document.getElementById('f-status').value = 'All';
@@ -560,11 +587,12 @@
   // ── CARD BUILDERS ─────────────────────────
   function buildTransferCard(t) {
     const status = t.status || 'Pending';
-    const sc    = status === 'Approved' ? 'status-approved' : status === 'Declined' ? 'status-declined' : 'status-pending';
-    const label = status === 'Approved' ? '✅ Approved!' : status === 'Declined' ? '❌ Declined' : 'Pending Admin Review';
+    const sc     = status === 'Approved' ? 'status-approved' : status === 'Declined' ? 'status-declined' : 'status-pending';
+    const label  = status === 'Approved' ? '✅ Approved!' : status === 'Declined' ? '❌ Declined' : 'Pending Admin Review';
     return `<div class="deal ${status.toLowerCase()}">
       <span class="deal-status ${sc}">${label}</span><br>
       <b>${t.name}</b> &nbsp;·&nbsp; ${t.type}<br>
+      <span style="font-size:12px;color:var(--muted)">Transfer type: <b style="color:var(--text)">${t.transferType || '—'}</b></span><br>
       ${t.closer ? `Closer: <b>${t.closer}</b><br>` : ''}
       Phone: ${t.phone} &nbsp;·&nbsp; Date: ${fmtDate(t.date)}<br>
       Commission: <b>$${t.comm}</b>
@@ -578,6 +606,7 @@
       <span class="deal-status ${sc}">${label}</span><br>
       <b>${d.name}</b> closed for <b>${d.client}</b><br>
       Opener: ${d.opener} &nbsp;·&nbsp; Phone: ${d.phone}<br>
+      <span style="font-size:12px;color:var(--muted)">Transfer type: <b style="color:var(--text)">${d.transferType || '—'}</b></span><br>
       Debt: $${Number(d.debt).toLocaleString()} &nbsp;·&nbsp; Monthly: $${d.monthly || '—'}<br>
       First Pay: ${fmtDate(d.firstpay)} &nbsp;·&nbsp; Closing: ${fmtDate(d.closing)}<br>
       Commission: <b>$${d.comm}</b>
@@ -622,9 +651,6 @@
 </script>
 
 <style>
-/* ══════════════════════════════════════════
-   THEME TOKENS
-══════════════════════════════════════════ */
 :root {
   --bg:#04080f; --surface:#080e1a; --surface2:#0c1424; --border:#112036;
   --accent:#38bdf8; --accent2:#0ea5e9; --accent3:#6366f1;
@@ -643,7 +669,6 @@
   --input-bg:#f8fafc;
   --logo-from:#0f1923; --logo-to:var(--accent);
 }
-
 *{margin:0;padding:0;box-sizing:border-box;}
 body{
   background:var(--bg);color:var(--text);
@@ -651,72 +676,55 @@ body{
   min-height:100vh;display:flex;flex-direction:column;align-items:center;
   overflow-x:hidden;transition:background .3s,color .3s;
 }
-
 body::before{
   content:'';position:fixed;inset:0;
   background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
-  pointer-events:none;z-index:0;
-  transition:opacity .3s;
+  pointer-events:none;z-index:0;transition:opacity .3s;
 }
 [data-theme="light"] body::before{opacity:0;}
 body::after{
   content:'';position:fixed;inset:0;
   background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(56,189,248,.07) 0%,transparent 60%),
              radial-gradient(ellipse 40% 30% at 80% 80%,rgba(99,102,241,.05) 0%,transparent 50%);
-  pointer-events:none;z-index:0;
-  transition:opacity .3s;
+  pointer-events:none;z-index:0;transition:opacity .3s;
 }
 [data-theme="light"] body::after{opacity:0;}
-
-/* ── THEME TOGGLE ── */
 .theme-toggle{
   position:fixed;top:16px;right:16px;z-index:200;
   width:48px;height:26px;border-radius:13px;
   background:var(--surface2);border:1.5px solid var(--border);
-  cursor:pointer;padding:3px;
-  display:flex;align-items:center;
-  transition:background .3s,border-color .3s;
-  box-shadow:var(--card-shadow);
+  cursor:pointer;padding:3px;display:flex;align-items:center;
+  transition:background .3s,border-color .3s;box-shadow:var(--card-shadow);
 }
-.theme-toggle:hover{ border-color:var(--accent); }
+.theme-toggle:hover{border-color:var(--accent);}
 .toggle-knob{
   width:18px;height:18px;border-radius:50%;
   background:linear-gradient(135deg,var(--accent3),var(--accent));
   transition:transform .3s cubic-bezier(.34,1.56,.64,1);
-  display:flex;align-items:center;justify-content:center;
-  font-size:10px;line-height:1;
+  display:flex;align-items:center;justify-content:center;font-size:10px;line-height:1;
   box-shadow:0 1px 4px rgba(0,0,0,.3);
 }
-[data-theme="dark"]  .toggle-knob{ transform:translateX(0px);    }
-[data-theme="light"] .toggle-knob{ transform:translateX(22px);   }
-[data-theme="light"] .toggle-knob{ background:linear-gradient(135deg,#f59e0b,#fbbf24); }
-
-/* ── LOGIN / FORCE-PW ── */
+[data-theme="dark"]  .toggle-knob{transform:translateX(0px);}
+[data-theme="light"] .toggle-knob{transform:translateX(22px);background:linear-gradient(135deg,#f59e0b,#fbbf24);}
 #login-screen,#force-pw-screen{
   position:fixed;inset:0;display:flex;flex-direction:column;
   align-items:center;justify-content:center;z-index:100;
-  background:var(--bg);padding:24px;
-  animation:fadeIn .5s ease;
-  transition:background .3s;
+  background:var(--bg);padding:24px;animation:fadeIn .5s ease;transition:background .3s;
 }
 #login-screen.hidden{animation:fadeOut .4s ease forwards;pointer-events:none;}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 @keyframes fadeOut{from{opacity:1}to{opacity:0}}
-
 .login-glow{
   position:absolute;width:700px;height:700px;border-radius:50%;
   background:radial-gradient(circle,rgba(56,189,248,.1) 0%,rgba(99,102,241,.05) 50%,transparent 70%);
-  pointer-events:none;top:50%;left:50%;transform:translate(-50%,-60%);
-  transition:opacity .3s;
+  pointer-events:none;top:50%;left:50%;transform:translate(-50%,-60%);transition:opacity .3s;
 }
 [data-theme="light"] .login-glow{opacity:0;}
-
 .login-box{
   background:var(--surface);border:1px solid var(--border);
   border-radius:24px;padding:44px 40px 36px;
   width:100%;max-width:420px;position:relative;z-index:1;
-  box-shadow:var(--card-shadow);
-  transition:background .3s,border-color .3s,box-shadow .3s;
+  box-shadow:var(--card-shadow);transition:background .3s,border-color .3s,box-shadow .3s;
 }
 .login-logo{
   font-family:'Bebas Neue',sans-serif;font-size:58px;letter-spacing:6px;
@@ -726,7 +734,6 @@ body::after{
 }
 .login-welcome{text-align:center;margin-top:8px;margin-bottom:6px;font-size:13px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
 .login-sub{text-align:center;font-size:12px;color:var(--muted);letter-spacing:3px;text-transform:uppercase;margin-bottom:32px;font-style:italic;opacity:.5;}
-
 .role-selector{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:4px;}
 .role-sel-btn{
   display:flex;flex-direction:column;align-items:center;gap:6px;
@@ -745,7 +752,6 @@ body::after{
 }
 .role-sel-icon{font-size:20px;line-height:1;}
 .role-sel-name{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;}
-
 .login-label{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:6px;margin-top:16px;display:block;}
 .login-input{
   width:100%;padding:13px 16px;background:var(--input-bg);
@@ -755,7 +761,6 @@ body::after{
 }
 .login-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(56,189,248,.12);}
 [data-theme="light"] .login-input:focus{box-shadow:0 0 0 3px rgba(2,132,199,.1);}
-
 .login-btn{
   width:100%;margin-top:28px;padding:15px;border:none;border-radius:12px;
   background:linear-gradient(135deg,var(--accent3),var(--accent2),var(--accent));
@@ -766,8 +771,6 @@ body::after{
 .login-btn:hover{opacity:.9;box-shadow:0 6px 36px rgba(56,189,248,.45);}
 .login-btn:disabled{opacity:.5;cursor:not-allowed;}
 .login-error{margin-top:14px;text-align:center;font-size:12px;color:var(--red);font-weight:600;letter-spacing:1px;display:none;}
-
-/* ── FORCE PW NOTE ── */
 .fp-note{
   margin-bottom:20px;padding:14px 16px;
   background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);
@@ -777,31 +780,21 @@ body::after{
 .fp-note strong{display:block;font-size:13px;margin-bottom:4px;letter-spacing:1px;text-transform:uppercase;}
 .pw-strength{margin-top:6px;height:3px;border-radius:4px;background:var(--border);overflow:hidden;}
 .pw-strength-bar{height:100%;width:0%;transition:width .3s,background .3s;border-radius:4px;}
-
-/* ── LOGOUT BTN on force-pw screen ── */
 .fp-logout-btn{
   display:block;width:100%;margin-top:12px;padding:13px;
   border:1.5px solid rgba(244,63,94,.4);border-radius:12px;
-  background:rgba(244,63,94,.08);
-  color:var(--red);font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:3px;
+  background:rgba(244,63,94,.08);color:var(--red);
+  font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:3px;
   cursor:pointer;transition:all .2s;text-align:center;
 }
-.fp-logout-btn:hover{
-  background:rgba(244,63,94,.18);border-color:var(--red);
-  box-shadow:0 0 18px rgba(244,63,94,.25);
-}
-[data-theme="light"] .fp-logout-btn{
-  background:rgba(220,38,38,.06);border-color:rgba(220,38,38,.3);color:var(--red);
-}
-
-/* ── APP ── */
+.fp-logout-btn:hover{background:rgba(244,63,94,.18);border-color:var(--red);box-shadow:0 0 18px rgba(244,63,94,.25);}
+[data-theme="light"] .fp-logout-btn{background:rgba(220,38,38,.06);border-color:rgba(220,38,38,.3);color:var(--red);}
 #app{display:none;flex-direction:column;align-items:center;width:100%;}
 #app.visible{display:flex;}
 header{width:100%;max-width:800px;padding:36px 24px 0;text-align:center;position:relative;z-index:1;}
 .logo{
   font-family:'Bebas Neue',sans-serif;font-size:clamp(38px,8vw,72px);
-  letter-spacing:4px;
-  background:linear-gradient(135deg,var(--logo-from) 30%,var(--accent));
+  letter-spacing:4px;background:linear-gradient(135deg,var(--logo-from) 30%,var(--accent));
   -webkit-background-clip:text;-webkit-text-fill-color:transparent;line-height:1;
 }
 .tagline{font-size:11px;letter-spacing:4px;text-transform:uppercase;color:var(--muted);margin-top:5px;}
@@ -817,12 +810,10 @@ header{width:100%;max-width:800px;padding:36px 24px 0;text-align:center;position
   text-transform:uppercase;color:var(--muted);cursor:pointer;transition:border .2s,color .2s;
 }
 .logout-btn:hover{border-color:var(--red);color:var(--red);}
-
 .role-bar{
   display:flex;gap:8px;margin:24px auto 0;
   background:var(--surface);border:1px solid var(--border);
-  border-radius:14px;padding:5px;width:fit-content;
-  transition:background .3s,border-color .3s;
+  border-radius:14px;padding:5px;width:fit-content;transition:background .3s,border-color .3s;
 }
 .role-btn{
   font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;
@@ -834,20 +825,16 @@ header{width:100%;max-width:800px;padding:36px 24px 0;text-align:center;position
   background:linear-gradient(135deg,var(--accent3),var(--accent2),var(--accent));
   color:#fff;box-shadow:0 0 20px rgba(56,189,248,.3);
 }
-
 .panel-wrap{width:100%;max-width:800px;padding:24px;position:relative;z-index:1;flex:1;}
 .panel{display:none;}
 .panel.active{display:block;animation:fadeUp .35s ease both;}
 @keyframes fadeUp{from{opacity:0;transform:translateY(16px);}to{opacity:1;transform:translateY(0);}}
-
 .card{
   background:var(--surface);border:1px solid var(--border);
   border-radius:18px;padding:26px 26px 22px;margin-bottom:18px;
-  box-shadow:var(--card-shadow);
-  transition:background .3s,border-color .3s,box-shadow .3s;
+  box-shadow:var(--card-shadow);transition:background .3s,border-color .3s,box-shadow .3s;
 }
 .card-title{font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;color:var(--accent);margin-bottom:18px;border-bottom:1px solid var(--border);padding-bottom:11px;}
-
 label{display:block;font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:5px;margin-top:14px;}
 input,select{
   width:100%;padding:12px 14px;background:var(--input-bg);
@@ -860,32 +847,24 @@ input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(56
 select option{background:var(--surface);}
 input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248,.25);cursor:default;}
 [data-theme="light"] input[readonly]{color:var(--accent2);}
-
 .row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 .btn-submit{
   width:100%;margin-top:22px;padding:14px;border:none;border-radius:12px;
   background:linear-gradient(135deg,var(--accent3),var(--accent2),var(--accent));
   color:#fff;font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;
-  cursor:pointer;transition:opacity .2s,box-shadow .2s;
-  box-shadow:0 4px 22px rgba(14,165,233,.3);
+  cursor:pointer;transition:opacity .2s,box-shadow .2s;box-shadow:0 4px 22px rgba(14,165,233,.3);
 }
 .btn-submit:hover{opacity:.9;box-shadow:0 6px 32px rgba(56,189,248,.4);}
-
 .earnings{
   display:flex;align-items:center;justify-content:space-between;
   background:linear-gradient(135deg,rgba(14,165,233,.1),rgba(56,189,248,.04));
   border:1px solid rgba(56,189,248,.2);border-radius:12px;padding:16px 20px;margin-top:20px;
   transition:background .3s;
 }
-[data-theme="light"] .earnings{
-  background:linear-gradient(135deg,rgba(2,132,199,.07),rgba(14,165,233,.03));
-  border-color:rgba(2,132,199,.2);
-}
+[data-theme="light"] .earnings{background:linear-gradient(135deg,rgba(2,132,199,.07),rgba(14,165,233,.03));border-color:rgba(2,132,199,.2);}
 .earnings-label{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
 .earnings-value{font-family:'Bebas Neue',sans-serif;font-size:38px;letter-spacing:2px;color:var(--accent);}
-
 .section-label{font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);margin:20px 0 10px;}
-
 .deal{
   background:var(--surface2);border:1px solid var(--border);
   border-radius:12px;padding:14px 16px;margin-top:10px;
@@ -896,7 +875,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .deal.approved::before{background:var(--green);}
 .deal.declined::before{background:var(--red);}
 .deal.pending::before{background:var(--yellow);}
-
 .deal-status{display:inline-block;font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:3px 10px;border-radius:20px;margin-bottom:6px;}
 .status-approved{background:rgba(34,197,94,.15);color:var(--green);}
 .status-declined{background:rgba(239,68,68,.15);color:var(--red);}
@@ -904,7 +882,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 [data-theme="light"] .status-approved{background:rgba(5,150,105,.12);}
 [data-theme="light"] .status-declined{background:rgba(220,38,38,.1);}
 [data-theme="light"] .status-pending{background:rgba(217,119,6,.1);}
-
 .comm-preview{
   display:flex;align-items:center;gap:10px;
   background:rgba(56,189,248,.06);border:1px solid rgba(56,189,248,.15);
@@ -913,7 +890,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 [data-theme="light"] .comm-preview{background:rgba(2,132,199,.05);border-color:rgba(2,132,199,.15);}
 .comm-preview-val{font-family:'Bebas Neue',sans-serif;font-size:26px;color:var(--accent);letter-spacing:2px;}
 .tier-info{margin-top:7px;font-size:12px;font-weight:600;color:var(--muted);min-height:18px;}
-
 .comm-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;}
 .comm-table th{background:rgba(28,43,66,.6);color:var(--muted);font-size:9px;letter-spacing:2px;text-transform:uppercase;padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);}
 [data-theme="light"] .comm-table th{background:rgba(208,218,234,.5);}
@@ -921,13 +897,10 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 [data-theme="light"] .comm-table td{border-bottom-color:rgba(208,218,234,.6);}
 .comm-table tr:last-child td{border-bottom:none;}
 .comm-table .amt{color:var(--green);font-weight:600;}
-
-/* ADMIN */
 .admin-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:4px;}
 .stat-box{background:var(--surface2);border-radius:12px;padding:16px;text-align:center;transition:background .3s;}
 .stat-label{font-size:10px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:4px;}
 .stat-value{font-family:'Bebas Neue',sans-serif;font-size:34px;}
-
 .admin-deal{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-top:10px;font-size:13px;line-height:1.85;transition:background .3s,border-color .3s;}
 .admin-actions{display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap;}
 .admin-comm-edit{flex:1;min-width:120px;padding:9px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;}
@@ -937,8 +910,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .btn-decline:hover{background:rgba(239,68,68,.28);}
 .deal-resolved{opacity:.5;}
 .divider{height:1px;background:var(--border);margin:22px 0;}
-
-/* FILTER */
 .filter-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:22px 26px 18px;margin-bottom:18px;position:relative;overflow:hidden;box-shadow:var(--card-shadow);transition:background .3s,border-color .3s;}
 .filter-card::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(56,189,248,.03) 0%,rgba(99,102,241,.03) 100%);pointer-events:none;}
 [data-theme="light"] .filter-card::before{opacity:0;}
@@ -950,13 +921,10 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .btn-filter-clear:hover{border-color:var(--red);color:var(--red);}
 .filter-results-count{font-size:11px;font-weight:600;color:var(--muted);}
 .filter-results-count span{color:var(--accent);font-family:'Bebas Neue',sans-serif;font-size:15px;}
-
-/* SHIFT BAR */
 .shift-bar{
   background:var(--surface);border:1px solid var(--border);
   border-radius:14px;padding:16px 20px 14px;margin-bottom:18px;
-  position:relative;overflow:hidden;box-shadow:var(--card-shadow);
-  transition:background .3s,border-color .3s;
+  position:relative;overflow:hidden;box-shadow:var(--card-shadow);transition:background .3s,border-color .3s;
 }
 .shift-bar::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(56,189,248,.04),rgba(99,102,241,.04));pointer-events:none;}
 [data-theme="light"] .shift-bar::before{opacity:0;}
@@ -969,26 +937,18 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .shift-progress-wrap{height:5px;background:var(--border);border-radius:4px;overflow:hidden;margin-bottom:8px;}
 .shift-progress-bar{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width 1s linear;}
 .shift-tag{font-size:10px;color:var(--muted);letter-spacing:1px;}
-
-/* EOD */
 .eod-summary{
   background:linear-gradient(135deg,rgba(56,189,248,.06),rgba(99,102,241,.06));
   border:1px solid rgba(56,189,248,.2);border-radius:14px;
-  padding:20px 22px;margin-bottom:18px;animation:fadeUp .4s ease;
-  transition:background .3s,border-color .3s;
+  padding:20px 22px;margin-bottom:18px;animation:fadeUp .4s ease;transition:background .3s,border-color .3s;
 }
-[data-theme="light"] .eod-summary{
-  background:linear-gradient(135deg,rgba(2,132,199,.05),rgba(79,70,229,.04));
-  border-color:rgba(2,132,199,.2);
-}
+[data-theme="light"] .eod-summary{background:linear-gradient(135deg,rgba(2,132,199,.05),rgba(79,70,229,.04));border-color:rgba(2,132,199,.2);}
 .eod-title{font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:3px;color:var(--accent);margin-bottom:14px;border-bottom:1px solid rgba(56,189,248,.15);padding-bottom:10px;}
 .eod-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px;}
 .eod-stat{background:var(--surface2);border-radius:10px;padding:12px;text-align:center;transition:background .3s;}
 .eod-stat-val{font-family:'Bebas Neue',sans-serif;font-size:28px;color:var(--accent);}
 .eod-stat-label{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-top:2px;}
 .eod-msg{font-size:12px;color:var(--muted);text-align:center;letter-spacing:.5px;margin-top:6px;font-style:italic;}
-
-/* TOAST */
 #toast{
   position:fixed;top:22px;right:22px;padding:16px 22px;border-radius:14px;
   font-size:14px;font-weight:600;z-index:9999;display:none;max-width:340px;
@@ -1001,15 +961,11 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 [data-theme="light"] .toast-error{background:#fef2f2;color:#991b1b;}
 [data-theme="light"] .toast-success{background:#f0fdf4;color:#166534;}
 [data-theme="light"] .toast-fire{background:linear-gradient(135deg,#eff6ff,#eef2ff);color:var(--accent2);}
-
 .empty{text-align:center;padding:28px;color:var(--muted);font-size:13px;letter-spacing:1px;}
-
-/* FOOTER */
 .app-footer{
   width:100%;max-width:800px;display:flex;align-items:center;justify-content:center;
   gap:14px;padding:20px 24px 32px;position:relative;z-index:1;
-  border-top:1px solid var(--border);margin-top:12px;
-  transition:border-color .3s;
+  border-top:1px solid var(--border);margin-top:12px;transition:border-color .3s;
 }
 .version-tag{
   font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:3px;
@@ -1019,7 +975,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 }
 .footer-name{font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
 .footer-copy{font-size:10px;letter-spacing:1px;color:var(--muted);opacity:.4;}
-
 @media(max-width:540px){
   .filter-grid{grid-template-columns:1fr;}
   .app-footer{flex-direction:column;gap:6px;text-align:center;}
@@ -1030,11 +985,8 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 </head>
 <body>
 
-<!-- THEME TOGGLE -->
 <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" aria-label="Toggle theme">
-  <div class="toggle-knob" id="toggle-knob">
-    <span id="toggle-icon">🌙</span>
-  </div>
+  <div class="toggle-knob" id="toggle-knob"><span id="toggle-icon">🌙</span></div>
 </button>
 
 <div id="toast"></div>
@@ -1046,23 +998,12 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
     <div class="login-logo">UNITED FUNDS</div>
     <div class="login-welcome">Welcome Back</div>
     <div class="login-sub">Track &nbsp;·&nbsp; Grow &nbsp;·&nbsp; Earn</div>
-
     <label class="login-label">I am a</label>
     <div class="role-selector">
-      <button class="role-sel-btn" id="rs-opener" onclick="selectRole('opener')">
-        <span class="role-sel-icon">📞</span>
-        <span class="role-sel-name">Opener</span>
-      </button>
-      <button class="role-sel-btn" id="rs-closer" onclick="selectRole('closer')">
-        <span class="role-sel-icon">🤝</span>
-        <span class="role-sel-name">Closer</span>
-      </button>
-      <button class="role-sel-btn" id="rs-admin" onclick="selectRole('admin')">
-        <span class="role-sel-icon">⚙️</span>
-        <span class="role-sel-name">Admin</span>
-      </button>
+      <button class="role-sel-btn" id="rs-opener" onclick="selectRole('opener')"><span class="role-sel-icon">📞</span><span class="role-sel-name">Opener</span></button>
+      <button class="role-sel-btn" id="rs-closer" onclick="selectRole('closer')"><span class="role-sel-icon">🤝</span><span class="role-sel-name">Closer</span></button>
+      <button class="role-sel-btn" id="rs-admin" onclick="selectRole('admin')"><span class="role-sel-icon">⚙️</span><span class="role-sel-name">Admin</span></button>
     </div>
-
     <label class="login-label" for="li-email">Email</label>
     <input class="login-input" id="li-email" type="email" placeholder="your@email.com" autocomplete="email"/>
     <label class="login-label" for="li-pass">Password</label>
@@ -1087,10 +1028,8 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
     <div class="pw-strength"><div class="pw-strength-bar" id="pw-bar"></div></div>
     <label class="login-label" for="fp-confirm">Confirm Password</label>
     <input class="login-input" id="fp-confirm" type="password" placeholder="Repeat your new password"/>
-    <!-- Error shown only after button click -->
     <div class="login-error" id="fp-error" style="display:none;"></div>
     <button class="login-btn" id="fp-btn" onclick="doForcePasswordChange()">SET PASSWORD</button>
-    <!-- PROMINENT LOGOUT BUTTON — always visible on this screen -->
     <button class="fp-logout-btn" onclick="doLogout()">🚪 LOG OUT &amp; START OVER</button>
   </div>
 </div>
@@ -1120,22 +1059,26 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <span class="shift-label">⏱ SHIFT ENDS IN</span>
           <span class="shift-timer" id="shift-timer-opener">—</span>
         </div>
-        <div class="shift-progress-wrap">
-          <div class="shift-progress-bar" id="shift-progress-opener"></div>
-        </div>
+        <div class="shift-progress-wrap"><div class="shift-progress-bar" id="shift-progress-opener"></div></div>
         <div class="shift-tag" id="shift-tag-opener">Egypt: 5PM – 2AM &nbsp;·&nbsp; Mon–Fri</div>
       </div>
       <div class="eod-summary" id="eod-opener" style="display:none"></div>
 
       <div class="card">
         <div class="card-title">Opener Submission</div>
+
         <label>Opener Name</label>
         <select id="op-name">
           <option value="">Select your name…</option>
           <option value="Kiley">Kiley</option>
           <option value="Sara">Sara</option>
           <option value="Kate">Kate</option>
+          <option value="Mona">Mona</option>
+          <option value="Sean">Sean</option>
+          <option value="Emmanuel">Emmanuel</option>
+          <option value="Tom">Tom</option>
         </select>
+
         <label>Lead Source / Transfer Type</label>
         <select id="op-type" onchange="handleTransferType()">
           <option value="">Select type…</option>
@@ -1147,9 +1090,21 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <option value="PCCTsub10">PCCTsub10 — $2</option>
           <option value="Student Loan">Student Loan — $2</option>
         </select>
+
         <div class="comm-preview">
           Commission for this transfer: <span class="comm-preview-val" id="op-comm-preview">$—</span>
         </div>
+
+        <label>Transfer Amount Type</label>
+        <select id="op-transfer-type">
+          <option value="">Select transfer type…</option>
+          <option value="Above 10K">Above 10K</option>
+          <option value="5K+ & Above">5K+ &amp; Above</option>
+          <option value="TAX 10K+">TAX 10K+</option>
+          <option value="TAX 5K+">TAX 5K+</option>
+          <option value="Federal Student Loan">Federal Student Loan</option>
+        </select>
+
         <div id="op-closer-wrap" style="display:none">
           <label>Assign to Closer</label>
           <select id="op-closer">
@@ -1161,6 +1116,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
             <option value="Nathan">Nathan</option>
           </select>
         </div>
+
         <label>Transfer Date</label>
         <input id="op-date" type="date"/>
         <label>Phone Number</label>
@@ -1199,15 +1155,14 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <span class="shift-label">⏱ SHIFT ENDS IN</span>
           <span class="shift-timer" id="shift-timer-closer">—</span>
         </div>
-        <div class="shift-progress-wrap">
-          <div class="shift-progress-bar" id="shift-progress-closer"></div>
-        </div>
+        <div class="shift-progress-wrap"><div class="shift-progress-bar" id="shift-progress-closer"></div></div>
         <div class="shift-tag" id="shift-tag-closer">Egypt: 5PM – 2AM &nbsp;·&nbsp; Mon–Fri</div>
       </div>
       <div class="eod-summary" id="eod-closer" style="display:none"></div>
 
       <div class="card">
         <div class="card-title">Closer Submission</div>
+
         <label>Closer Name</label>
         <select id="cl-name">
           <option value="">Select your name…</option>
@@ -1217,13 +1172,30 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <option value="Willy">Willy</option>
           <option value="Nathan">Nathan</option>
         </select>
+
         <label>Opener Name</label>
         <select id="cl-opener">
           <option value="">Select opener…</option>
+          <option value="N/A">N/A</option>
           <option value="Kiley">Kiley</option>
           <option value="Sara">Sara</option>
           <option value="Kate">Kate</option>
+          <option value="Mona">Mona</option>
+          <option value="Sean">Sean</option>
+          <option value="Emmanuel">Emmanuel</option>
+          <option value="Tom">Tom</option>
         </select>
+
+        <label>Transfer Amount Type</label>
+        <select id="cl-transfer-type">
+          <option value="">Select transfer type…</option>
+          <option value="Above 10K">Above 10K</option>
+          <option value="5K+ & Above">5K+ &amp; Above</option>
+          <option value="TAX 10K+">TAX 10K+</option>
+          <option value="TAX 5K+">TAX 5K+</option>
+          <option value="Federal Student Loan">Federal Student Loan</option>
+        </select>
+
         <div class="row">
           <div><label>Client Name</label><input id="cl-client" placeholder="Full name"/></div>
           <div><label>Client Phone</label><input id="cl-phone" placeholder="Phone number"/></div>
@@ -1255,32 +1227,17 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
       <div class="card">
         <div class="card-title">Admin Overview</div>
         <div class="admin-stats">
-          <div class="stat-box">
-            <div class="stat-label">Total Submissions</div>
-            <div class="stat-value" id="adm-total" style="color:var(--accent)">0</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-label">Approved</div>
-            <div class="stat-value" id="adm-approved" style="color:var(--green)">0</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-label">Pending</div>
-            <div class="stat-value" id="adm-pending" style="color:var(--yellow)">0</div>
-          </div>
+          <div class="stat-box"><div class="stat-label">Total Submissions</div><div class="stat-value" id="adm-total" style="color:var(--accent)">0</div></div>
+          <div class="stat-box"><div class="stat-label">Approved</div><div class="stat-value" id="adm-approved" style="color:var(--green)">0</div></div>
+          <div class="stat-box"><div class="stat-label">Pending</div><div class="stat-value" id="adm-pending" style="color:var(--yellow)">0</div></div>
         </div>
       </div>
 
       <div class="filter-card">
         <div class="filter-title">🔍 Filter Records</div>
         <div class="filter-grid">
-          <div class="filter-field">
-            <label class="filter-label">From Date</label>
-            <input type="date" id="f-from" onchange="applyFilters()"/>
-          </div>
-          <div class="filter-field">
-            <label class="filter-label">To Date</label>
-            <input type="date" id="f-to" onchange="applyFilters()"/>
-          </div>
+          <div class="filter-field"><label class="filter-label">From Date</label><input type="date" id="f-from" onchange="applyFilters()"/></div>
+          <div class="filter-field"><label class="filter-label">To Date</label><input type="date" id="f-to" onchange="applyFilters()"/></div>
           <div class="filter-field">
             <label class="filter-label">Status</label>
             <select id="f-status" onchange="applyFilters()">
@@ -1318,48 +1275,43 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v1.3</span>
+    <span class="version-tag">v1.4</span>
     <span class="footer-name">United Funds Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
 </div>
 
 <script>
-// ── THEME TOGGLE ──────────────────────────────────────────
 (function() {
   const saved = localStorage.getItem('uf-theme') || 'dark';
   applyTheme(saved);
 })();
-
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   const icon = document.getElementById('toggle-icon');
   if (icon) icon.textContent = theme === 'dark' ? '🌙' : '☀️';
   localStorage.setItem('uf-theme', theme);
 }
-
 function toggleTheme() {
   const current = document.documentElement.getAttribute('data-theme') || 'dark';
   applyTheme(current === 'dark' ? 'light' : 'dark');
 }
-
-// ── PASSWORD STRENGTH ─────────────────────────────────────
 function updateStrength(val) {
   const bar = document.getElementById('pw-bar');
   if (!bar) return;
   let score = 0;
-  if (val.length >= 8)        score++;
-  if (val.length >= 12)       score++;
-  if (/[A-Z]/.test(val))      score++;
-  if (/[0-9]/.test(val))      score++;
-  if (/[^A-Za-z0-9]/.test(val)) score++;
+  if (val.length >= 8)           score++;
+  if (val.length >= 12)          score++;
+  if (/[A-Z]/.test(val))         score++;
+  if (/[0-9]/.test(val))         score++;
+  if (/[^A-Za-z0-9]/.test(val))  score++;
   const colors = ['#ef4444','#f59e0b','#f59e0b','#22c55e','#22c55e'];
   const widths  = ['20%','40%','60%','80%','100%'];
   bar.style.width      = val ? (widths[score-1] || '10%') : '0%';
   bar.style.background = val ? (colors[score-1] || '#ef4444') : 'transparent';
 }
 
-// ── SHIFT COUNTDOWN ───────────────────────────────────────
+// ── SHIFT COUNTDOWN ────────────────────────────────────────
 (function initShift() {
   const SHIFT_START_H    = 17;
   const SHIFT_END_H      = 2;
@@ -1388,7 +1340,6 @@ function updateStrength(val) {
     const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   }
-
   function buildEODSummary(role) {
     const todayStr = getNowEgypt().toISOString().slice(0, 10);
     if (role === 'closer') {
@@ -1426,7 +1377,7 @@ function updateStrength(val) {
   }
 
   window.refreshEOD = function() {
-    const role  = window._currentRole;
+    const role = window._currentRole;
     if (!role || role === 'admin') return;
     const eodId = role === 'closer' ? 'eod-closer' : 'eod-opener';
     const eodEl = document.getElementById(eodId);
@@ -1461,7 +1412,7 @@ function updateStrength(val) {
         eodEl.style.display = tt.length > 0 ? 'block' : 'none';
       }
     } else {
-      eodEl.innerHTML = buildEODSummary(role);
+      eodEl.innerHTML    = buildEODSummary(role);
       eodEl.style.display = 'block';
     }
   };
