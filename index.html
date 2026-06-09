@@ -49,11 +49,107 @@
   let currentUser = null;
   let deals       = [];
   let transfers   = [];
+  let goLiveDate  = null; // null = no filter; "YYYY-MM-DD" = floor date
 
   function syncGlobals() {
     window._deals       = deals;
     window._transfers   = transfers;
     window._currentRole = currentUser ? currentUser.role : null;
+    window._goLiveDate  = goLiveDate;
+  }
+
+  // ── GO LIVE DATE ──────────────────────────
+  async function loadGoLiveDate() {
+    try {
+      const snap = await getDoc(doc(db, 'config', 'goLiveDate'));
+      goLiveDate = snap.exists() ? (snap.data().date || null) : null;
+    } catch(e) { goLiveDate = null; }
+    syncGlobals();
+    updateGoLiveUI();
+  }
+
+  window.setGoLive = async function() {
+    const btn = document.getElementById('go-live-btn');
+    if (!btn || btn.dataset.armed !== 'true') return;
+    try {
+      await setDoc(doc(db, 'config', 'goLiveDate'), { date: '2026-06-15', setAt: new Date().toISOString() });
+      goLiveDate = '2026-06-15';
+      syncGlobals();
+      updateGoLiveUI();
+      toast('🚀 App is now LIVE — Jun 15, 2026 set as start date!', 'success');
+      await loadData();
+    } catch(e) { toast('Failed to set go live date.', 'error'); }
+  };
+
+  window.liftCover = function() {
+    const cover  = document.getElementById('go-live-cover');
+    const btn    = document.getElementById('go-live-btn');
+    const hint   = document.getElementById('go-live-hint');
+    if (!cover || !btn) return;
+    if (goLiveDate) return; // already live, do nothing
+    const isArmed = btn.dataset.armed === 'true';
+    if (!isArmed) {
+      btn.dataset.armed = 'true';
+      cover.classList.add('open');
+      cover.querySelector('.cover-label').textContent = 'armed';
+      btn.classList.remove('locked');
+      if (hint) hint.textContent = 'Press the button — this cannot be undone';
+    } else {
+      btn.dataset.armed = 'false';
+      cover.classList.remove('open');
+      cover.querySelector('.cover-label').textContent = 'lift to arm';
+      btn.classList.add('locked');
+      if (hint) hint.textContent = 'Lift the cover to arm, then press to go live';
+    }
+  };
+
+  function updateGoLiveUI() {
+    const cover      = document.getElementById('go-live-cover');
+    const btn        = document.getElementById('go-live-btn');
+    const dot        = document.getElementById('go-live-dot');
+    const statusEl   = document.getElementById('go-live-status');
+    const hint       = document.getElementById('go-live-hint');
+    const btnIcon    = document.getElementById('go-live-icon');
+    if (!btn) return;
+
+    if (goLiveDate) {
+      // Locked live state
+      if (cover) {
+        cover.classList.remove('open');
+        cover.style.opacity = '0.35';
+        cover.style.pointerEvents = 'none';
+        cover.querySelector('.cover-label').textContent = 'locked in';
+      }
+      btn.classList.add('live', 'locked');
+      btn.classList.remove('armed-state');
+      btn.dataset.armed = 'false';
+      if (btnIcon) btnIcon.textContent = '✦';
+      if (dot) dot.classList.add('live');
+      if (statusEl) { statusEl.classList.add('live'); statusEl.textContent = 'Live — Jun 15, 2026'; }
+      if (hint) { hint.textContent = 'Test data hidden from all users'; hint.style.color = '#1D9E75'; }
+    } else {
+      // Standby state
+      if (cover) {
+        cover.style.opacity = '';
+        cover.style.pointerEvents = '';
+        cover.classList.remove('open');
+        cover.querySelector('.cover-label').textContent = 'lift to arm';
+      }
+      btn.classList.remove('live', 'locked', 'armed-state');
+      btn.dataset.armed = 'false';
+      if (btnIcon) btnIcon.textContent = '🛰️';
+      if (dot) dot.classList.remove('live');
+      if (statusEl) { statusEl.classList.remove('live'); statusEl.textContent = 'Standby — test mode active'; }
+      if (hint) { hint.textContent = 'Lift the cover to arm, then press to go live'; hint.style.color = ''; }
+    }
+  }
+
+  function applyGoLiveFilter(arr, dateField) {
+    if (!goLiveDate) return arr;
+    return arr.filter(item => {
+      const d = (item[dateField] || item.createdAt || '').slice(0, 10);
+      return d >= goLiveDate;
+    });
   }
 
   // ── COMMISSION LOGIC ──────────────────────
@@ -235,7 +331,7 @@
 
   window.doLogout = async function() {
     await signOut(auth);
-    deals = []; transfers = [];
+    deals = []; transfers = []; goLiveDate = null;
     syncGlobals();
     document.getElementById('app').classList.remove('visible');
     document.getElementById('li-email').value = '';
@@ -268,7 +364,7 @@
     document.getElementById('force-pw-screen').style.display = 'none';
   }
 
-  function launchApp() {
+  async function launchApp() {
     document.getElementById('app').classList.add('visible');
     document.getElementById('user-pill').textContent = currentUser.name + ' · ' + currentUser.role.toUpperCase();
     const role = currentUser.role;
@@ -276,6 +372,7 @@
     if (role === 'admin')  { switchPanel('admin'); }
     if (role === 'closer') { switchPanel('closer'); autoFillCloserName(); }
     if (role === 'opener') { switchPanel('opener'); autoFillOpenerName(); }
+    await loadGoLiveDate();
     syncGlobals();
     loadData();
   }
@@ -290,22 +387,19 @@
     document.querySelectorAll('.role-btn').forEach((b, i) => {
       b.classList.toggle('active', ['opener','closer','admin'][i] === name);
     });
-    // Always re-fetch fresh data when switching to admin panel
     if (name === 'admin') loadData();
   };
 
-  // ── CORE DATA LOAD — fetches everything from Firestore ──
+  // ── CORE DATA LOAD ────────────────────────
   async function loadData() {
     if (!currentUser) return;
     const role = currentUser.role;
 
-    // Show loading state
     if (role === 'admin') {
       document.getElementById('adm-deals').innerHTML     = '<div class="empty">Loading deals…</div>';
       document.getElementById('adm-transfers').innerHTML = '<div class="empty">Loading transfers…</div>';
     }
 
-    // Always fetch deals for admin & closer
     if (role === 'admin' || role === 'closer') {
       try {
         const q = role === 'admin'
@@ -314,10 +408,10 @@
         const snap = await getDocs(q);
         deals = [];
         snap.forEach(d => deals.push({ id: d.id, ...d.data() }));
+        deals = applyGoLiveFilter(deals, 'createdAt');
       } catch(e) { console.error('Error loading deals:', e); }
     }
 
-    // Always fetch transfers for admin & opener
     if (role === 'admin' || role === 'opener') {
       try {
         const q = role === 'admin'
@@ -326,6 +420,7 @@
         const snap = await getDocs(q);
         transfers = [];
         snap.forEach(t => transfers.push({ id: t.id, ...t.data() }));
+        transfers = applyGoLiveFilter(transfers, 'createdAt');
       } catch(e) { console.error('Error loading transfers:', e); }
     }
 
@@ -345,14 +440,8 @@
         ? '<div class="empty">No deals yet — close something! 🔥</div>'
         : deals.map(buildCloserCard).join('');
     }
-    if (role === 'opener') {
-      renderOpenerDashboard();
-    }
-    if (role === 'admin') {
-      renderAdminStats();
-      renderAdminDeals();
-      renderAdminTransfers();
-    }
+    if (role === 'opener') renderOpenerDashboard();
+    if (role === 'admin') { renderAdminStats(); renderAdminDeals(); renderAdminTransfers(); }
   }
 
   // ── OPENER DASHBOARD ─────────────────────
@@ -397,7 +486,7 @@
         count === 0
           ? 'Submit your first closed deal to start earning!'
           : count >= 4
-          ? `🔥 Max tier unlocked! Every close is now $15`
+          ? '🔥 Max tier unlocked! Every close is now $15'
           : `Next close earns you $${TIER_RATES[count]} — keep going!`
       }</div>`;
   }
@@ -530,7 +619,6 @@
       deals.unshift(d);
       syncGlobals();
 
-      // Update closer dashboard immediately
       const wrap = document.getElementById('cl-deals');
       if (wrap.querySelector('.empty')) wrap.innerHTML = '';
       wrap.insertAdjacentHTML('afterbegin', buildCloserCard(d));
@@ -547,7 +635,6 @@
   };
 
   // ── ADMIN ─────────────────────────────────
-  // renderAdminStats — updates the three stat boxes
   function renderAdminStats() {
     const pending  = deals.filter(d => d.status === 'Pending').length;
     const approved = deals.filter(d => d.status === 'Approved').length;
@@ -556,9 +643,9 @@
     document.getElementById('adm-pending').textContent  = pending;
   }
 
-  // Full admin refresh — re-fetches ALL data from Firestore
   window.refreshAdmin = async function() {
     if (!currentUser || currentUser.role !== 'admin') return;
+    await loadGoLiveDate();
     await loadData();
   };
 
@@ -596,7 +683,6 @@
       return;
     }
 
-    // Sort: Pending first, then Approved, then Declined
     const sorted = [...filtered].sort((a, b) => {
       const order = { Pending: 0, Approved: 1, Declined: 2 };
       return (order[a.status] || 0) - (order[b.status] || 0);
@@ -681,29 +767,24 @@
     renderAdminDeals(); renderAdminTransfers();
   };
 
-  // ── ADMIN ACTION: Approve or Decline with editable commission ──
   window.adminAction = async function(id, action) {
     const d = deals.find(x => x.id === id);
     if (!d) { toast('Deal not found. Try refreshing.', 'error'); return; }
 
-    // Read the edited commission value from the input field
     const editEl = document.getElementById('comm-' + id);
     const finalComm = editEl ? (Number(editEl.value) || 0) : (d.comm || 0);
 
     try {
-      // Update in Firestore
       await updateDoc(doc(db, 'deals', id), {
         status: action,
         comm: finalComm,
         resolvedAt: new Date().toISOString()
       });
 
-      // Update local state immediately
       d.status = action;
       d.comm   = finalComm;
       syncGlobals();
 
-      // Re-render admin UI
       renderAdminStats();
       renderAdminDeals();
 
@@ -823,6 +904,8 @@ body::after{
   pointer-events:none;z-index:0;transition:opacity .3s;
 }
 [data-theme="light"] body::after{opacity:0;}
+
+/* ── THEME TOGGLE ── */
 .theme-toggle{
   position:fixed;top:16px;right:16px;z-index:200;
   width:48px;height:26px;border-radius:13px;
@@ -840,6 +923,113 @@ body::after{
 }
 [data-theme="dark"]  .toggle-knob{transform:translateX(0px);}
 [data-theme="light"] .toggle-knob{transform:translateX(22px);background:linear-gradient(135deg,#f59e0b,#fbbf24);}
+
+/* ── GO LIVE LAUNCH SWITCH ── */
+.go-live-card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:18px;padding:24px 26px;margin-bottom:18px;
+  box-shadow:var(--card-shadow);transition:background .3s,border-color .3s;
+  position:relative;overflow:hidden;
+}
+.go-live-card::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,rgba(34,211,160,.04),rgba(56,189,248,.03));
+  pointer-events:none;
+}
+.go-live-card.is-live::before{
+  background:linear-gradient(135deg,rgba(34,211,160,.08),rgba(14,165,233,.05));
+}
+[data-theme="light"] .go-live-card::before{opacity:0;}
+.go-live-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:14px;
+}
+.go-live-title{font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;color:var(--accent);}
+.go-live-badge{
+  font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;
+  padding:4px 12px;border-radius:20px;
+  background:rgba(245,158,11,.12);color:var(--yellow);border:1px solid rgba(245,158,11,.2);
+  transition:background .4s,color .4s,border-color .4s;
+}
+.go-live-badge.live{
+  background:rgba(34,211,160,.12);color:var(--green);border-color:rgba(34,211,160,.3);
+}
+.go-live-body{
+  display:flex;align-items:center;gap:28px;
+  flex-wrap:wrap;
+}
+.launch-switch-wrap{
+  display:flex;flex-direction:column;align-items:center;gap:0;flex-shrink:0;
+}
+.guard-cover{
+  width:80px;height:30px;border-radius:8px 8px 0 0;
+  border:1px solid var(--border);border-bottom:none;
+  background:var(--surface2);
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;user-select:none;
+  transition:background .25s,border-color .25s;
+}
+.guard-cover:hover{border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.06);}
+.guard-cover.open{
+  background:rgba(245,158,11,.12);
+  border-color:rgba(245,158,11,.4);
+}
+.guard-cover .cover-label{
+  font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;
+  color:var(--muted);transition:color .25s;
+}
+.guard-cover.open .cover-label{color:var(--yellow);}
+.launch-switch-base{
+  width:80px;height:48px;border-radius:0 0 12px 12px;
+  border:1px solid var(--border);
+  background:var(--surface2);
+  display:flex;align-items:center;justify-content:center;
+  transition:border-color .3s;
+}
+.launch-btn{
+  width:44px;height:44px;border-radius:50%;
+  border:1px solid var(--border);
+  background:var(--surface);
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  font-size:20px;line-height:1;
+  transition:background .3s,border-color .3s,transform .15s;
+  user-select:none;
+}
+.launch-btn:not(.locked):hover{
+  background:rgba(56,189,248,.08);
+  border-color:rgba(56,189,248,.4);
+  transform:scale(1.06);
+}
+.launch-btn:not(.locked):active{transform:scale(0.93);}
+.launch-btn.locked{cursor:not-allowed;opacity:.5;}
+.launch-btn.live{
+  background:rgba(34,211,160,.1);
+  border-color:rgba(34,211,160,.4);
+  opacity:1;
+}
+.go-live-info{flex:1;min-width:180px;}
+.go-live-status-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+.go-live-dot{
+  width:8px;height:8px;border-radius:50%;
+  background:var(--muted);transition:background .4s;flex-shrink:0;
+}
+.go-live-dot.live{background:var(--green);animation:glpulse 1.4s infinite;}
+@keyframes glpulse{0%,100%{opacity:1}50%{opacity:.3}}
+.go-live-status-text{
+  font-size:14px;font-weight:600;color:var(--muted);
+  transition:color .3s;letter-spacing:.3px;
+}
+.go-live-status-text.live{color:var(--green);}
+.go-live-date{
+  font-size:13px;color:var(--muted);margin-bottom:8px;
+}
+.go-live-date span{color:var(--text);font-weight:600;}
+.go-live-hint{
+  font-size:11px;color:var(--muted);letter-spacing:.3px;
+  line-height:1.5;transition:color .3s;
+  min-height:32px;
+}
+.go-live-hint.live{color:var(--green);}
 
 /* ── LOGIN ── */
 #login-screen,#force-pw-screen{
@@ -1076,7 +1266,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .stat-box{background:var(--surface2);border-radius:12px;padding:16px;text-align:center;transition:background .3s;}
 .stat-label{font-size:10px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:4px;}
 .stat-value{font-family:'Bebas Neue',sans-serif;font-size:34px;}
-
 .admin-deal{
   background:var(--surface2);border:1px solid var(--border);
   border-radius:12px;padding:18px;margin-top:10px;
@@ -1204,11 +1393,13 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   .theme-toggle{top:12px;right:12px;}
   .action-btns{flex-direction:column;}
   .row{grid-template-columns:1fr;}
+  .go-live-body{flex-direction:column;align-items:flex-start;}
 }
 </style>
 </head>
 <body>
 
+<!-- THEME TOGGLE -->
 <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" aria-label="Toggle theme">
   <div class="toggle-knob" id="toggle-knob"><span id="toggle-icon">🌙</span></div>
 </button>
@@ -1461,6 +1652,35 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
     <!-- ── ADMIN PANEL ── -->
     <div class="panel" id="panel-admin">
+
+      <!-- GO LIVE LAUNCH SWITCH -->
+      <div class="go-live-card" id="go-live-card">
+        <div class="go-live-header">
+          <span class="go-live-title">🚀 Go Live</span>
+          <span class="go-live-badge" id="go-live-badge">Standby</span>
+        </div>
+        <div class="go-live-body">
+          <div class="launch-switch-wrap">
+            <div class="guard-cover" id="go-live-cover" onclick="liftCover()">
+              <span class="cover-label">lift to arm</span>
+            </div>
+            <div class="launch-switch-base">
+              <div class="launch-btn locked" id="go-live-btn" data-armed="false" onclick="setGoLive()">
+                <span id="go-live-icon">🛰️</span>
+              </div>
+            </div>
+          </div>
+          <div class="go-live-info">
+            <div class="go-live-status-row">
+              <div class="go-live-dot" id="go-live-dot"></div>
+              <span class="go-live-status-text" id="go-live-status">Standby — test mode active</span>
+            </div>
+            <div class="go-live-date">Go live date: <span>Jun 15, 2026</span></div>
+            <div class="go-live-hint" id="go-live-hint">Lift the cover to arm, then press to go live</div>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-title">Admin Overview</div>
         <div class="admin-stats">
@@ -1518,7 +1738,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v2.0</span>
+    <span class="version-tag">v2.1</span>
     <span class="footer-name">United Funds Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
