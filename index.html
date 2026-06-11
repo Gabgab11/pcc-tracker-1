@@ -14,8 +14,11 @@
   } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
   import {
     getFirestore, doc, getDoc, setDoc, collection,
-    addDoc, query, where, getDocs, updateDoc, orderBy
+    addDoc, query, where, getDocs, updateDoc, orderBy, onSnapshot, deleteDoc
   } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import {
+    getDatabase, ref, set, onValue, onDisconnect, serverTimestamp
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyArOxp6i7PXFr-2qv2t2MrzBjMdbb-ch0Y",
@@ -23,12 +26,14 @@
     projectId: "pcc-tracker-a5d75",
     storageBucket: "pcc-tracker-a5d75.firebasestorage.app",
     messagingSenderId: "179792229358",
-    appId: "1:179792229358:web:bf49bcccd206daa1bf94ff"
+    appId: "1:179792229358:web:bf49bcccd206daa1bf94ff",
+    databaseURL: "https://pcc-tracker-a5d75-default-rtdb.firebaseio.com"
   };
 
   const app  = initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db   = getFirestore(app);
+  const rtdb = getDatabase(app);
 
   const ROLE_MAP = {
     'info@unitedfund.net':      { role: 'admin',  name: 'Admin'     },
@@ -49,7 +54,16 @@
   let currentUser = null;
   let deals       = [];
   let transfers   = [];
-  let goLiveDate  = null; // null = no filter; "YYYY-MM-DD" = floor date
+  let goLiveDate   = null;
+  let wt_enabled   = false;
+  let onlineUsers  = {};
+  let presenceRef  = null;
+  let signalUnsub  = null;
+  let localStream  = null;
+  let peerConns    = {};
+  let isTalking    = false;
+  let selectedTarget = null;
+  const ICE = { iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}] }; // null = no filter; "YYYY-MM-DD" = floor date
 
   function syncGlobals() {
     window._deals       = deals;
@@ -151,6 +165,206 @@
       return d >= goLiveDate;
     });
   }
+
+
+  // ── WALKIE TALKIE ENABLE/DISABLE ─────────
+  async function loadWTEnabled() {
+    try {
+      const snap = await getDoc(doc(db,'config','walkieTalkie'));
+      wt_enabled = snap.exists() ? (snap.data().enabled===true) : false;
+    } catch(e) { wt_enabled=false; }
+    updateWTTabVisibility();
+    updateWTAdminUI();
+  }
+
+  window.toggleWT = async function() {
+    if (!currentUser||currentUser.role!=='admin') return;
+    wt_enabled = !wt_enabled;
+    try {
+      await setDoc(doc(db,'config','walkieTalkie'),{enabled:wt_enabled,updatedAt:new Date().toISOString()});
+      updateWTTabVisibility();
+      updateWTAdminUI();
+      toast(wt_enabled?'📻 Walkie Talkie enabled for all!':'📻 Walkie Talkie disabled.',wt_enabled?'success':'fire');
+    } catch(e){toast('Failed to update setting.','error');}
+  };
+
+  function updateWTTabVisibility() {
+    const tab=document.getElementById('wt-tab-btn');
+    if (tab) tab.style.display=wt_enabled?'inline-flex':'none';
+  }
+
+  function updateWTAdminUI() {
+    const knob=document.getElementById('wt-toggle-knob');
+    const icon=document.getElementById('wt-toggle-icon');
+    const status=document.getElementById('wt-admin-status');
+    const toggle=document.getElementById('wt-admin-toggle');
+    if (!toggle) return;
+    if (wt_enabled) {
+      toggle.classList.add('enabled');
+      if (knob) knob.classList.add('on');
+      if (icon) icon.textContent='📻';
+      if (status){status.textContent='Enabled — all users can see Walkie Talkie';status.style.color='var(--green)';}
+    } else {
+      toggle.classList.remove('enabled');
+      if (knob) knob.classList.remove('on');
+      if (icon) icon.textContent='🔇';
+      if (status){status.textContent='Disabled — hidden from all users';status.style.color='var(--muted)';}
+    }
+  }
+
+  // ── PRESENCE ──────────────────────────────
+  function startPresence() {
+    if (!currentUser) return;
+    presenceRef = ref(rtdb,`presence/${currentUser.uid}`);
+    set(presenceRef,{name:currentUser.name,role:currentUser.role,email:currentUser.email,online:true,lastSeen:serverTimestamp()});
+    onDisconnect(presenceRef).update({online:false,lastSeen:serverTimestamp()});
+    onValue(ref(rtdb,'presence'),(snap)=>{
+      onlineUsers={};
+      snap.forEach(child=>{
+        const d=child.val();
+        if (d&&d.online) onlineUsers[child.key]=d;
+      });
+      window._onlineUsers=onlineUsers;
+      renderWTUserList();
+    });
+  }
+
+  function stopPresence() {
+    if (presenceRef) { set(presenceRef,{online:false,lastSeen:serverTimestamp()}); presenceRef=null; }
+  }
+
+  // ── WT USER LIST ──────────────────────────
+  function renderWTUserList() {
+    const wrap=document.getElementById('wt-user-list');
+    if (!wrap) return;
+    const others=Object.entries(onlineUsers).filter(([uid])=>uid!==currentUser.uid);
+    others.sort((a,b)=>({'admin':0,'closer':1,'opener':2}[a[1].role]||9)-({'admin':0,'closer':1,'opener':2}[b[1].role]||9));
+    const roleEmoji={'admin':'⚙️','closer':'🤝','opener':'📞'};
+    wrap.innerHTML='';
+    // Everyone broadcast card
+    const evDiv=document.createElement('div');
+    evDiv.className='wt-user-card broadcast'+(selectedTarget==='all'?' selected':'');
+    evDiv.onclick=()=>selectWTTarget('all','Everyone');
+    evDiv.innerHTML=`<div class="wt-avatar broadcast-av">📢</div><div class="wt-user-info"><div class="wt-user-name">Everyone</div><div class="wt-user-role">Broadcast to all online</div></div><div class="wt-online-count">${others.length} online</div>`;
+    wrap.appendChild(evDiv);
+    if (others.length===0) { const e=document.createElement('div');e.className='wt-empty';e.textContent='No teammates online right now';wrap.appendChild(e);return; }
+    others.forEach(([uid,user])=>{
+      const div=document.createElement('div');
+      div.className='wt-user-card'+(selectedTarget===uid?' selected':'');
+      div.onclick=()=>selectWTTarget(uid,user.name);
+      div.innerHTML=`<div class="wt-status-dot online"></div><div class="wt-avatar" style="margin-left:8px">${(user.name||'?')[0].toUpperCase()}</div><div class="wt-user-info"><div class="wt-user-name">${user.name}</div><div class="wt-user-role">${roleEmoji[user.role]||''} ${user.role.charAt(0).toUpperCase()+user.role.slice(1)}</div></div>`;
+      wrap.appendChild(div);
+    });
+  }
+
+  function selectWTTarget(uid,name) {
+    selectedTarget=uid;
+    const label=document.getElementById('wt-target-label');
+    if (label) label.textContent=`Talking to: ${name}`;
+    const pttBtn=document.getElementById('wt-ptt-btn');
+    if (pttBtn) pttBtn.disabled=false;
+    renderWTUserList();
+  }
+
+  // ── PTT ───────────────────────────────────
+  async function getMic() {
+    if (localStream) return localStream;
+    try { localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false}); return localStream; }
+    catch(e) { toast('Microphone access denied. Please allow mic in your browser.','error'); return null; }
+  }
+
+  function playBeep(freq,dur) {
+    try {
+      const ctx=new(window.AudioContext||window.webkitAudioContext)();
+      const osc=ctx.createOscillator(),gain=ctx.createGain();
+      osc.connect(gain);gain.connect(ctx.destination);
+      osc.frequency.value=freq;
+      gain.gain.setValueAtTime(0.3,ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+dur);
+      osc.start();osc.stop(ctx.currentTime+dur);
+    } catch(e){}
+  }
+
+  window.startTalking = async function() {
+    if (!selectedTarget){toast('Select who to talk to first.');return;}
+    if (isTalking) return;
+    isTalking=true;
+    const stream=await getMic();
+    if (!stream){isTalking=false;return;}
+    const pttBtn=document.getElementById('wt-ptt-btn');
+    const pttIcon=document.getElementById('wt-ptt-icon');
+    const pttLbl=document.getElementById('wt-ptt-label');
+    if (pttBtn) pttBtn.classList.add('talking');
+    if (pttIcon) pttIcon.textContent='🔴';
+    if (pttLbl) pttLbl.textContent='TRANSMITTING…';
+    playBeep(880,0.08);
+    const targets=selectedTarget==='all'?Object.keys(onlineUsers).filter(uid=>uid!==currentUser.uid):[selectedTarget];
+    for (const tuid of targets) {
+      try {
+        const pc=new RTCPeerConnection(ICE);
+        peerConns[tuid]=pc;
+        stream.getTracks().forEach(track=>pc.addTrack(track,stream));
+        pc.onicecandidate=async(e)=>{if(e.candidate){await setDoc(doc(db,'wt_ice',`${currentUser.uid}_to_${tuid}`),{candidate:JSON.stringify(e.candidate),from:currentUser.uid,to:tuid,ts:new Date().toISOString()});}};
+        const offer=await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await setDoc(doc(db,'wt_offers',`${currentUser.uid}_to_${tuid}`),{offer:JSON.stringify(offer),from:currentUser.uid,fromName:currentUser.name,to:tuid,ts:new Date().toISOString()});
+      } catch(e){console.error('offer error',e);}
+    }
+    await setDoc(doc(db,'wt_signals',`tx_${currentUser.uid}`),{from:currentUser.uid,fromName:currentUser.name,targets,action:'talking',ts:new Date().toISOString()});
+  };
+
+  window.stopTalking = async function() {
+    if (!isTalking) return;
+    isTalking=false;
+    playBeep(440,0.08);
+    const pttBtn=document.getElementById('wt-ptt-btn');
+    const pttIcon=document.getElementById('wt-ptt-icon');
+    const pttLbl=document.getElementById('wt-ptt-label');
+    if (pttBtn) pttBtn.classList.remove('talking');
+    if (pttIcon) pttIcon.textContent='🎙️';
+    if (pttLbl) pttLbl.textContent='HOLD TO TALK';
+    Object.values(peerConns).forEach(pc=>pc.close());
+    peerConns={};
+    try{await deleteDoc(doc(db,'wt_signals',`tx_${currentUser.uid}`));}catch(e){}
+  };
+
+  function listenForIncomingCalls() {
+    if (!currentUser) return;
+    const offersQ=query(collection(db,'wt_offers'),where('to','==',currentUser.uid));
+    if (signalUnsub) signalUnsub();
+    signalUnsub=onSnapshot(offersQ,async(snap)=>{
+      for (const change of snap.docChanges()) {
+        if (change.type==='added') {
+          const data=change.doc.data();
+          try {
+            const pc=new RTCPeerConnection(ICE);
+            peerConns[data.from]=pc;
+            pc.ontrack=(e)=>{const audio=new Audio();audio.srcObject=e.streams[0];audio.play().catch(()=>{});};
+            pc.onicecandidate=async(e)=>{if(e.candidate){await setDoc(doc(db,'wt_ice',`${currentUser.uid}_to_${data.from}_ans`),{candidate:JSON.stringify(e.candidate),from:currentUser.uid,to:data.from,ts:new Date().toISOString()});}};
+            await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(data.offer)));
+            const answer=await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await setDoc(doc(db,'wt_answers',change.doc.id),{answer:JSON.stringify(answer),from:currentUser.uid,to:data.from,ts:new Date().toISOString()});
+          } catch(e){console.error('answer error',e);}
+        }
+      }
+    });
+    // Incoming transmit indicator
+    onSnapshot(collection(db,'wt_signals'),(snap)=>{
+      snap.docChanges().forEach(change=>{
+        const d=change.doc.data();
+        if (change.type==='added'&&d.from!==currentUser.uid) showIncoming(d.fromName);
+        if (change.type==='removed') hideIncoming();
+      });
+    });
+  }
+
+  function showIncoming(name) {
+    const el=document.getElementById('wt-incoming');
+    if (el){el.textContent=`📻 ${name} is talking…`;el.style.display='block';}
+    playBeep(660,0.06);
+  }
+  function hideIncoming(){const el=document.getElementById('wt-incoming');if(el)el.style.display='none';}
 
   // ── COMMISSION LOGIC ──────────────────────
   function closerBaseComm(monthly) {
@@ -330,8 +544,12 @@
   };
 
   window.doLogout = async function() {
+    stopPresence();
+    if (signalUnsub){signalUnsub();signalUnsub=null;}
+    Object.values(peerConns).forEach(pc=>pc.close()); peerConns={};
+    if (localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null;}
     await signOut(auth);
-    deals = []; transfers = []; goLiveDate = null;
+    deals=[]; transfers=[]; goLiveDate=null; wt_enabled=false; onlineUsers={};
     syncGlobals();
     document.getElementById('app').classList.remove('visible');
     document.getElementById('li-email').value = '';
@@ -373,21 +591,25 @@
     if (role === 'closer') { switchPanel('closer'); autoFillCloserName(); }
     if (role === 'opener') { switchPanel('opener'); autoFillOpenerName(); }
     await loadGoLiveDate();
+    await loadWTEnabled();
     syncGlobals();
+    startPresence();
+    listenForIncomingCalls();
     loadData();
   }
 
   window.switchPanel = function(name) {
     if (!currentUser) return;
     const role = currentUser.role;
-    if (role === 'opener' && name !== 'opener') return;
-    if (role === 'closer' && name !== 'closer') return;
+    if (role==='opener' && name!=='opener' && name!=='walkie') return;
+    if (role==='closer' && name!=='closer' && name!=='walkie') return;
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     document.getElementById('panel-' + name).classList.add('active');
     document.querySelectorAll('.role-btn').forEach((b, i) => {
       b.classList.toggle('active', ['opener','closer','admin'][i] === name);
     });
-    if (name === 'admin') loadData();
+    if (name==='admin') loadData();
+    if (name==='walkie') renderWTUserList();
   };
 
   // ── CORE DATA LOAD ────────────────────────
@@ -646,6 +868,7 @@
   window.refreshAdmin = async function() {
     if (!currentUser || currentUser.role !== 'admin') return;
     await loadGoLiveDate();
+    await loadWTEnabled();
     await loadData();
   };
 
@@ -862,6 +1085,15 @@
     document.getElementById('li-pass')?.addEventListener('keydown', e => {
       if (e.key === 'Enter') window.doLogin();
     });
+    // PTT button events
+    const pttBtn = document.getElementById('wt-ptt-btn');
+    if (pttBtn) {
+      pttBtn.addEventListener('mousedown', window.startTalking);
+      pttBtn.addEventListener('mouseup',   window.stopTalking);
+      pttBtn.addEventListener('mouseleave', window.stopTalking);
+      pttBtn.addEventListener('touchstart', e=>{ e.preventDefault(); window.startTalking(); }, {passive:false});
+      pttBtn.addEventListener('touchend',   e=>{ e.preventDefault(); window.stopTalking(); },  {passive:false});
+    }
   });
 </script>
 
@@ -1385,6 +1617,57 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .footer-name{font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
 .footer-copy{font-size:10px;letter-spacing:1px;color:var(--muted);opacity:.4;}
 
+
+/* ── WALKIE TALKIE ADMIN TOGGLE ── */
+.wt-admin-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:24px 26px;margin-bottom:18px;box-shadow:var(--card-shadow);transition:background .3s,border-color .3s;}
+.wt-admin-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;border-bottom:1px solid var(--border);padding-bottom:14px;}
+.wt-admin-title{font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;color:var(--accent);}
+.wt-admin-body{display:flex;align-items:center;gap:20px;flex-wrap:wrap;}
+.wt-pill-toggle{width:56px;height:30px;border-radius:15px;background:var(--surface2);border:1.5px solid var(--border);cursor:pointer;padding:3px;display:flex;align-items:center;transition:background .35s,border-color .35s;flex-shrink:0;}
+.wt-pill-toggle.enabled{background:rgba(34,211,160,.2);border-color:var(--green);}
+.wt-pill-toggle:hover{border-color:var(--accent);}
+.wt-knob{width:22px;height:22px;border-radius:50%;background:var(--muted);transition:transform .35s cubic-bezier(.34,1.56,.64,1),background .3s;display:flex;align-items:center;justify-content:center;font-size:11px;box-shadow:0 1px 4px rgba(0,0,0,.3);}
+.wt-knob.on{transform:translateX(26px);background:var(--green);}
+.wt-admin-info{flex:1;}
+.wt-admin-desc{font-size:13px;color:var(--muted);line-height:1.6;}
+.wt-admin-status{font-size:12px;font-weight:600;margin-top:4px;}
+
+/* ── WALKIE TALKIE PANEL ── */
+.wt-header-bar{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px 20px;margin-bottom:16px;box-shadow:var(--card-shadow);position:relative;overflow:hidden;}
+.wt-header-bar::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(56,189,248,.04),rgba(99,102,241,.04));pointer-events:none;}
+.wt-header-title{font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:3px;color:var(--accent);margin-bottom:2px;}
+.wt-header-sub{font-size:11px;color:var(--muted);letter-spacing:1px;}
+.wt-incoming{display:none;background:rgba(34,211,160,.12);border:1px solid rgba(34,211,160,.3);border-radius:10px;padding:10px 16px;margin-bottom:14px;font-size:13px;font-weight:600;color:var(--green);text-align:center;animation:pulse-soft 1s infinite;}
+@keyframes pulse-soft{0%,100%{opacity:1}50%{opacity:.6}}
+.wt-section-label{font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);margin:16px 0 10px;}
+.wt-user-list{display:flex;flex-direction:column;gap:8px;margin-bottom:20px;}
+.wt-user-card{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:12px;cursor:pointer;transition:border-color .2s,background .2s;position:relative;}
+.wt-user-card:hover{border-color:rgba(56,189,248,.4);background:rgba(56,189,248,.04);}
+.wt-user-card.selected{border-color:var(--accent);background:rgba(56,189,248,.08);}
+.wt-user-card.broadcast{border-style:dashed;border-color:rgba(245,158,11,.3);}
+.wt-user-card.broadcast:hover{border-color:var(--yellow);background:rgba(245,158,11,.05);}
+.wt-user-card.broadcast.selected{border-color:var(--yellow);background:rgba(245,158,11,.1);border-style:solid;}
+.wt-status-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0;position:absolute;top:10px;left:10px;}
+.wt-status-dot.online{background:var(--green);box-shadow:0 0 6px rgba(34,211,160,.5);}
+.wt-avatar{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--accent3),var(--accent));display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0;}
+.wt-avatar.broadcast-av{background:linear-gradient(135deg,var(--yellow),#f97316);font-size:16px;}
+.wt-user-info{flex:1;}
+.wt-user-name{font-size:14px;font-weight:600;color:var(--text);}
+.wt-user-role{font-size:11px;color:var(--muted);margin-top:1px;}
+.wt-online-count{font-size:12px;font-weight:600;color:var(--yellow);background:rgba(245,158,11,.1);padding:3px 10px;border-radius:10px;}
+.wt-empty{text-align:center;padding:20px;color:var(--muted);font-size:13px;}
+.wt-ptt-wrap{position:sticky;bottom:20px;display:flex;flex-direction:column;align-items:center;gap:10px;padding:20px;background:var(--surface);border:1px solid var(--border);border-radius:20px;box-shadow:var(--card-shadow);margin-top:10px;}
+.wt-target-label{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.5px;min-height:18px;}
+.wt-ptt-btn{width:100px;height:100px;border-radius:50%;border:3px solid var(--border);background:var(--surface2);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;transition:all .2s;user-select:none;-webkit-user-select:none;touch-action:none;}
+.wt-ptt-btn:not(:disabled):hover{border-color:var(--accent);background:rgba(56,189,248,.06);transform:scale(1.04);}
+.wt-ptt-btn:disabled{opacity:.35;cursor:not-allowed;}
+.wt-ptt-btn.talking{border-color:var(--red);background:rgba(244,63,94,.12);transform:scale(1.08);box-shadow:0 0 32px rgba(244,63,94,.3),0 0 0 8px rgba(244,63,94,.08);}
+.wt-ptt-icon{font-size:30px;line-height:1;pointer-events:none;}
+.wt-ptt-label{font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);pointer-events:none;}
+.wt-ptt-btn.talking .wt-ptt-label{color:var(--red);}
+.wt-hint{font-size:11px;color:var(--muted);text-align:center;letter-spacing:.3px;}
+.role-btn#wt-tab-btn{display:none;}
+
 @media(max-width:540px){
   .filter-grid{grid-template-columns:1fr;}
   .tier-steps{grid-template-columns:repeat(2,1fr);}
@@ -1462,6 +1745,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
       <button class="role-btn active" onclick="switchPanel('opener')">Opener</button>
       <button class="role-btn" onclick="switchPanel('closer')">Closer</button>
       <button class="role-btn" onclick="switchPanel('admin')">Admin</button>
+      <button class="role-btn" id="wt-tab-btn" onclick="switchPanel('walkie')">📻 Walkie</button>
     </div>
   </header>
 
@@ -1681,6 +1965,20 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         </div>
       </div>
 
+      <!-- WALKIE TALKIE ADMIN CONTROL -->
+      <div class="wt-admin-card">
+        <div class="wt-admin-header"><span class="wt-admin-title">📻 Walkie Talkie</span></div>
+        <div class="wt-admin-body">
+          <div class="wt-pill-toggle" id="wt-admin-toggle" onclick="toggleWT()">
+            <div class="wt-knob" id="wt-toggle-knob"><span id="wt-toggle-icon">🔇</span></div>
+          </div>
+          <div class="wt-admin-info">
+            <div class="wt-admin-desc">Toggle the walkie talkie tab for all team members. When enabled, everyone sees a 📻 Walkie tab and can talk to each other in real-time.</div>
+            <div class="wt-admin-status" id="wt-admin-status">Disabled — hidden from all users</div>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-title">Admin Overview</div>
         <div class="admin-stats">
@@ -1735,10 +2033,31 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
       <div id="adm-transfers"><div class="empty">No transfers submitted yet.</div></div>
     </div>
 
+    <!-- ── WALKIE TALKIE PANEL ── -->
+    <div class="panel" id="panel-walkie">
+      <div class="wt-header-bar">
+        <div class="wt-header-title">📻 Walkie Talkie</div>
+        <div class="wt-header-sub">Select a teammate · Hold the button to talk · Release when done</div>
+      </div>
+      <div class="wt-incoming" id="wt-incoming"></div>
+      <div class="wt-section-label">Who's online right now</div>
+      <div class="wt-user-list" id="wt-user-list">
+        <div class="wt-empty">Loading teammates…</div>
+      </div>
+      <div class="wt-ptt-wrap">
+        <div class="wt-target-label" id="wt-target-label">Select someone above first</div>
+        <button class="wt-ptt-btn" id="wt-ptt-btn" disabled>
+          <span class="wt-ptt-icon" id="wt-ptt-icon">🎙️</span>
+          <span class="wt-ptt-label" id="wt-ptt-label">HOLD TO TALK</span>
+        </button>
+        <div class="wt-hint">Hold while speaking · Release when done</div>
+      </div>
+    </div>
+
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v2.1</span>
+    <span class="version-tag">v3.0</span>
     <span class="footer-name">United Funds Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
