@@ -189,8 +189,14 @@
   };
 
   function updateWTTabVisibility() {
-    const tab=document.getElementById('wt-tab-btn');
-    if (tab) tab.style.display=wt_enabled?'inline-flex':'none';
+    // Admin tab in role-bar
+    const tab = document.getElementById('wt-tab-btn');
+    if (tab) tab.style.display = wt_enabled ? 'inline-flex' : 'none';
+    // Floating walkie button for opener & closer
+    ['wt-float-opener','wt-float-closer'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = wt_enabled ? 'flex' : 'none';
+    });
   }
 
   function updateWTAdminUI() {
@@ -247,6 +253,17 @@
     evDiv.onclick=()=>selectWTTarget('all','Everyone');
     evDiv.innerHTML=`<div class="wt-avatar broadcast-av">📢</div><div class="wt-user-info"><div class="wt-user-name">Everyone</div><div class="wt-user-role">Broadcast to all online</div></div><div class="wt-online-count">${others.length} online</div>`;
     wrap.appendChild(evDiv);
+    // Update floating button counts for opener/closer
+    const countText = others.length === 0 ? 'No teammates online' : `${others.length} teammate${others.length>1?'s':''} online`;
+    ['wt-float-count-opener','wt-float-count-closer'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = countText;
+    });
+    ['wt-float-dot-opener','wt-float-dot-closer'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.className = 'wt-float-dot' + (others.length > 0 ? ' has-online' : '');
+    });
+
     if (others.length===0) { const e=document.createElement('div');e.className='wt-empty';e.textContent='No teammates online right now';wrap.appendChild(e);return; }
     others.forEach(([uid,user])=>{
       const div=document.createElement('div');
@@ -330,6 +347,16 @@
 
   function listenForIncomingCalls() {
     if (!currentUser) return;
+    // Listen for WT enabled/disabled changes in real-time
+    onSnapshot(doc(db,'config','walkieTalkie'),(snap)=>{
+      const wasEnabled = wt_enabled;
+      wt_enabled = snap.exists() ? (snap.data().enabled===true) : false;
+      if (wasEnabled !== wt_enabled) {
+        updateWTTabVisibility();
+        updateWTAdminUI();
+        if (wt_enabled) toast('📻 Walkie Talkie is now available!','fire');
+      }
+    });
     const offersQ=query(collection(db,'wt_offers'),where('to','==',currentUser.uid));
     if (signalUnsub) signalUnsub();
     signalUnsub=onSnapshot(offersQ,async(snap)=>{
@@ -1618,6 +1645,26 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .footer-copy{font-size:10px;letter-spacing:1px;color:var(--muted);opacity:.4;}
 
 
+
+/* ── WALKIE FLOAT BUTTON (opener & closer) ── */
+.wt-float-btn{
+  display:flex;align-items:center;gap:14px;
+  background:linear-gradient(135deg,rgba(56,189,248,.08),rgba(99,102,241,.06));
+  border:1px solid rgba(56,189,248,.25);border-radius:14px;
+  padding:14px 18px;margin-bottom:18px;cursor:pointer;
+  transition:background .2s,border-color .2s,transform .15s;
+  position:relative;overflow:hidden;
+}
+.wt-float-btn::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(56,189,248,.04),transparent);pointer-events:none;}
+.wt-float-btn:hover{background:linear-gradient(135deg,rgba(56,189,248,.14),rgba(99,102,241,.1));border-color:var(--accent);transform:translateY(-1px);}
+.wt-float-btn:active{transform:translateY(0);}
+.wt-float-icon{font-size:28px;line-height:1;flex-shrink:0;}
+.wt-float-info{flex:1;display:flex;flex-direction:column;gap:2px;}
+.wt-float-label{font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:2px;color:var(--accent);}
+.wt-float-sub{font-size:11px;color:var(--muted);letter-spacing:.5px;}
+.wt-float-dot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s;}
+.wt-float-dot.has-online{background:var(--green);box-shadow:0 0 8px rgba(34,211,160,.5);animation:glpulse 1.4s infinite;}
+
 /* ── WALKIE TALKIE ADMIN TOGGLE ── */
 .wt-admin-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:24px 26px;margin-bottom:18px;box-shadow:var(--card-shadow);transition:background .3s,border-color .3s;}
 .wt-admin-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;border-bottom:1px solid var(--border);padding-bottom:14px;}
@@ -1762,6 +1809,14 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         <div class="shift-tag" id="shift-tag-opener">Egypt: 5PM – 2AM &nbsp;·&nbsp; Mon–Fri</div>
       </div>
       <div class="eod-summary" id="eod-opener" style="display:none"></div>
+      <div class="wt-float-btn" id="wt-float-opener" style="display:none" onclick="switchPanel('walkie')">
+        <span class="wt-float-icon">📻</span>
+        <div class="wt-float-info">
+          <span class="wt-float-label">Walkie Talkie</span>
+          <span class="wt-float-sub" id="wt-float-count-opener">Tap to open team radio</span>
+        </div>
+        <div class="wt-float-dot" id="wt-float-dot-opener"></div>
+      </div>
 
       <div class="tier-tracker" id="op-tier-tracker">
         <div class="tier-title">📈 Today's Commission Tier</div>
@@ -1871,6 +1926,14 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         <div class="shift-tag" id="shift-tag-closer">Egypt: 5PM – 2AM &nbsp;·&nbsp; Mon–Fri</div>
       </div>
       <div class="eod-summary" id="eod-closer" style="display:none"></div>
+      <div class="wt-float-btn" id="wt-float-closer" style="display:none" onclick="switchPanel('walkie')">
+        <span class="wt-float-icon">📻</span>
+        <div class="wt-float-info">
+          <span class="wt-float-label">Walkie Talkie</span>
+          <span class="wt-float-sub" id="wt-float-count-closer">Tap to open team radio</span>
+        </div>
+        <div class="wt-float-dot" id="wt-float-dot-closer"></div>
+      </div>
 
       <div class="card">
         <div class="card-title">Closer Submission</div>
@@ -2057,7 +2120,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v3.0</span>
+    <span class="version-tag">v3.1</span>
     <span class="footer-name">United Funds Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
