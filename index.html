@@ -42,7 +42,6 @@
     'eddy@pcc.com':             { role: 'closer', name: 'Eddy'      },
     'willy@pcc.com':            { role: 'closer', name: 'Willy'     },
     'nate@pcc.com':             { role: 'closer', name: 'Nathan'    },
-    'kiley@unitedfunds.com':    { role: 'opener', name: 'Kiley'     },
     'sara@unitedfunds.com':     { role: 'opener', name: 'Sara'      },
     'kate@unitedfunds.com':     { role: 'opener', name: 'Kate'      },
     'mona@pcc.com':             { role: 'opener', name: 'Mona'      },
@@ -54,16 +53,8 @@
   let currentUser = null;
   let deals       = [];
   let transfers   = [];
-  let goLiveDate   = null;
-  let wt_enabled   = false;
-  let onlineUsers  = {};
-  let presenceRef  = null;
-  let signalUnsub  = null;
-  let localStream  = null;
-  let peerConns    = {};
-  let isTalking    = false;
-  let selectedTarget = null;
-  const ICE = { iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}] }; // null = no filter; "YYYY-MM-DD" = floor date
+  let goLiveDate  = null;
+  let presenceRef = null;
 
   function syncGlobals() {
     window._deals       = deals;
@@ -100,7 +91,7 @@
     const btn    = document.getElementById('go-live-btn');
     const hint   = document.getElementById('go-live-hint');
     if (!cover || !btn) return;
-    if (goLiveDate) return; // already live, do nothing
+    if (goLiveDate) return;
     const isArmed = btn.dataset.armed === 'true';
     if (!isArmed) {
       btn.dataset.armed = 'true';
@@ -118,16 +109,15 @@
   };
 
   function updateGoLiveUI() {
-    const cover      = document.getElementById('go-live-cover');
-    const btn        = document.getElementById('go-live-btn');
-    const dot        = document.getElementById('go-live-dot');
-    const statusEl   = document.getElementById('go-live-status');
-    const hint       = document.getElementById('go-live-hint');
-    const btnIcon    = document.getElementById('go-live-icon');
+    const cover    = document.getElementById('go-live-cover');
+    const btn      = document.getElementById('go-live-btn');
+    const dot      = document.getElementById('go-live-dot');
+    const statusEl = document.getElementById('go-live-status');
+    const hint     = document.getElementById('go-live-hint');
+    const btnIcon  = document.getElementById('go-live-icon');
     if (!btn) return;
 
     if (goLiveDate) {
-      // Locked live state
       if (cover) {
         cover.classList.remove('open');
         cover.style.opacity = '0.35';
@@ -142,7 +132,6 @@
       if (statusEl) { statusEl.classList.add('live'); statusEl.textContent = 'Live — Jun 15, 2026'; }
       if (hint) { hint.textContent = 'Test data hidden from all users'; hint.style.color = '#1D9E75'; }
     } else {
-      // Standby state
       if (cover) {
         cover.style.opacity = '';
         cover.style.pointerEvents = '';
@@ -166,232 +155,17 @@
     });
   }
 
-
-  // ── WALKIE TALKIE ENABLE/DISABLE ─────────
-  async function loadWTEnabled() {
-    try {
-      const snap = await getDoc(doc(db,'config','walkieTalkie'));
-      wt_enabled = snap.exists() ? (snap.data().enabled===true) : false;
-    } catch(e) { wt_enabled=false; }
-    updateWTTabVisibility();
-    updateWTAdminUI();
-  }
-
-  window.toggleWT = async function() {
-    if (!currentUser||currentUser.role!=='admin') return;
-    wt_enabled = !wt_enabled;
-    try {
-      await setDoc(doc(db,'config','walkieTalkie'),{enabled:wt_enabled,updatedAt:new Date().toISOString()});
-      updateWTTabVisibility();
-      updateWTAdminUI();
-      toast(wt_enabled?'📻 Walkie Talkie enabled for all!':'📻 Walkie Talkie disabled.',wt_enabled?'success':'fire');
-    } catch(e){toast('Failed to update setting.','error');}
-  };
-
-  function updateWTTabVisibility() {
-    // Admin tab in role-bar
-    const tab = document.getElementById('wt-tab-btn');
-    if (tab) tab.style.display = wt_enabled ? 'inline-flex' : 'none';
-    // Floating walkie button for opener & closer
-    ['wt-float-opener','wt-float-closer'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.style.display = wt_enabled ? 'flex' : 'none';
-    });
-  }
-
-  function updateWTAdminUI() {
-    const knob=document.getElementById('wt-toggle-knob');
-    const icon=document.getElementById('wt-toggle-icon');
-    const status=document.getElementById('wt-admin-status');
-    const toggle=document.getElementById('wt-admin-toggle');
-    if (!toggle) return;
-    if (wt_enabled) {
-      toggle.classList.add('enabled');
-      if (knob) knob.classList.add('on');
-      if (icon) icon.textContent='📻';
-      if (status){status.textContent='Enabled — all users can see Walkie Talkie';status.style.color='var(--green)';}
-    } else {
-      toggle.classList.remove('enabled');
-      if (knob) knob.classList.remove('on');
-      if (icon) icon.textContent='🔇';
-      if (status){status.textContent='Disabled — hidden from all users';status.style.color='var(--muted)';}
-    }
-  }
-
-  // ── PRESENCE ──────────────────────────────
+  // ── PRESENCE (kept minimal for admin online tracking) ──
   function startPresence() {
     if (!currentUser) return;
-    presenceRef = ref(rtdb,`presence/${currentUser.uid}`);
-    set(presenceRef,{name:currentUser.name,role:currentUser.role,email:currentUser.email,online:true,lastSeen:serverTimestamp()});
-    onDisconnect(presenceRef).update({online:false,lastSeen:serverTimestamp()});
-    onValue(ref(rtdb,'presence'),(snap)=>{
-      onlineUsers={};
-      snap.forEach(child=>{
-        const d=child.val();
-        if (d&&d.online) onlineUsers[child.key]=d;
-      });
-      window._onlineUsers=onlineUsers;
-      renderWTUserList();
-    });
+    presenceRef = ref(rtdb, `presence/${currentUser.uid}`);
+    set(presenceRef, { name: currentUser.name, role: currentUser.role, email: currentUser.email, online: true, lastSeen: serverTimestamp() });
+    onDisconnect(presenceRef).update({ online: false, lastSeen: serverTimestamp() });
   }
 
   function stopPresence() {
-    if (presenceRef) { set(presenceRef,{online:false,lastSeen:serverTimestamp()}); presenceRef=null; }
+    if (presenceRef) { set(presenceRef, { online: false, lastSeen: serverTimestamp() }); presenceRef = null; }
   }
-
-  // ── WT USER LIST ──────────────────────────
-  function renderWTUserList() {
-    const wrap=document.getElementById('wt-user-list');
-    if (!wrap) return;
-    const others=Object.entries(onlineUsers).filter(([uid])=>uid!==currentUser.uid);
-    others.sort((a,b)=>({'admin':0,'closer':1,'opener':2}[a[1].role]||9)-({'admin':0,'closer':1,'opener':2}[b[1].role]||9));
-    const roleEmoji={'admin':'⚙️','closer':'🤝','opener':'📞'};
-    wrap.innerHTML='';
-    // Everyone broadcast card
-    const evDiv=document.createElement('div');
-    evDiv.className='wt-user-card broadcast'+(selectedTarget==='all'?' selected':'');
-    evDiv.onclick=()=>selectWTTarget('all','Everyone');
-    evDiv.innerHTML=`<div class="wt-avatar broadcast-av">📢</div><div class="wt-user-info"><div class="wt-user-name">Everyone</div><div class="wt-user-role">Broadcast to all online</div></div><div class="wt-online-count">${others.length} online</div>`;
-    wrap.appendChild(evDiv);
-    // Update floating button counts for opener/closer
-    const countText = others.length === 0 ? 'No teammates online' : `${others.length} teammate${others.length>1?'s':''} online`;
-    ['wt-float-count-opener','wt-float-count-closer'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = countText;
-    });
-    ['wt-float-dot-opener','wt-float-dot-closer'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.className = 'wt-float-dot' + (others.length > 0 ? ' has-online' : '');
-    });
-
-    if (others.length===0) { const e=document.createElement('div');e.className='wt-empty';e.textContent='No teammates online right now';wrap.appendChild(e);return; }
-    others.forEach(([uid,user])=>{
-      const div=document.createElement('div');
-      div.className='wt-user-card'+(selectedTarget===uid?' selected':'');
-      div.onclick=()=>selectWTTarget(uid,user.name);
-      div.innerHTML=`<div class="wt-status-dot online"></div><div class="wt-avatar" style="margin-left:8px">${(user.name||'?')[0].toUpperCase()}</div><div class="wt-user-info"><div class="wt-user-name">${user.name}</div><div class="wt-user-role">${roleEmoji[user.role]||''} ${user.role.charAt(0).toUpperCase()+user.role.slice(1)}</div></div>`;
-      wrap.appendChild(div);
-    });
-  }
-
-  function selectWTTarget(uid,name) {
-    selectedTarget=uid;
-    const label=document.getElementById('wt-target-label');
-    if (label) label.textContent=`Talking to: ${name}`;
-    const pttBtn=document.getElementById('wt-ptt-btn');
-    if (pttBtn) pttBtn.disabled=false;
-    renderWTUserList();
-  }
-
-  // ── PTT ───────────────────────────────────
-  async function getMic() {
-    if (localStream) return localStream;
-    try { localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false}); return localStream; }
-    catch(e) { toast('Microphone access denied. Please allow mic in your browser.','error'); return null; }
-  }
-
-  function playBeep(freq,dur) {
-    try {
-      const ctx=new(window.AudioContext||window.webkitAudioContext)();
-      const osc=ctx.createOscillator(),gain=ctx.createGain();
-      osc.connect(gain);gain.connect(ctx.destination);
-      osc.frequency.value=freq;
-      gain.gain.setValueAtTime(0.3,ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+dur);
-      osc.start();osc.stop(ctx.currentTime+dur);
-    } catch(e){}
-  }
-
-  window.startTalking = async function() {
-    if (!selectedTarget){toast('Select who to talk to first.');return;}
-    if (isTalking) return;
-    isTalking=true;
-    const stream=await getMic();
-    if (!stream){isTalking=false;return;}
-    const pttBtn=document.getElementById('wt-ptt-btn');
-    const pttIcon=document.getElementById('wt-ptt-icon');
-    const pttLbl=document.getElementById('wt-ptt-label');
-    if (pttBtn) pttBtn.classList.add('talking');
-    if (pttIcon) pttIcon.textContent='🔴';
-    if (pttLbl) pttLbl.textContent='TRANSMITTING…';
-    playBeep(880,0.08);
-    const targets=selectedTarget==='all'?Object.keys(onlineUsers).filter(uid=>uid!==currentUser.uid):[selectedTarget];
-    for (const tuid of targets) {
-      try {
-        const pc=new RTCPeerConnection(ICE);
-        peerConns[tuid]=pc;
-        stream.getTracks().forEach(track=>pc.addTrack(track,stream));
-        pc.onicecandidate=async(e)=>{if(e.candidate){await setDoc(doc(db,'wt_ice',`${currentUser.uid}_to_${tuid}`),{candidate:JSON.stringify(e.candidate),from:currentUser.uid,to:tuid,ts:new Date().toISOString()});}};
-        const offer=await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await setDoc(doc(db,'wt_offers',`${currentUser.uid}_to_${tuid}`),{offer:JSON.stringify(offer),from:currentUser.uid,fromName:currentUser.name,to:tuid,ts:new Date().toISOString()});
-      } catch(e){console.error('offer error',e);}
-    }
-    await setDoc(doc(db,'wt_signals',`tx_${currentUser.uid}`),{from:currentUser.uid,fromName:currentUser.name,targets,action:'talking',ts:new Date().toISOString()});
-  };
-
-  window.stopTalking = async function() {
-    if (!isTalking) return;
-    isTalking=false;
-    playBeep(440,0.08);
-    const pttBtn=document.getElementById('wt-ptt-btn');
-    const pttIcon=document.getElementById('wt-ptt-icon');
-    const pttLbl=document.getElementById('wt-ptt-label');
-    if (pttBtn) pttBtn.classList.remove('talking');
-    if (pttIcon) pttIcon.textContent='🎙️';
-    if (pttLbl) pttLbl.textContent='HOLD TO TALK';
-    Object.values(peerConns).forEach(pc=>pc.close());
-    peerConns={};
-    try{await deleteDoc(doc(db,'wt_signals',`tx_${currentUser.uid}`));}catch(e){}
-  };
-
-  function listenForIncomingCalls() {
-    if (!currentUser) return;
-    // Listen for WT enabled/disabled changes in real-time
-    onSnapshot(doc(db,'config','walkieTalkie'),(snap)=>{
-      const wasEnabled = wt_enabled;
-      wt_enabled = snap.exists() ? (snap.data().enabled===true) : false;
-      if (wasEnabled !== wt_enabled) {
-        updateWTTabVisibility();
-        updateWTAdminUI();
-        if (wt_enabled) toast('📻 Walkie Talkie is now available!','fire');
-      }
-    });
-    const offersQ=query(collection(db,'wt_offers'),where('to','==',currentUser.uid));
-    if (signalUnsub) signalUnsub();
-    signalUnsub=onSnapshot(offersQ,async(snap)=>{
-      for (const change of snap.docChanges()) {
-        if (change.type==='added') {
-          const data=change.doc.data();
-          try {
-            const pc=new RTCPeerConnection(ICE);
-            peerConns[data.from]=pc;
-            pc.ontrack=(e)=>{const audio=new Audio();audio.srcObject=e.streams[0];audio.play().catch(()=>{});};
-            pc.onicecandidate=async(e)=>{if(e.candidate){await setDoc(doc(db,'wt_ice',`${currentUser.uid}_to_${data.from}_ans`),{candidate:JSON.stringify(e.candidate),from:currentUser.uid,to:data.from,ts:new Date().toISOString()});}};
-            await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(data.offer)));
-            const answer=await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            await setDoc(doc(db,'wt_answers',change.doc.id),{answer:JSON.stringify(answer),from:currentUser.uid,to:data.from,ts:new Date().toISOString()});
-          } catch(e){console.error('answer error',e);}
-        }
-      }
-    });
-    // Incoming transmit indicator
-    onSnapshot(collection(db,'wt_signals'),(snap)=>{
-      snap.docChanges().forEach(change=>{
-        const d=change.doc.data();
-        if (change.type==='added'&&d.from!==currentUser.uid) showIncoming(d.fromName);
-        if (change.type==='removed') hideIncoming();
-      });
-    });
-  }
-
-  function showIncoming(name) {
-    const el=document.getElementById('wt-incoming');
-    if (el){el.textContent=`📻 ${name} is talking…`;el.style.display='block';}
-    playBeep(660,0.06);
-  }
-  function hideIncoming(){const el=document.getElementById('wt-incoming');if(el)el.style.display='none';}
 
   // ── COMMISSION LOGIC ──────────────────────
   function closerBaseComm(monthly) {
@@ -418,9 +192,16 @@
   }
 
   // ── OPENER COMMISSION ──
-  const CLOSED_TYPES = ['1st Closed','2nd Close','3rd Closed','4th Closed','pCcT'];
-  const FLAT_COMM    = { 'PCCTsub10': 2, 'Student Loan': 2 };
-  const TIER_RATES   = [5, 7.5, 10, 15];
+  // New lead source types with their commission structure
+  const CLOSED_TYPES = ['1st Close', '2nd Close', '3rd Close'];
+  const FLAT_COMM = {
+    'PccSub10':    1,
+    'PccAbove10':  2,
+    'TaxAbove10':  5,
+    'TaxBelow10':  1,
+    'Student Loan': 2,
+  };
+  const TIER_RATES = [5, 7.50, 10];
 
   function countClosedTransfersToday() {
     const todayStr = new Date().toISOString().slice(0, 10);
@@ -441,9 +222,9 @@
     if (FLAT_COMM[type] !== undefined) return `Flat rate — $${FLAT_COMM[type]} per transfer`;
     if (!CLOSED_TYPES.includes(type)) return '';
     const count = countClosedTransfersToday();
-    const ordinals = ['1st', '2nd', '3rd', '4th+'];
-    const label = ordinals[Math.min(count, 3)];
-    return `${label} closed deal today — $${TIER_RATES[Math.min(count, 3)]} commission`;
+    const ordinals = ['1st', '2nd', '3rd+'];
+    const label = ordinals[Math.min(count, 2)];
+    return `${label} closed deal today — $${TIER_RATES[Math.min(count, 2)]} commission`;
   }
 
   // ── AUTH ──────────────────────────────────
@@ -529,9 +310,9 @@
 
     const defaults = [
       'Admin123','David123','Sabrina123','Eddy123','Willy123','Nate123',
-      'Kiley123','Sara123','Kate123','Mona123','Sean123','Emmanuel123','Tom123',
+      'Sara123','Kate123','Mona123','Sean123','Emmanuel123','Tom123',
       'admin123','david123','sabrina123','eddy123','willy123','nate123',
-      'kiley123','sara123','kate123','mona123','sean123','emmanuel123','tom123'
+      'sara123','kate123','mona123','sean123','emmanuel123','tom123'
     ];
     if (defaults.includes(newPass)) { showError(errEl, 'Please choose a different password from your temporary one.'); return; }
 
@@ -572,11 +353,8 @@
 
   window.doLogout = async function() {
     stopPresence();
-    if (signalUnsub){signalUnsub();signalUnsub=null;}
-    Object.values(peerConns).forEach(pc=>pc.close()); peerConns={};
-    if (localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null;}
     await signOut(auth);
-    deals=[]; transfers=[]; goLiveDate=null; wt_enabled=false; onlineUsers={};
+    deals = []; transfers = []; goLiveDate = null;
     syncGlobals();
     document.getElementById('app').classList.remove('visible');
     document.getElementById('li-email').value = '';
@@ -618,25 +396,22 @@
     if (role === 'closer') { switchPanel('closer'); autoFillCloserName(); }
     if (role === 'opener') { switchPanel('opener'); autoFillOpenerName(); }
     await loadGoLiveDate();
-    await loadWTEnabled();
     syncGlobals();
     startPresence();
-    listenForIncomingCalls();
     loadData();
   }
 
   window.switchPanel = function(name) {
     if (!currentUser) return;
     const role = currentUser.role;
-    if (role==='opener' && name!=='opener' && name!=='walkie') return;
-    if (role==='closer' && name!=='closer' && name!=='walkie') return;
+    if (role === 'opener' && name !== 'opener') return;
+    if (role === 'closer' && name !== 'closer') return;
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     document.getElementById('panel-' + name).classList.add('active');
-    document.querySelectorAll('.role-btn').forEach((b, i) => {
-      b.classList.toggle('active', ['opener','closer','admin'][i] === name);
+    document.querySelectorAll('.role-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.panel === name);
     });
-    if (name==='admin') loadData();
-    if (name==='walkie') renderWTUserList();
+    if (name === 'admin') loadData();
   };
 
   // ── CORE DATA LOAD ────────────────────────
@@ -714,10 +489,9 @@
     const tiers = [
       { label: '1st Close', rate: '$5',    done: count >= 1 },
       { label: '2nd Close', rate: '$7.50', done: count >= 2 },
-      { label: '3rd Close', rate: '$10',   done: count >= 3 },
-      { label: '4th+ Close',rate: '$15',   done: count >= 4 },
+      { label: '3rd+ Close',rate: '$10',   done: count >= 3 },
     ];
-    const nextIdx = Math.min(count, 3);
+    const nextIdx = Math.min(count, 2);
     el.innerHTML = `
       <div class="tier-title">📈 Today's Commission Tier</div>
       <div class="tier-steps">
@@ -734,8 +508,8 @@
       <div class="tier-status">${
         count === 0
           ? 'Submit your first closed deal to start earning!'
-          : count >= 4
-          ? '🔥 Max tier unlocked! Every close is now $15'
+          : count >= 3
+          ? '🔥 Max tier unlocked! Every close is now $10'
           : `Next close earns you $${TIER_RATES[count]} — keep going!`
       }</div>`;
   }
@@ -762,28 +536,27 @@
 
   window.handleTransferType = function() {
     const type = document.getElementById('op-type').value;
-    const salesTypes = ['1st Closed','2nd Close','3rd Closed','4th Closed','pCcT'];
+    const salesTypes = CLOSED_TYPES;
     document.getElementById('op-closer-wrap').style.display = salesTypes.includes(type) ? 'block' : 'none';
     updateOpenerCommPreview();
   };
 
   window.submitOpener = async function() {
-    const openerName   = document.getElementById('op-name').value;
-    const type         = document.getElementById('op-type').value;
-    const transferType = document.getElementById('op-transfer-type').value;
-    const date         = document.getElementById('op-date').value;
-    const phone        = document.getElementById('op-phone').value.trim();
-    const closer       = document.getElementById('op-closer').value;
+    const openerName = document.getElementById('op-name').value;
+    const type       = document.getElementById('op-type').value;
+    const date       = document.getElementById('op-date').value;
+    const phone      = document.getElementById('op-phone').value.trim();
+    const closer     = document.getElementById('op-closer').value;
 
-    if (!openerName || !type || !transferType || !date || !phone) {
+    if (!openerName || !type || !date || !phone) {
       toast('Please complete all required fields.'); return;
     }
-    const salesTypes = ['1st Closed','2nd Close','3rd Closed','4th Closed','pCcT'];
+    const salesTypes = CLOSED_TYPES;
     if (salesTypes.includes(type) && !closer) { toast('Please select a Closer for this transfer type.'); return; }
 
     const comm = openerCommForNext(type);
     const t = {
-      name: openerName, type, transferType, date, phone,
+      name: openerName, type, date, phone,
       closer: closer || null, comm, status: 'Pending',
       openerEmail: currentUser.email, createdAt: new Date().toISOString()
     };
@@ -799,7 +572,6 @@
 
       ['op-date','op-phone'].forEach(id => document.getElementById(id).value = '');
       document.getElementById('op-type').value = '';
-      document.getElementById('op-transfer-type').value = '';
       document.getElementById('op-closer').value = '';
       document.getElementById('op-closer-wrap').style.display = 'none';
       document.getElementById('op-comm-preview').textContent = '$—';
@@ -895,7 +667,6 @@
   window.refreshAdmin = async function() {
     if (!currentUser || currentUser.role !== 'admin') return;
     await loadGoLiveDate();
-    await loadWTEnabled();
     await loadData();
   };
 
@@ -974,8 +745,8 @@
   }
 
   function renderAdminTransfers() {
-    const f      = getFilters();
-    const twrap  = document.getElementById('adm-transfers');
+    const f     = getFilters();
+    const twrap = document.getElementById('adm-transfers');
     const filtered = transfers.filter(t => {
       const dateStr = (t.createdAt || t.date || '').slice(0, 10);
       if (f.from && dateStr < f.from) return false;
@@ -997,8 +768,7 @@
             <span style="font-size:11px;color:var(--muted)">${fmtDate(t.date || t.createdAt)}</span>
           </div>
           <div style="line-height:1.9;font-size:13px;">
-            <b>Opener:</b> ${t.name} &nbsp;|&nbsp; <b>Type:</b> ${t.type}<br>
-            <b>Transfer Amount Type:</b> ${t.transferType || '—'}<br>
+            <b>Opener:</b> ${t.name} &nbsp;|&nbsp; <b>Lead Source:</b> ${t.type}<br>
             ${t.closer ? `<b>Assigned Closer:</b> ${t.closer}<br>` : ''}
             <b>Phone:</b> ${t.phone}<br>
             <b>Commission:</b> <span style="color:var(--green);font-weight:700;">$${t.comm}</span>
@@ -1058,7 +828,6 @@
     return `<div class="deal ${status.toLowerCase()}">
       <span class="deal-status ${sc}">${label}</span><br>
       <b>${t.name}</b> &nbsp;·&nbsp; ${t.type}<br>
-      <span style="font-size:12px;color:var(--muted)">Transfer type: <b style="color:var(--text)">${t.transferType || '—'}</b></span><br>
       ${t.closer ? `Closer: <b>${t.closer}</b><br>` : ''}
       Phone: ${t.phone} &nbsp;·&nbsp; Date: ${fmtDate(t.date)}<br>
       Commission: <b>$${t.comm}</b>
@@ -1112,15 +881,6 @@
     document.getElementById('li-pass')?.addEventListener('keydown', e => {
       if (e.key === 'Enter') window.doLogin();
     });
-    // PTT button events
-    const pttBtn = document.getElementById('wt-ptt-btn');
-    if (pttBtn) {
-      pttBtn.addEventListener('mousedown', window.startTalking);
-      pttBtn.addEventListener('mouseup',   window.stopTalking);
-      pttBtn.addEventListener('mouseleave', window.stopTalking);
-      pttBtn.addEventListener('touchstart', e=>{ e.preventDefault(); window.startTalking(); }, {passive:false});
-      pttBtn.addEventListener('touchend',   e=>{ e.preventDefault(); window.stopTalking(); },  {passive:false});
-    }
   });
 </script>
 
@@ -1195,9 +955,6 @@ body::after{
   background:linear-gradient(135deg,rgba(34,211,160,.04),rgba(56,189,248,.03));
   pointer-events:none;
 }
-.go-live-card.is-live::before{
-  background:linear-gradient(135deg,rgba(34,211,160,.08),rgba(14,165,233,.05));
-}
 [data-theme="light"] .go-live-card::before{opacity:0;}
 .go-live-header{
   display:flex;align-items:center;justify-content:space-between;
@@ -1213,13 +970,8 @@ body::after{
 .go-live-badge.live{
   background:rgba(34,211,160,.12);color:var(--green);border-color:rgba(34,211,160,.3);
 }
-.go-live-body{
-  display:flex;align-items:center;gap:28px;
-  flex-wrap:wrap;
-}
-.launch-switch-wrap{
-  display:flex;flex-direction:column;align-items:center;gap:0;flex-shrink:0;
-}
+.go-live-body{display:flex;align-items:center;gap:28px;flex-wrap:wrap;}
+.launch-switch-wrap{display:flex;flex-direction:column;align-items:center;gap:0;flex-shrink:0;}
 .guard-cover{
   width:80px;height:30px;border-radius:8px 8px 0 0;
   border:1px solid var(--border);border-bottom:none;
@@ -1229,10 +981,7 @@ body::after{
   transition:background .25s,border-color .25s;
 }
 .guard-cover:hover{border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.06);}
-.guard-cover.open{
-  background:rgba(245,158,11,.12);
-  border-color:rgba(245,158,11,.4);
-}
+.guard-cover.open{background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.4);}
 .guard-cover .cover-label{
   font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;
   color:var(--muted);transition:color .25s;
@@ -1240,55 +989,31 @@ body::after{
 .guard-cover.open .cover-label{color:var(--yellow);}
 .launch-switch-base{
   width:80px;height:48px;border-radius:0 0 12px 12px;
-  border:1px solid var(--border);
-  background:var(--surface2);
+  border:1px solid var(--border);background:var(--surface2);
   display:flex;align-items:center;justify-content:center;
   transition:border-color .3s;
 }
 .launch-btn{
   width:44px;height:44px;border-radius:50%;
-  border:1px solid var(--border);
-  background:var(--surface);
+  border:1px solid var(--border);background:var(--surface);
   cursor:pointer;display:flex;align-items:center;justify-content:center;
   font-size:20px;line-height:1;
-  transition:background .3s,border-color .3s,transform .15s;
-  user-select:none;
+  transition:background .3s,border-color .3s,transform .15s;user-select:none;
 }
-.launch-btn:not(.locked):hover{
-  background:rgba(56,189,248,.08);
-  border-color:rgba(56,189,248,.4);
-  transform:scale(1.06);
-}
+.launch-btn:not(.locked):hover{background:rgba(56,189,248,.08);border-color:rgba(56,189,248,.4);transform:scale(1.06);}
 .launch-btn:not(.locked):active{transform:scale(0.93);}
 .launch-btn.locked{cursor:not-allowed;opacity:.5;}
-.launch-btn.live{
-  background:rgba(34,211,160,.1);
-  border-color:rgba(34,211,160,.4);
-  opacity:1;
-}
+.launch-btn.live{background:rgba(34,211,160,.1);border-color:rgba(34,211,160,.4);opacity:1;}
 .go-live-info{flex:1;min-width:180px;}
 .go-live-status-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
-.go-live-dot{
-  width:8px;height:8px;border-radius:50%;
-  background:var(--muted);transition:background .4s;flex-shrink:0;
-}
+.go-live-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);transition:background .4s;flex-shrink:0;}
 .go-live-dot.live{background:var(--green);animation:glpulse 1.4s infinite;}
 @keyframes glpulse{0%,100%{opacity:1}50%{opacity:.3}}
-.go-live-status-text{
-  font-size:14px;font-weight:600;color:var(--muted);
-  transition:color .3s;letter-spacing:.3px;
-}
+.go-live-status-text{font-size:14px;font-weight:600;color:var(--muted);transition:color .3s;letter-spacing:.3px;}
 .go-live-status-text.live{color:var(--green);}
-.go-live-date{
-  font-size:13px;color:var(--muted);margin-bottom:8px;
-}
+.go-live-date{font-size:13px;color:var(--muted);margin-bottom:8px;}
 .go-live-date span{color:var(--text);font-weight:600;}
-.go-live-hint{
-  font-size:11px;color:var(--muted);letter-spacing:.3px;
-  line-height:1.5;transition:color .3s;
-  min-height:32px;
-}
-.go-live-hint.live{color:var(--green);}
+.go-live-hint{font-size:11px;color:var(--muted);letter-spacing:.3px;line-height:1.5;transition:color .3s;min-height:32px;}
 
 /* ── LOGIN ── */
 #login-screen,#force-pw-screen{
@@ -1489,7 +1214,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 }
 [data-theme="light"] .tier-tracker{background:linear-gradient(135deg,rgba(79,70,229,.06),rgba(2,132,199,.04));border-color:rgba(79,70,229,.2);}
 .tier-title{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:12px;}
-.tier-steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px;}
+.tier-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;}
 .tier-step{
   display:flex;flex-direction:column;align-items:center;gap:5px;
   padding:10px 6px;border-radius:10px;border:1px solid var(--border);
@@ -1519,6 +1244,14 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 [data-theme="light"] .comm-table td{border-bottom-color:rgba(208,218,234,.6);}
 .comm-table tr:last-child td{border-bottom:none;}
 .comm-table .amt{color:var(--green);font-weight:600;}
+.comm-table .note{color:var(--muted);font-size:11px;}
+
+/* ── SECTION DIVIDER ── */
+.comm-table .section-row td{
+  background:rgba(56,189,248,.04);
+  font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;
+  color:var(--accent);padding:6px 12px;border-bottom:1px solid var(--border);
+}
 
 /* ── ADMIN ── */
 .admin-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:4px;}
@@ -1644,80 +1377,9 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .footer-name{font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
 .footer-copy{font-size:10px;letter-spacing:1px;color:var(--muted);opacity:.4;}
 
-
-
-/* ── WALKIE FLOAT BUTTON (opener & closer) ── */
-.wt-float-btn{
-  display:flex;align-items:center;gap:14px;
-  background:linear-gradient(135deg,rgba(56,189,248,.08),rgba(99,102,241,.06));
-  border:1px solid rgba(56,189,248,.25);border-radius:14px;
-  padding:14px 18px;margin-bottom:18px;cursor:pointer;
-  transition:background .2s,border-color .2s,transform .15s;
-  position:relative;overflow:hidden;
-}
-.wt-float-btn::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(56,189,248,.04),transparent);pointer-events:none;}
-.wt-float-btn:hover{background:linear-gradient(135deg,rgba(56,189,248,.14),rgba(99,102,241,.1));border-color:var(--accent);transform:translateY(-1px);}
-.wt-float-btn:active{transform:translateY(0);}
-.wt-float-icon{font-size:28px;line-height:1;flex-shrink:0;}
-.wt-float-info{flex:1;display:flex;flex-direction:column;gap:2px;}
-.wt-float-label{font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:2px;color:var(--accent);}
-.wt-float-sub{font-size:11px;color:var(--muted);letter-spacing:.5px;}
-.wt-float-dot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s;}
-.wt-float-dot.has-online{background:var(--green);box-shadow:0 0 8px rgba(34,211,160,.5);animation:glpulse 1.4s infinite;}
-
-/* ── WALKIE TALKIE ADMIN TOGGLE ── */
-.wt-admin-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:24px 26px;margin-bottom:18px;box-shadow:var(--card-shadow);transition:background .3s,border-color .3s;}
-.wt-admin-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;border-bottom:1px solid var(--border);padding-bottom:14px;}
-.wt-admin-title{font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;color:var(--accent);}
-.wt-admin-body{display:flex;align-items:center;gap:20px;flex-wrap:wrap;}
-.wt-pill-toggle{width:56px;height:30px;border-radius:15px;background:var(--surface2);border:1.5px solid var(--border);cursor:pointer;padding:3px;display:flex;align-items:center;transition:background .35s,border-color .35s;flex-shrink:0;}
-.wt-pill-toggle.enabled{background:rgba(34,211,160,.2);border-color:var(--green);}
-.wt-pill-toggle:hover{border-color:var(--accent);}
-.wt-knob{width:22px;height:22px;border-radius:50%;background:var(--muted);transition:transform .35s cubic-bezier(.34,1.56,.64,1),background .3s;display:flex;align-items:center;justify-content:center;font-size:11px;box-shadow:0 1px 4px rgba(0,0,0,.3);}
-.wt-knob.on{transform:translateX(26px);background:var(--green);}
-.wt-admin-info{flex:1;}
-.wt-admin-desc{font-size:13px;color:var(--muted);line-height:1.6;}
-.wt-admin-status{font-size:12px;font-weight:600;margin-top:4px;}
-
-/* ── WALKIE TALKIE PANEL ── */
-.wt-header-bar{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px 20px;margin-bottom:16px;box-shadow:var(--card-shadow);position:relative;overflow:hidden;}
-.wt-header-bar::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(56,189,248,.04),rgba(99,102,241,.04));pointer-events:none;}
-.wt-header-title{font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:3px;color:var(--accent);margin-bottom:2px;}
-.wt-header-sub{font-size:11px;color:var(--muted);letter-spacing:1px;}
-.wt-incoming{display:none;background:rgba(34,211,160,.12);border:1px solid rgba(34,211,160,.3);border-radius:10px;padding:10px 16px;margin-bottom:14px;font-size:13px;font-weight:600;color:var(--green);text-align:center;animation:pulse-soft 1s infinite;}
-@keyframes pulse-soft{0%,100%{opacity:1}50%{opacity:.6}}
-.wt-section-label{font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);margin:16px 0 10px;}
-.wt-user-list{display:flex;flex-direction:column;gap:8px;margin-bottom:20px;}
-.wt-user-card{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:12px;cursor:pointer;transition:border-color .2s,background .2s;position:relative;}
-.wt-user-card:hover{border-color:rgba(56,189,248,.4);background:rgba(56,189,248,.04);}
-.wt-user-card.selected{border-color:var(--accent);background:rgba(56,189,248,.08);}
-.wt-user-card.broadcast{border-style:dashed;border-color:rgba(245,158,11,.3);}
-.wt-user-card.broadcast:hover{border-color:var(--yellow);background:rgba(245,158,11,.05);}
-.wt-user-card.broadcast.selected{border-color:var(--yellow);background:rgba(245,158,11,.1);border-style:solid;}
-.wt-status-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0;position:absolute;top:10px;left:10px;}
-.wt-status-dot.online{background:var(--green);box-shadow:0 0 6px rgba(34,211,160,.5);}
-.wt-avatar{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--accent3),var(--accent));display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0;}
-.wt-avatar.broadcast-av{background:linear-gradient(135deg,var(--yellow),#f97316);font-size:16px;}
-.wt-user-info{flex:1;}
-.wt-user-name{font-size:14px;font-weight:600;color:var(--text);}
-.wt-user-role{font-size:11px;color:var(--muted);margin-top:1px;}
-.wt-online-count{font-size:12px;font-weight:600;color:var(--yellow);background:rgba(245,158,11,.1);padding:3px 10px;border-radius:10px;}
-.wt-empty{text-align:center;padding:20px;color:var(--muted);font-size:13px;}
-.wt-ptt-wrap{position:sticky;bottom:20px;display:flex;flex-direction:column;align-items:center;gap:10px;padding:20px;background:var(--surface);border:1px solid var(--border);border-radius:20px;box-shadow:var(--card-shadow);margin-top:10px;}
-.wt-target-label{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.5px;min-height:18px;}
-.wt-ptt-btn{width:100px;height:100px;border-radius:50%;border:3px solid var(--border);background:var(--surface2);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;transition:all .2s;user-select:none;-webkit-user-select:none;touch-action:none;}
-.wt-ptt-btn:not(:disabled):hover{border-color:var(--accent);background:rgba(56,189,248,.06);transform:scale(1.04);}
-.wt-ptt-btn:disabled{opacity:.35;cursor:not-allowed;}
-.wt-ptt-btn.talking{border-color:var(--red);background:rgba(244,63,94,.12);transform:scale(1.08);box-shadow:0 0 32px rgba(244,63,94,.3),0 0 0 8px rgba(244,63,94,.08);}
-.wt-ptt-icon{font-size:30px;line-height:1;pointer-events:none;}
-.wt-ptt-label{font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);pointer-events:none;}
-.wt-ptt-btn.talking .wt-ptt-label{color:var(--red);}
-.wt-hint{font-size:11px;color:var(--muted);text-align:center;letter-spacing:.3px;}
-.role-btn#wt-tab-btn{display:none;}
-
 @media(max-width:540px){
   .filter-grid{grid-template-columns:1fr;}
-  .tier-steps{grid-template-columns:repeat(2,1fr);}
+  .tier-steps{grid-template-columns:repeat(3,1fr);}
   .app-footer{flex-direction:column;gap:6px;text-align:center;}
   .login-box{padding:32px 24px 28px;}
   .theme-toggle{top:12px;right:12px;}
@@ -1789,10 +1451,9 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
       <button class="logout-btn" onclick="doLogout()">LOG OUT</button>
     </div>
     <div class="role-bar" id="role-bar" style="display:none">
-      <button class="role-btn active" onclick="switchPanel('opener')">Opener</button>
-      <button class="role-btn" onclick="switchPanel('closer')">Closer</button>
-      <button class="role-btn" onclick="switchPanel('admin')">Admin</button>
-      <button class="role-btn" id="wt-tab-btn" onclick="switchPanel('walkie')">📻 Walkie</button>
+      <button class="role-btn" data-panel="opener" onclick="switchPanel('opener')">Opener</button>
+      <button class="role-btn" data-panel="closer" onclick="switchPanel('closer')">Closer</button>
+      <button class="role-btn active" data-panel="admin" onclick="switchPanel('admin')">Admin</button>
     </div>
   </header>
 
@@ -1809,22 +1470,13 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         <div class="shift-tag" id="shift-tag-opener">Egypt: 5PM – 2AM &nbsp;·&nbsp; Mon–Fri</div>
       </div>
       <div class="eod-summary" id="eod-opener" style="display:none"></div>
-      <div class="wt-float-btn" id="wt-float-opener" style="display:none" onclick="switchPanel('walkie')">
-        <span class="wt-float-icon">📻</span>
-        <div class="wt-float-info">
-          <span class="wt-float-label">Walkie Talkie</span>
-          <span class="wt-float-sub" id="wt-float-count-opener">Tap to open team radio</span>
-        </div>
-        <div class="wt-float-dot" id="wt-float-dot-opener"></div>
-      </div>
 
       <div class="tier-tracker" id="op-tier-tracker">
-        <div class="tier-title">📈 Today's Commission Tier</div>
+        <div class="tier-title">📈 Today's Commission Tier — Closed Deals</div>
         <div class="tier-steps">
           <div class="tier-step next"><div class="tier-dot">1</div><div class="tier-info-wrap"><span class="tier-step-label">1st Close</span><span class="tier-step-rate">$5</span></div></div>
           <div class="tier-step"><div class="tier-dot">2</div><div class="tier-info-wrap"><span class="tier-step-label">2nd Close</span><span class="tier-step-rate">$7.50</span></div></div>
-          <div class="tier-step"><div class="tier-dot">3</div><div class="tier-info-wrap"><span class="tier-step-label">3rd Close</span><span class="tier-step-rate">$10</span></div></div>
-          <div class="tier-step"><div class="tier-dot">4</div><div class="tier-info-wrap"><span class="tier-step-label">4th+ Close</span><span class="tier-step-rate">$15</span></div></div>
+          <div class="tier-step"><div class="tier-dot">3</div><div class="tier-info-wrap"><span class="tier-step-label">3rd+ Close</span><span class="tier-step-rate">$10</span></div></div>
         </div>
         <div class="tier-status">Submit your first closed deal to start earning!</div>
       </div>
@@ -1834,7 +1486,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         <label>Opener Name</label>
         <select id="op-name">
           <option value="">Select your name…</option>
-          <option value="Kiley">Kiley</option>
           <option value="Sara">Sara</option>
           <option value="Kate">Kate</option>
           <option value="Mona">Mona</option>
@@ -1845,14 +1496,19 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
         <label>Lead Source / Transfer Type</label>
         <select id="op-type" onchange="handleTransferType()">
-          <option value="">Select type…</option>
-          <option value="1st Closed">1st Closed — $5</option>
-          <option value="2nd Close">2nd Close — $7.50</option>
-          <option value="3rd Closed">3rd Closed — $10</option>
-          <option value="4th Closed">4th Closed — $15</option>
-          <option value="pCcT">pCcT — $5</option>
-          <option value="PCCTsub10">PCCTsub10 — $2</option>
-          <option value="Student Loan">Student Loan — $2</option>
+          <option value="">Select lead source…</option>
+          <optgroup label="── Closed Deals (Tiered Commission)">
+            <option value="1st Close">1st Close — $5</option>
+            <option value="2nd Close">2nd Close — $7.50</option>
+            <option value="3rd Close">3rd+ Close — $10</option>
+          </optgroup>
+          <optgroup label="── Flat Rate">
+            <option value="PccSub10">PCC Sub 10K — $1</option>
+            <option value="PccAbove10">PCC Above 10K — $2</option>
+            <option value="TaxAbove10">Tax Above 10K — $5</option>
+            <option value="TaxBelow10">Tax Below 10K — $1</option>
+            <option value="Student Loan">Student Loan — $2</option>
+          </optgroup>
         </select>
 
         <div class="comm-preview">
@@ -1860,16 +1516,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <span class="comm-preview-val" id="op-comm-preview">$—</span>
           <span class="comm-tier-label" id="op-tier-label"></span>
         </div>
-
-        <label>Transfer Amount Type</label>
-        <select id="op-transfer-type">
-          <option value="">Select transfer type…</option>
-          <option value="Above 10K">Above 10K</option>
-          <option value="5K+ & Above">5K+ &amp; Above</option>
-          <option value="TAX 10K+">TAX 10K+</option>
-          <option value="TAX 5K+">TAX 5K+</option>
-          <option value="Federal Student Loan">Federal Student Loan</option>
-        </select>
 
         <div id="op-closer-wrap" style="display:none">
           <label>Assign to Closer</label>
@@ -1896,13 +1542,16 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         <table class="comm-table">
           <thead><tr><th>Lead Source</th><th>Commission</th><th>Notes</th></tr></thead>
           <tbody>
-            <tr><td>1st Closed</td><td class="amt">$5</td><td style="color:var(--muted);font-size:11px">1st closed deal today</td></tr>
-            <tr><td>2nd Close</td><td class="amt">$7.50</td><td style="color:var(--muted);font-size:11px">2nd closed deal today</td></tr>
-            <tr><td>3rd Closed</td><td class="amt">$10</td><td style="color:var(--muted);font-size:11px">3rd closed deal today</td></tr>
-            <tr><td>4th Closed</td><td class="amt">$15</td><td style="color:var(--muted);font-size:11px">4th+ closed deal today</td></tr>
-            <tr><td>pCcT</td><td class="amt">$5</td><td style="color:var(--muted);font-size:11px">Flat rate</td></tr>
-            <tr><td>PCCTsub10</td><td class="amt">$2</td><td style="color:var(--muted);font-size:11px">Flat rate</td></tr>
-            <tr><td>Student Loan</td><td class="amt">$2</td><td style="color:var(--muted);font-size:11px">Flat rate</td></tr>
+            <tr class="section-row"><td colspan="3">Closed Deals — Tiered</td></tr>
+            <tr><td>1st Close</td><td class="amt">$5</td><td class="note">1st closed deal today</td></tr>
+            <tr><td>2nd Close</td><td class="amt">$7.50</td><td class="note">2nd closed deal today</td></tr>
+            <tr><td>3rd+ Close</td><td class="amt">$10</td><td class="note">3rd or more today</td></tr>
+            <tr class="section-row"><td colspan="3">Flat Rate</td></tr>
+            <tr><td>PCC Sub 10K</td><td class="amt">$1</td><td class="note">Flat rate</td></tr>
+            <tr><td>PCC Above 10K</td><td class="amt">$2</td><td class="note">Flat rate</td></tr>
+            <tr><td>Tax Above 10K</td><td class="amt">$5</td><td class="note">Flat rate</td></tr>
+            <tr><td>Tax Below 10K</td><td class="amt">$1</td><td class="note">Flat rate</td></tr>
+            <tr><td>Student Loan</td><td class="amt">$2</td><td class="note">Flat rate</td></tr>
           </tbody>
         </table>
       </div>
@@ -1926,14 +1575,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         <div class="shift-tag" id="shift-tag-closer">Egypt: 5PM – 2AM &nbsp;·&nbsp; Mon–Fri</div>
       </div>
       <div class="eod-summary" id="eod-closer" style="display:none"></div>
-      <div class="wt-float-btn" id="wt-float-closer" style="display:none" onclick="switchPanel('walkie')">
-        <span class="wt-float-icon">📻</span>
-        <div class="wt-float-info">
-          <span class="wt-float-label">Walkie Talkie</span>
-          <span class="wt-float-sub" id="wt-float-count-closer">Tap to open team radio</span>
-        </div>
-        <div class="wt-float-dot" id="wt-float-dot-closer"></div>
-      </div>
 
       <div class="card">
         <div class="card-title">Closer Submission</div>
@@ -1952,7 +1593,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         <select id="cl-opener">
           <option value="">Select opener…</option>
           <option value="N/A">N/A</option>
-          <option value="Kiley">Kiley</option>
           <option value="Sara">Sara</option>
           <option value="Kate">Kate</option>
           <option value="Mona">Mona</option>
@@ -2028,20 +1668,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         </div>
       </div>
 
-      <!-- WALKIE TALKIE ADMIN CONTROL -->
-      <div class="wt-admin-card">
-        <div class="wt-admin-header"><span class="wt-admin-title">📻 Walkie Talkie</span></div>
-        <div class="wt-admin-body">
-          <div class="wt-pill-toggle" id="wt-admin-toggle" onclick="toggleWT()">
-            <div class="wt-knob" id="wt-toggle-knob"><span id="wt-toggle-icon">🔇</span></div>
-          </div>
-          <div class="wt-admin-info">
-            <div class="wt-admin-desc">Toggle the walkie talkie tab for all team members. When enabled, everyone sees a 📻 Walkie tab and can talk to each other in real-time.</div>
-            <div class="wt-admin-status" id="wt-admin-status">Disabled — hidden from all users</div>
-          </div>
-        </div>
-      </div>
-
       <div class="card">
         <div class="card-title">Admin Overview</div>
         <div class="admin-stats">
@@ -2096,31 +1722,10 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
       <div id="adm-transfers"><div class="empty">No transfers submitted yet.</div></div>
     </div>
 
-    <!-- ── WALKIE TALKIE PANEL ── -->
-    <div class="panel" id="panel-walkie">
-      <div class="wt-header-bar">
-        <div class="wt-header-title">📻 Walkie Talkie</div>
-        <div class="wt-header-sub">Select a teammate · Hold the button to talk · Release when done</div>
-      </div>
-      <div class="wt-incoming" id="wt-incoming"></div>
-      <div class="wt-section-label">Who's online right now</div>
-      <div class="wt-user-list" id="wt-user-list">
-        <div class="wt-empty">Loading teammates…</div>
-      </div>
-      <div class="wt-ptt-wrap">
-        <div class="wt-target-label" id="wt-target-label">Select someone above first</div>
-        <button class="wt-ptt-btn" id="wt-ptt-btn" disabled>
-          <span class="wt-ptt-icon" id="wt-ptt-icon">🎙️</span>
-          <span class="wt-ptt-label" id="wt-ptt-label">HOLD TO TALK</span>
-        </button>
-        <div class="wt-hint">Hold while speaking · Release when done</div>
-      </div>
-    </div>
-
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v3.1</span>
+    <span class="version-tag">v3.2</span>
     <span class="footer-name">United Funds Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
