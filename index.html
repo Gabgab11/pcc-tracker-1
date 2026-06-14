@@ -911,23 +911,92 @@
     const d = deals.find(x => x.id === id);
     if (!d) { toast('Deal not found. Try refreshing.', 'error'); return; }
 
-    const editEl = document.getElementById('comm-' + id);
+    const editEl    = document.getElementById('comm-' + id);
     const finalComm = editEl ? (Number(editEl.value) || 0) : (d.comm || 0);
 
+    // ── COMMISSION SUGGESTION ON DECLINE ──
+    if (action === 'Declined' && finalComm > 100) {
+      const p10  = Math.round(finalComm * 1.10);
+      const p25  = Math.round(finalComm * 1.25);
+      const card = document.getElementById('deal-card-' + id);
+      // Show suggestion panel instead of immediately declining
+      const existingSug = document.getElementById('sug-' + id);
+      if (existingSug) { existingSug.remove(); }
+      const sugHtml = `
+        <div id="sug-${id}" class="comm-suggestion">
+          <div class="sug-title">💡 Commission Suggestion</div>
+          <div class="sug-body">This deal has <b>$${finalComm}</b> commission. Before declining, would you like to adjust?</div>
+          <div class="sug-row">
+            <select id="sug-sel-${id}" class="sug-select" onchange="applySuggestion('${id}', ${finalComm})">
+              <option value="">— Pick an adjustment —</option>
+              <option value="${p10}">+10% → $${p10}</option>
+              <option value="${p25}">+25% → $${p25}</option>
+              <option value="custom">Custom amount…</option>
+            </select>
+          </div>
+          <div id="sug-custom-wrap-${id}" style="display:none;margin-top:8px;">
+            <input class="admin-comm-edit" type="number" id="sug-custom-${id}" placeholder="Enter custom amount…"/>
+          </div>
+          <div class="sug-actions">
+            <button class="sug-btn-approve" onclick="approveWithSuggestion('${id}')">✓ Approve with adjustment</button>
+            <button class="sug-btn-decline" onclick="confirmDecline('${id}', ${finalComm})">✗ Decline anyway</button>
+          </div>
+        </div>`;
+      if (editEl) {
+        editEl.closest('.admin-actions').insertAdjacentHTML('beforeend', sugHtml);
+      }
+      return; // don't proceed yet
+    }
+
+    await applyDealAction(id, action, finalComm);
+  };
+
+  window.applySuggestion = function(id, baseComm) {
+    const sel     = document.getElementById('sug-sel-' + id);
+    const wrap    = document.getElementById('sug-custom-wrap-' + id);
+    const commInput = document.getElementById('comm-' + id);
+    if (sel.value === 'custom') {
+      wrap.style.display = 'block';
+    } else {
+      wrap.style.display = 'none';
+      if (sel.value && commInput) commInput.value = sel.value;
+    }
+  };
+
+  window.approveWithSuggestion = async function(id) {
+    const sel       = document.getElementById('sug-sel-' + id);
+    const customEl  = document.getElementById('sug-custom-' + id);
+    const commInput = document.getElementById('comm-' + id);
+    let finalComm   = Number(commInput?.value || 0);
+    if (sel.value === 'custom') {
+      finalComm = Number(customEl?.value || 0);
+      if (!finalComm) { toast('Please enter a custom commission amount.', 'error'); return; }
+    } else if (sel.value) {
+      finalComm = Number(sel.value);
+    }
+    if (!finalComm) { toast('Please select an adjustment first.', 'error'); return; }
+    if (commInput) commInput.value = finalComm;
+    await applyDealAction(id, 'Approved', finalComm);
+  };
+
+  window.confirmDecline = async function(id, comm) {
+    await applyDealAction(id, 'Declined', comm);
+  };
+
+  async function applyDealAction(id, action, finalComm) {
+    const d = deals.find(x => x.id === id);
+    if (!d) { toast('Deal not found.', 'error'); return; }
     try {
       await updateDoc(doc(db, 'deals', id), {
         status: action,
         comm: finalComm,
         resolvedAt: new Date().toISOString()
       });
-
       d.status = action;
       d.comm   = finalComm;
       syncGlobals();
-
       renderAdminStats();
-      renderAdminDeals();
-
+      renderAdminResults();
       toast(
         action === 'Approved'
           ? `✅ Deal approved! Commission set to $${finalComm}`
@@ -938,7 +1007,7 @@
       toast('Failed to update deal. Check your connection.', 'error');
       console.error(err);
     }
-  };
+  }
 
   // ── CARD BUILDERS ─────────────────────────
   function buildTransferCard(t) {
@@ -1409,6 +1478,38 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .deal-resolved{opacity:.55;}
 .divider{height:1px;background:var(--border);margin:22px 0;}
 
+/* ── COMMISSION SUGGESTION ── */
+.comm-suggestion{
+  margin-top:14px;padding:16px;
+  background:linear-gradient(135deg,rgba(245,158,11,.07),rgba(99,102,241,.06));
+  border:1px solid rgba(245,158,11,.3);border-radius:12px;
+  animation:fadeUp .25s ease;
+}
+.sug-title{font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:2px;color:var(--yellow);margin-bottom:6px;}
+.sug-body{font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.6;}
+.sug-body b{color:var(--text);}
+.sug-row{margin-bottom:4px;}
+.sug-select{
+  width:100%;padding:10px 14px;background:var(--surface);
+  border:1.5px solid rgba(245,158,11,.35);border-radius:8px;color:var(--text);
+  font-family:'DM Sans',sans-serif;font-size:13px;font-weight:600;outline:none;
+  transition:border .2s;cursor:pointer;
+}
+.sug-select:focus{border-color:var(--yellow);box-shadow:0 0 0 3px rgba(245,158,11,.1);}
+.sug-actions{display:flex;gap:8px;margin-top:12px;}
+.sug-btn-approve{
+  flex:1;padding:10px;border:none;border-radius:8px;
+  background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);color:var(--green);
+  font-weight:700;font-size:11px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:background .2s;
+}
+.sug-btn-approve:hover{background:rgba(34,197,94,.25);}
+.sug-btn-decline{
+  flex:1;padding:10px;border:none;border-radius:8px;
+  background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);color:var(--red);
+  font-weight:700;font-size:11px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:background .2s;
+}
+.sug-btn-decline:hover{background:rgba(239,68,68,.2);}
+
 /* ── FILTER ── */
 .filter-card{
   background:var(--surface);border:1px solid var(--border);
@@ -1858,7 +1959,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v3.3</span>
+    <span class="version-tag">v3.4</span>
     <span class="footer-name">United Fund Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
@@ -1904,9 +2005,10 @@ function updateStrength(val) {
   const SHIFT_DURATION_S = 9 * 3600;
 
   function getNowEgypt() {
-    const now   = new Date();
-    const utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
-    return new Date(utcMs + (2 * 3600000));
+    // Use Intl API for accurate Egypt time (handles DST automatically)
+    const now = new Date();
+    const egyptStr = now.toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
+    return new Date(egyptStr);
   }
   function isWeekday(d) { const day = d.getDay(); return day >= 1 && day <= 5; }
   function isShiftActive(egypt) {
