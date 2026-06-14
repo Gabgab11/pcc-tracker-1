@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>United Funds Tracker</title>
+<title>United Fund Tracker</title>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 
 <script type="module">
@@ -612,6 +612,7 @@
   window.submitCloser = async function() {
     const name         = document.getElementById('cl-name').value;
     const opener       = document.getElementById('cl-opener').value;
+    const dealType     = document.getElementById('cl-deal-type').value;
     const transferType = document.getElementById('cl-transfer-type').value;
     const client       = document.getElementById('cl-client').value.trim();
     const phone        = document.getElementById('cl-phone').value.trim();
@@ -620,7 +621,7 @@
     const firstpay     = document.getElementById('cl-firstpay').value;
     const closing      = document.getElementById('cl-closing').value;
 
-    if (!name || !opener || !transferType || !client || !phone || !debt || !monthly) {
+    if (!name || !opener || !dealType || !transferType || !client || !phone || !debt || !monthly) {
       toast('Please complete all required fields.'); return;
     }
     const base       = closerBaseComm(monthly);
@@ -630,7 +631,7 @@
     const comm       = base * multiplier;
 
     const d = {
-      name, opener, transferType, client, phone, debt, monthly, firstpay, closing,
+      name, opener, dealType, transferType, client, phone, debt, monthly, firstpay, closing,
       closingDate: dateStr, comm, status: 'Pending',
       closerEmail: currentUser.email, createdAt: new Date().toISOString()
     };
@@ -646,6 +647,7 @@
 
       ['cl-client','cl-phone','cl-debt','cl-monthly','cl-firstpay','cl-closing'].forEach(id => document.getElementById(id).value = '');
       document.getElementById('cl-opener').value = '';
+      document.getElementById('cl-deal-type').value = '';
       document.getElementById('cl-transfer-type').value = '';
       document.getElementById('cl-commission').value = '$0';
       document.getElementById('cl-tier-info').textContent = '';
@@ -670,12 +672,44 @@
     await loadData();
   };
 
+  // ── CASCADING FILTER LOGIC ────────────────
+  window.onRoleTypeChange = function() {
+    const role     = document.getElementById('f-role-type').value;
+    const dealWrap = document.getElementById('f-deal-type-wrap');
+    const dealSel  = document.getElementById('f-deal-type');
+    const statusWrap = document.getElementById('f-status-wrap');
+
+    // Reset deal type
+    dealSel.innerHTML = '<option value="All">All Types</option>';
+
+    if (role === 'Opener') {
+      dealWrap.style.display = 'block';
+      statusWrap.style.display = 'none';
+      [
+        ['PccSub10','PCC Sub 10K'],['PccAbove10','PCC Above 10K'],
+        ['TaxAbove10','Tax Above 10K'],['TaxBelow10','Tax Below 10K'],
+        ['Student Loan','Student Loan']
+      ].forEach(([v,l]) => { const o=document.createElement('option');o.value=v;o.textContent=l;dealSel.appendChild(o); });
+    } else if (role === 'Closer') {
+      dealWrap.style.display = 'block';
+      statusWrap.style.display = 'block';
+      ['Debt Settlement','Debt Validation'].forEach(v => {
+        const o=document.createElement('option');o.value=v;o.textContent=v;dealSel.appendChild(o);
+      });
+    } else {
+      dealWrap.style.display = 'none';
+      statusWrap.style.display = 'block';
+    }
+    applyFilters();
+  };
+
   function getFilters() {
     return {
-      from:   document.getElementById('f-from')?.value   || '',
-      to:     document.getElementById('f-to')?.value     || '',
-      status: document.getElementById('f-status')?.value || 'All',
-      closer: document.getElementById('f-closer')?.value || 'All',
+      from:     document.getElementById('f-from')?.value      || '',
+      to:       document.getElementById('f-to')?.value        || '',
+      status:   document.getElementById('f-status')?.value    || 'All',
+      roleType: document.getElementById('f-role-type')?.value || 'All',
+      dealType: document.getElementById('f-deal-type')?.value || 'All',
     };
   }
 
@@ -684,31 +718,98 @@
     if (f.from && dateStr < f.from) return false;
     if (f.to   && dateStr > f.to)   return false;
     if (f.status !== 'All' && d.status !== f.status) return false;
-    if (f.closer !== 'All' && d.name !== f.closer) return false;
+    if (f.dealType !== 'All' && d.dealType !== f.dealType) return false;
     return true;
   }
 
-  function renderAdminDeals() {
+  function transferMatchesFilters(t, f) {
+    const dateStr = (t.createdAt || t.date || '').slice(0, 10);
+    if (f.from && dateStr < f.from) return false;
+    if (f.to   && dateStr > f.to)   return false;
+    if (f.dealType !== 'All' && t.type !== f.dealType) return false;
+    return true;
+  }
+
+  function renderAdminResults() {
     const f        = getFilters();
-    const wrap     = document.getElementById('adm-deals');
-    const filtered = deals.filter(d => dealMatchesFilters(d, f));
-    const countEl  = document.getElementById('f-count');
+    const role     = f.roleType;
+    const dealsWrap = document.getElementById('adm-deals');
+    const xferWrap  = document.getElementById('adm-transfers');
+    const dealsLbl  = document.getElementById('adm-deals-label');
+    const xferLbl   = document.getElementById('adm-transfers-label');
+    const countEl   = document.getElementById('f-count');
 
-    if (countEl) {
-      const hasFilter = f.from || f.to || f.status !== 'All' || f.closer !== 'All';
-      countEl.innerHTML = hasFilter ? `Showing <span>${filtered.length}</span> of ${deals.length} deals` : '';
+    if (role === 'Opener') {
+      // Show only transfers
+      dealsWrap.parentElement.style.display = 'none';
+      dealsLbl.style.display = 'none';
+      xferLbl.style.display  = 'block';
+      xferWrap.parentElement.style.display = 'block';
+      const filtered = transfers.filter(t => transferMatchesFilters(t, f));
+      if (countEl) countEl.innerHTML = `Showing <span>${filtered.length}</span> opener transfer${filtered.length!==1?'s':''}`;
+      if (filtered.length === 0) { xferWrap.innerHTML = '<div class="empty">No transfers match the selected filters.</div>'; return; }
+      xferWrap.innerHTML = '';
+      filtered.forEach(t => {
+        xferWrap.insertAdjacentHTML('beforeend', `
+          <div class="admin-deal">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+              <span class="deal-status status-pending">Transfer</span>
+              <span style="font-size:11px;color:var(--muted)">${fmtDate(t.date || t.createdAt)}</span>
+            </div>
+            <div style="line-height:1.9;font-size:13px;">
+              <b>Opener:</b> ${t.name || '—'}<br>
+              <b>Lead Source:</b> ${t.type || '—'}<br>
+              ${t.closer ? `<b>Assigned Closer:</b> ${t.closer}<br>` : ''}
+              <b>Phone:</b> ${t.phone || '—'}<br>
+              <b>Date:</b> ${fmtDate(t.date)}<br>
+              <b>Commission:</b> <span style="color:var(--green);font-weight:700;">$${t.comm}</span>
+            </div>
+          </div>`);
+      });
+
+    } else if (role === 'Closer') {
+      // Show only deals
+      xferWrap.parentElement.style.display = 'none';
+      xferLbl.style.display  = 'none';
+      dealsLbl.style.display = 'block';
+      dealsWrap.parentElement.style.display = 'block';
+      const filtered = deals.filter(d => dealMatchesFilters(d, f));
+      if (countEl) countEl.innerHTML = `Showing <span>${filtered.length}</span> closer deal${filtered.length!==1?'s':''}`;
+      renderDealsInWrap(filtered, dealsWrap);
+
+    } else {
+      // All — show both
+      dealsLbl.style.display = 'block';
+      xferLbl.style.display  = 'block';
+      dealsWrap.parentElement.style.display = 'block';
+      xferWrap.parentElement.style.display  = 'block';
+      const filteredDeals = deals.filter(d => dealMatchesFilters(d, f));
+      const filteredXfer  = transfers.filter(t => transferMatchesFilters(t, f));
+      if (countEl) countEl.innerHTML = `<span>${filteredDeals.length}</span> deal${filteredDeals.length!==1?'s':''} · <span>${filteredXfer.length}</span> transfer${filteredXfer.length!==1?'s':''}`;
+      renderDealsInWrap(filteredDeals, dealsWrap);
+      if (filteredXfer.length === 0) { xferWrap.innerHTML = '<div class="empty">No transfers match the selected filters.</div>'; return; }
+      xferWrap.innerHTML = '';
+      filteredXfer.forEach(t => {
+        xferWrap.insertAdjacentHTML('beforeend', `
+          <div class="admin-deal">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+              <span class="deal-status status-pending">Transfer</span>
+              <span style="font-size:11px;color:var(--muted)">${fmtDate(t.date || t.createdAt)}</span>
+            </div>
+            <div style="line-height:1.9;font-size:13px;">
+              <b>Opener:</b> ${t.name || '—'} &nbsp;|&nbsp; <b>Lead Source:</b> ${t.type || '—'}<br>
+              ${t.closer ? `<b>Assigned Closer:</b> ${t.closer}<br>` : ''}
+              <b>Phone:</b> ${t.phone || '—'}<br>
+              <b>Commission:</b> <span style="color:var(--green);font-weight:700;">$${t.comm}</span>
+            </div>
+          </div>`);
+      });
     }
+  }
 
-    if (filtered.length === 0) {
-      wrap.innerHTML = '<div class="empty">No deals match the selected filters.</div>';
-      return;
-    }
-
-    const sorted = [...filtered].sort((a, b) => {
-      const order = { Pending: 0, Approved: 1, Declined: 2 };
-      return (order[a.status] || 0) - (order[b.status] || 0);
-    });
-
+  function renderDealsInWrap(filtered, wrap) {
+    if (filtered.length === 0) { wrap.innerHTML = '<div class="empty">No deals match the selected filters.</div>'; return; }
+    const sorted = [...filtered].sort((a,b) => ({'Pending':0,'Approved':1,'Declined':2}[a.status]||0)-({'Pending':0,'Approved':1,'Declined':2}[b.status]||0));
     wrap.innerHTML = '';
     sorted.forEach(d => {
       const resolved = d.status !== 'Pending';
@@ -720,10 +821,11 @@
           </div>
           <div style="line-height:1.9;font-size:13px;">
             <b>Closer:</b> ${d.name} &nbsp;|&nbsp; <b>Client:</b> ${d.client || '—'}<br>
-            <b>Opener:</b> ${d.opener || '—'} &nbsp;|&nbsp; <b>Transfer Type:</b> ${d.transferType || '—'}<br>
+            <b>Opener:</b> ${d.opener || '—'} &nbsp;|&nbsp; <b>Deal Type:</b> ${d.dealType || '—'}<br>
+            <b>Transfer Type:</b> ${d.transferType || '—'}<br>
             <b>Phone:</b> ${d.phone || '—'}<br>
-            <b>Debt:</b> $${Number(d.debt||0).toLocaleString()} &nbsp;·&nbsp; <b>Monthly:</b> $${d.monthly || '—'}<br>
-            <b>First Pay:</b> ${fmtDate(d.firstpay)} &nbsp;·&nbsp; <b>Closing:</b> ${fmtDate(d.closing)}<br>
+            <b>First Pay:</b> ${fmtDate(d.firstpay)} &nbsp;·&nbsp; <b>Monthly:</b> $${d.monthly || '—'}<br>
+            <b>Closing:</b> ${fmtDate(d.closing)}<br>
           </div>
           ${resolved
             ? `<div style="margin-top:8px;padding:8px 12px;background:var(--surface);border-radius:8px;font-size:13px;">
@@ -744,47 +846,65 @@
     });
   }
 
-  function renderAdminTransfers() {
-    const f     = getFilters();
-    const twrap = document.getElementById('adm-transfers');
-    const filtered = transfers.filter(t => {
-      const dateStr = (t.createdAt || t.date || '').slice(0, 10);
-      if (f.from && dateStr < f.from) return false;
-      if (f.to   && dateStr > f.to)   return false;
-      return true;
-    });
+  // Keep these for backward compat (called by renderDashboard)
+  function renderAdminDeals()     { renderAdminResults(); }
+  function renderAdminTransfers() { /* handled by renderAdminResults */ }
 
-    if (filtered.length === 0) {
-      twrap.innerHTML = '<div class="empty">No transfers match the selected filters.</div>';
-      return;
+  window.applyFilters = function() { renderAdminResults(); };
+  window.clearFilters = function() {
+    document.getElementById('f-from').value      = '';
+    document.getElementById('f-to').value        = '';
+    document.getElementById('f-status').value    = 'All';
+    document.getElementById('f-role-type').value = 'All';
+    document.getElementById('f-deal-type').value = 'All';
+    document.getElementById('f-count').innerHTML = '';
+    document.getElementById('f-deal-type-wrap').style.display = 'none';
+    document.getElementById('f-status-wrap').style.display    = 'block';
+    renderAdminResults();
+  };
+
+  // ── CSV EXPORT ────────────────────────────
+  window.exportCSV = function() {
+    const f    = getFilters();
+    const role = f.roleType;
+    let rows   = [];
+    let filename = 'united-fund-export.csv';
+
+    if (role === 'Opener' || role === 'All') {
+      const filteredXfer = transfers.filter(t => transferMatchesFilters(t, f));
+      if (filteredXfer.length) {
+        rows.push(['--- OPENER TRANSFERS ---']);
+        rows.push(['Opener','Lead Source','Assigned Closer','Phone','Date','Commission','Status']);
+        filteredXfer.forEach(t => rows.push([
+          t.name||'', t.type||'', t.closer||'', t.phone||'',
+          (t.date||t.createdAt||'').slice(0,10), t.comm||0, t.status||'Pending'
+        ]));
+        rows.push([]);
+      }
+    }
+    if (role === 'Closer' || role === 'All') {
+      const filteredDeals = deals.filter(d => dealMatchesFilters(d, f));
+      if (filteredDeals.length) {
+        rows.push(['--- CLOSER DEALS ---']);
+        rows.push(['Closer','Client','Phone','Opener','Deal Type','Transfer Type','First Pay Date','Monthly Payment','Closing Date','Commission','Status']);
+        filteredDeals.forEach(d => rows.push([
+          d.name||'', d.client||'', d.phone||'', d.opener||'',
+          d.dealType||'', d.transferType||'',
+          fmtDate(d.firstpay), d.monthly||'',
+          fmtDate(d.closing), d.comm||0, d.status||'Pending'
+        ]));
+      }
     }
 
-    twrap.innerHTML = '';
-    filtered.forEach(t => {
-      twrap.insertAdjacentHTML('beforeend', `
-        <div class="admin-deal">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-            <span class="deal-status status-pending">Transfer</span>
-            <span style="font-size:11px;color:var(--muted)">${fmtDate(t.date || t.createdAt)}</span>
-          </div>
-          <div style="line-height:1.9;font-size:13px;">
-            <b>Opener:</b> ${t.name} &nbsp;|&nbsp; <b>Lead Source:</b> ${t.type}<br>
-            ${t.closer ? `<b>Assigned Closer:</b> ${t.closer}<br>` : ''}
-            <b>Phone:</b> ${t.phone}<br>
-            <b>Commission:</b> <span style="color:var(--green);font-weight:700;">$${t.comm}</span>
-          </div>
-        </div>`);
-    });
-  }
+    if (rows.length === 0) { toast('No records to export with current filters.', 'error'); return; }
 
-  window.applyFilters = function() { renderAdminDeals(); renderAdminTransfers(); };
-  window.clearFilters = function() {
-    document.getElementById('f-from').value   = '';
-    document.getElementById('f-to').value     = '';
-    document.getElementById('f-status').value = 'All';
-    document.getElementById('f-closer').value = 'All';
-    document.getElementById('f-count').innerHTML = '';
-    renderAdminDeals(); renderAdminTransfers();
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], {type:'text/csv'});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+    toast('✅ CSV exported!', 'success');
   };
 
   window.adminAction = async function(id, action) {
@@ -1303,6 +1423,8 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .filter-actions{display:flex;align-items:center;justify-content:space-between;margin-top:14px;flex-wrap:wrap;gap:8px;}
 .btn-filter-clear{padding:8px 18px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:border .2s,color .2s;}
 .btn-filter-clear:hover{border-color:var(--red);color:var(--red);}
+.btn-csv-export{padding:8px 18px;border:1px solid rgba(34,211,160,.35);border-radius:8px;background:rgba(34,211,160,.08);color:var(--green);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:all .2s;}
+.btn-csv-export:hover{background:rgba(34,211,160,.18);border-color:var(--green);box-shadow:0 0 10px rgba(34,211,160,.2);}
 .filter-results-count{font-size:11px;font-weight:600;color:var(--muted);}
 .filter-results-count span{color:var(--accent);font-family:'Bebas Neue',sans-serif;font-size:15px;}
 
@@ -1402,7 +1524,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 <div id="login-screen">
   <div class="login-glow"></div>
   <div class="login-box">
-    <div class="login-logo">UNITED FUNDS</div>
+    <div class="login-logo">UNITED FUND</div>
     <div class="login-welcome">Welcome Back</div>
     <div class="login-sub">Track &nbsp;·&nbsp; Grow &nbsp;·&nbsp; Earn</div>
     <label class="login-label">I am a</label>
@@ -1424,7 +1546,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 <div id="force-pw-screen" style="display:none;">
   <div class="login-glow"></div>
   <div class="login-box">
-    <div class="login-logo">UNITED FUNDS</div>
+    <div class="login-logo">UNITED FUND</div>
     <div class="login-welcome">Set Your Password</div>
     <div class="fp-note">
       <strong>🔐 First Login Detected</strong>
@@ -1444,16 +1566,14 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 <!-- MAIN APP -->
 <div id="app">
   <header>
-    <div class="logo">UNITED FUNDS TRACKER</div>
+    <div class="logo">UNITED FUND TRACKER</div>
     <div class="tagline">Track &nbsp;·&nbsp; Grow &nbsp;·&nbsp; Earn</div>
     <div class="user-bar">
       <div class="user-pill" id="user-pill">—</div>
       <button class="logout-btn" onclick="doLogout()">LOG OUT</button>
     </div>
     <div class="role-bar" id="role-bar" style="display:none">
-      <button class="role-btn" data-panel="opener" onclick="switchPanel('opener')">Opener</button>
-      <button class="role-btn" data-panel="closer" onclick="switchPanel('closer')">Closer</button>
-      <button class="role-btn active" data-panel="admin" onclick="switchPanel('admin')">Admin</button>
+      <button class="role-btn active" data-panel="admin" onclick="switchPanel('admin')">⚙️ Admin Dashboard</button>
     </div>
   </header>
 
@@ -1601,6 +1721,13 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <option value="Tom">Tom</option>
         </select>
 
+        <label>Type of Deal</label>
+        <select id="cl-deal-type">
+          <option value="">Select deal type…</option>
+          <option value="Debt Settlement">Debt Settlement</option>
+          <option value="Debt Validation">Debt Validation</option>
+        </select>
+
         <label>Transfer Amount Type</label>
         <select id="cl-transfer-type">
           <option value="">Select transfer type…</option>
@@ -1687,6 +1814,20 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <div class="filter-field"><label>From Date</label><input type="date" id="f-from" onchange="applyFilters()"/></div>
           <div class="filter-field"><label>To Date</label><input type="date" id="f-to" onchange="applyFilters()"/></div>
           <div class="filter-field">
+            <label>Role Type</label>
+            <select id="f-role-type" onchange="onRoleTypeChange()">
+              <option value="All">All Roles</option>
+              <option value="Opener">Opener</option>
+              <option value="Closer">Closer</option>
+            </select>
+          </div>
+          <div class="filter-field" id="f-deal-type-wrap" style="display:none">
+            <label>Deal Type</label>
+            <select id="f-deal-type" onchange="applyFilters()">
+              <option value="All">All Types</option>
+            </select>
+          </div>
+          <div class="filter-field" id="f-status-wrap">
             <label>Status</label>
             <select id="f-status" onchange="applyFilters()">
               <option value="All">All Statuses</option>
@@ -1695,38 +1836,30 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
               <option value="Declined">Declined</option>
             </select>
           </div>
-          <div class="filter-field">
-            <label>Closer</label>
-            <select id="f-closer" onchange="applyFilters()">
-              <option value="All">All Closers</option>
-              <option value="David">David</option>
-              <option value="Sabrina">Sabrina</option>
-              <option value="Eddy">Eddy</option>
-              <option value="Willy">Willy</option>
-              <option value="Nathan">Nathan</option>
-            </select>
-          </div>
         </div>
         <div class="filter-actions">
-          <button class="btn-filter-clear" onclick="clearFilters()">✕ Clear Filters</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn-filter-clear" onclick="clearFilters()">✕ Clear Filters</button>
+            <button class="btn-csv-export" onclick="exportCSV()">⬇ Export CSV</button>
+          </div>
           <div class="filter-results-count" id="f-count"></div>
         </div>
       </div>
 
-      <div class="section-label">Closer Deals — Review &amp; Approve</div>
-      <div id="adm-deals"><div class="empty">No deals submitted yet.</div></div>
+      <div class="section-label" id="adm-deals-label">Closer Deals — Review &amp; Approve</div>
+      <div><div id="adm-deals"><div class="empty">No deals submitted yet.</div></div></div>
 
       <div class="divider"></div>
 
-      <div class="section-label">Opener Transfers</div>
-      <div id="adm-transfers"><div class="empty">No transfers submitted yet.</div></div>
+      <div class="section-label" id="adm-transfers-label">Opener Transfers</div>
+      <div><div id="adm-transfers"><div class="empty">No transfers submitted yet.</div></div></div>
     </div>
 
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v3.2</span>
-    <span class="footer-name">United Funds Tracker</span>
+    <span class="version-tag">v3.3</span>
+    <span class="footer-name">United Fund Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
 </div>
