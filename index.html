@@ -17,7 +17,7 @@
     addDoc, query, where, getDocs, updateDoc, orderBy, onSnapshot, deleteDoc
   } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
   import {
-    getDatabase, ref, set, onValue, onDisconnect, serverTimestamp
+    getDatabase, ref, set, onDisconnect, serverTimestamp
   } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
   const firebaseConfig = {
@@ -36,126 +36,35 @@
   const rtdb = getDatabase(app);
 
   const ROLE_MAP = {
-    'info@unitedfund.net':      { role: 'admin',  name: 'Admin'     },
-    'david@pcc.com':            { role: 'closer', name: 'David'     },
-    'sabrina@pcc.com':          { role: 'closer', name: 'Sabrina'   },
-    'eddy@pcc.com':             { role: 'closer', name: 'Eddy'      },
-    'willy@pcc.com':            { role: 'closer', name: 'Willy'     },
-    'nate@pcc.com':             { role: 'closer', name: 'Nathan'    },
-    'sara@unitedfunds.com':     { role: 'opener', name: 'Sara'      },
-    'kate@unitedfunds.com':     { role: 'opener', name: 'Kate'      },
-    'mona@pcc.com':             { role: 'opener', name: 'Mona'      },
-    'sean@pcc.com':             { role: 'opener', name: 'Sean'      },
-    'emmanuel@pcc.com':         { role: 'opener', name: 'Emmanuel'  },
-    'tom@pcc.com':              { role: 'opener', name: 'Tom'       },
+    'info@unitedfund.net':  { role: 'admin',  name: 'Admin'    },
+    'david@pcc.com':        { role: 'closer', name: 'David'    },
+    'sabrina@pcc.com':      { role: 'closer', name: 'Sabrina'  },
+    'eddy@pcc.com':         { role: 'closer', name: 'Eddy'     },
+    'willy@pcc.com':        { role: 'closer', name: 'Willy'    },
+    'nate@pcc.com':         { role: 'closer', name: 'Nathan'   },
+    'sara@unitedfunds.com': { role: 'opener', name: 'Sara'     },
+    'kate@unitedfunds.com': { role: 'opener', name: 'Kate'     },
+    'mona@pcc.com':         { role: 'opener', name: 'Mona'     },
+    'sean@pcc.com':         { role: 'opener', name: 'Sean'     },
+    'emmanuel@pcc.com':     { role: 'opener', name: 'Emmanuel' },
+    'tom@pcc.com':          { role: 'opener', name: 'Tom'      },
   };
 
   let currentUser = null;
   let deals       = [];
   let transfers   = [];
-  let goLiveDate  = null;
   let presenceRef = null;
+  // Real-time listeners
+  let dealsUnsubscribe     = null;
+  let transfersUnsubscribe = null;
 
   function syncGlobals() {
     window._deals       = deals;
     window._transfers   = transfers;
     window._currentRole = currentUser ? currentUser.role : null;
-    window._goLiveDate  = goLiveDate;
   }
 
-  // ── GO LIVE DATE ──────────────────────────
-  async function loadGoLiveDate() {
-    try {
-      const snap = await getDoc(doc(db, 'config', 'goLiveDate'));
-      goLiveDate = snap.exists() ? (snap.data().date || null) : null;
-    } catch(e) { goLiveDate = null; }
-    syncGlobals();
-    updateGoLiveUI();
-  }
-
-  window.setGoLive = async function() {
-    const btn = document.getElementById('go-live-btn');
-    if (!btn || btn.dataset.armed !== 'true') return;
-    try {
-      await setDoc(doc(db, 'config', 'goLiveDate'), { date: '2026-06-15', setAt: new Date().toISOString() });
-      goLiveDate = '2026-06-15';
-      syncGlobals();
-      updateGoLiveUI();
-      toast('🚀 App is now LIVE — Jun 15, 2026 set as start date!', 'success');
-      await loadData();
-    } catch(e) { toast('Failed to set go live date.', 'error'); }
-  };
-
-  window.liftCover = function() {
-    const cover  = document.getElementById('go-live-cover');
-    const btn    = document.getElementById('go-live-btn');
-    const hint   = document.getElementById('go-live-hint');
-    if (!cover || !btn) return;
-    if (goLiveDate) return;
-    const isArmed = btn.dataset.armed === 'true';
-    if (!isArmed) {
-      btn.dataset.armed = 'true';
-      cover.classList.add('open');
-      cover.querySelector('.cover-label').textContent = 'armed';
-      btn.classList.remove('locked');
-      if (hint) hint.textContent = 'Press the button — this cannot be undone';
-    } else {
-      btn.dataset.armed = 'false';
-      cover.classList.remove('open');
-      cover.querySelector('.cover-label').textContent = 'lift to arm';
-      btn.classList.add('locked');
-      if (hint) hint.textContent = 'Lift the cover to arm, then press to go live';
-    }
-  };
-
-  function updateGoLiveUI() {
-    const cover    = document.getElementById('go-live-cover');
-    const btn      = document.getElementById('go-live-btn');
-    const dot      = document.getElementById('go-live-dot');
-    const statusEl = document.getElementById('go-live-status');
-    const hint     = document.getElementById('go-live-hint');
-    const btnIcon  = document.getElementById('go-live-icon');
-    if (!btn) return;
-
-    if (goLiveDate) {
-      if (cover) {
-        cover.classList.remove('open');
-        cover.style.opacity = '0.35';
-        cover.style.pointerEvents = 'none';
-        cover.querySelector('.cover-label').textContent = 'locked in';
-      }
-      btn.classList.add('live', 'locked');
-      btn.classList.remove('armed-state');
-      btn.dataset.armed = 'false';
-      if (btnIcon) btnIcon.textContent = '✦';
-      if (dot) dot.classList.add('live');
-      if (statusEl) { statusEl.classList.add('live'); statusEl.textContent = 'Live — Jun 15, 2026'; }
-      if (hint) { hint.textContent = 'Test data hidden from all users'; hint.style.color = '#1D9E75'; }
-    } else {
-      if (cover) {
-        cover.style.opacity = '';
-        cover.style.pointerEvents = '';
-        cover.classList.remove('open');
-        cover.querySelector('.cover-label').textContent = 'lift to arm';
-      }
-      btn.classList.remove('live', 'locked', 'armed-state');
-      btn.dataset.armed = 'false';
-      if (btnIcon) btnIcon.textContent = '🛰️';
-      if (dot) dot.classList.remove('live');
-      if (statusEl) { statusEl.classList.remove('live'); statusEl.textContent = 'Standby — test mode active'; }
-      if (hint) { hint.textContent = 'Lift the cover to arm, then press to go live'; hint.style.color = ''; }
-    }
-  }
-
-  function applyGoLiveFilter(arr, dateField) {
-    if (!goLiveDate) return arr;
-    return arr.filter(item => {
-      const d = (item[dateField] || item.createdAt || '').slice(0, 10);
-      return d >= goLiveDate;
-    });
-  }
-
-  // ── PRESENCE (kept minimal for admin online tracking) ──
+  // ── PRESENCE ──────────────────────────────
   function startPresence() {
     if (!currentUser) return;
     presenceRef = ref(rtdb, `presence/${currentUser.uid}`);
@@ -191,8 +100,7 @@
     } catch (e) { return 0; }
   }
 
-  // ── OPENER COMMISSION ──
-  // New lead source types with their commission structure
+  // ── OPENER COMMISSION ──────────────────────
   const CLOSED_TYPES = ['1st Close', '2nd Close', '3rd Close'];
   const FLAT_COMM = {
     'PccSub10':    1,
@@ -245,10 +153,8 @@
         showScreen('force-pw');
         const errEl = document.getElementById('fp-error');
         if (errEl) errEl.style.display = 'none';
-        const fpNew = document.getElementById('fp-new');
-        const fpCon = document.getElementById('fp-confirm');
-        if (fpNew) fpNew.value = '';
-        if (fpCon) fpCon.value = '';
+        document.getElementById('fp-new').value = '';
+        document.getElementById('fp-confirm').value = '';
         const bar = document.getElementById('pw-bar');
         if (bar) { bar.style.width = '0%'; bar.style.background = 'transparent'; }
       } else {
@@ -266,8 +172,7 @@
   window.selectRole = function(role) {
     selectedLoginRole = role;
     ['opener','closer','admin'].forEach(r => {
-      const btn = document.getElementById('rs-' + r);
-      if (btn) btn.classList.toggle('selected', r === role);
+      document.getElementById('rs-' + r)?.classList.toggle('selected', r === role);
     });
   };
 
@@ -340,8 +245,7 @@
           document.getElementById('li-btn').disabled = false;
           selectedLoginRole = '';
           ['opener','closer','admin'].forEach(r => {
-            const b = document.getElementById('rs-' + r);
-            if (b) b.classList.remove('selected');
+            document.getElementById('rs-' + r)?.classList.remove('selected');
           });
           showError(document.getElementById('li-error'), '⚠️ Session expired — please log in again to set your password.');
         }, 1800);
@@ -353,8 +257,9 @@
 
   window.doLogout = async function() {
     stopPresence();
+    teardownListeners();
     await signOut(auth);
-    deals = []; transfers = []; goLiveDate = null;
+    deals = []; transfers = [];
     syncGlobals();
     document.getElementById('app').classList.remove('visible');
     document.getElementById('li-email').value = '';
@@ -364,8 +269,7 @@
     document.getElementById('li-error').style.display = 'none';
     selectedLoginRole = '';
     ['opener','closer','admin'].forEach(r => {
-      const btn = document.getElementById('rs-' + r);
-      if (btn) btn.classList.remove('selected');
+      document.getElementById('rs-' + r)?.classList.remove('selected');
     });
     const loginScreen = document.getElementById('login-screen');
     loginScreen.classList.remove('hidden');
@@ -392,68 +296,54 @@
     document.getElementById('user-pill').textContent = currentUser.name + ' · ' + currentUser.role.toUpperCase();
     const role = currentUser.role;
     document.getElementById('role-bar').style.display = role === 'admin' ? 'flex' : 'none';
-    if (role === 'admin')  { switchPanel('admin'); }
+    if (role === 'admin')  switchPanel('admin');
     if (role === 'closer') { switchPanel('closer'); autoFillCloserName(); }
     if (role === 'opener') { switchPanel('opener'); autoFillOpenerName(); }
-    await loadGoLiveDate();
     syncGlobals();
     startPresence();
-    loadData();
+    setupRealtimeListeners();
   }
 
-  window.switchPanel = function(name) {
-    if (!currentUser) return;
-    const role = currentUser.role;
-    if (role === 'opener' && name !== 'opener') return;
-    if (role === 'closer' && name !== 'closer') return;
-    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-    document.getElementById('panel-' + name).classList.add('active');
-    document.querySelectorAll('.role-btn').forEach(b => {
-      b.classList.toggle('active', b.dataset.panel === name);
-    });
-    if (name === 'admin') loadData();
-  };
+  // ── REAL-TIME LISTENERS ────────────────────
+  function teardownListeners() {
+    if (dealsUnsubscribe)     { dealsUnsubscribe();     dealsUnsubscribe     = null; }
+    if (transfersUnsubscribe) { transfersUnsubscribe(); transfersUnsubscribe = null; }
+  }
 
-  // ── CORE DATA LOAD ────────────────────────
-  async function loadData() {
+  function setupRealtimeListeners() {
     if (!currentUser) return;
+    teardownListeners();
     const role = currentUser.role;
-
-    if (role === 'admin') {
-      document.getElementById('adm-deals').innerHTML     = '<div class="empty">Loading deals…</div>';
-      document.getElementById('adm-transfers').innerHTML = '<div class="empty">Loading transfers…</div>';
-    }
 
     if (role === 'admin' || role === 'closer') {
-      try {
-        const q = role === 'admin'
-          ? query(collection(db, 'deals'), orderBy('createdAt', 'desc'))
-          : query(collection(db, 'deals'), where('closerEmail', '==', currentUser.email), orderBy('createdAt', 'desc'));
-        const snap = await getDocs(q);
+      const q = role === 'admin'
+        ? query(collection(db, 'deals'), orderBy('createdAt', 'desc'))
+        : query(collection(db, 'deals'), where('closerEmail', '==', currentUser.email), orderBy('createdAt', 'desc'));
+      dealsUnsubscribe = onSnapshot(q, snap => {
         deals = [];
         snap.forEach(d => deals.push({ id: d.id, ...d.data() }));
-        deals = applyGoLiveFilter(deals, 'createdAt');
-      } catch(e) { console.error('Error loading deals:', e); }
+        syncGlobals();
+        renderDashboard();
+        if (window.refreshEOD) window.refreshEOD();
+      }, err => console.error('Deals listener error:', err));
     }
 
     if (role === 'admin' || role === 'opener') {
-      try {
-        const q = role === 'admin'
-          ? query(collection(db, 'transfers'), orderBy('createdAt', 'desc'))
-          : query(collection(db, 'transfers'), where('openerEmail', '==', currentUser.email), orderBy('createdAt', 'desc'));
-        const snap = await getDocs(q);
+      const q = role === 'admin'
+        ? query(collection(db, 'transfers'), orderBy('createdAt', 'desc'))
+        : query(collection(db, 'transfers'), where('openerEmail', '==', currentUser.email), orderBy('createdAt', 'desc'));
+      transfersUnsubscribe = onSnapshot(q, snap => {
         transfers = [];
         snap.forEach(t => transfers.push({ id: t.id, ...t.data() }));
-        transfers = applyGoLiveFilter(transfers, 'createdAt');
-      } catch(e) { console.error('Error loading transfers:', e); }
+        syncGlobals();
+        renderDashboard();
+        if (window.refreshEOD) window.refreshEOD();
+        if (role === 'opener') updateOpenerCommPreview();
+      }, err => console.error('Transfers listener error:', err));
     }
-
-    syncGlobals();
-    renderDashboard();
-    if (window.refreshEOD) window.refreshEOD();
-    if (role === 'opener') updateOpenerCommPreview();
   }
 
+  // ── RENDER DASHBOARD ──────────────────────
   function renderDashboard() {
     const role = currentUser.role;
     if (role === 'closer') {
@@ -465,7 +355,7 @@
         : deals.map(buildCloserCard).join('');
     }
     if (role === 'opener') renderOpenerDashboard();
-    if (role === 'admin') { renderAdminStats(); renderAdminDeals(); renderAdminTransfers(); }
+    if (role === 'admin')  { renderAdminStats(); renderAdminTasks(); renderAdminResults(); }
   }
 
   // ── OPENER DASHBOARD ─────────────────────
@@ -502,8 +392,7 @@
               <span class="tier-step-label">${t.label}</span>
               <span class="tier-step-rate">${t.rate}</span>
             </div>
-          </div>
-        `).join('')}
+          </div>`).join('')}
       </div>
       <div class="tier-status">${
         count === 0
@@ -521,8 +410,7 @@
       document.getElementById('op-tier-label').textContent = '';
       return;
     }
-    const comm = openerCommForNext(type);
-    document.getElementById('op-comm-preview').textContent = '$' + comm;
+    document.getElementById('op-comm-preview').textContent = '$' + openerCommForNext(type);
     document.getElementById('op-tier-label').textContent = tierLabel(type);
   }
 
@@ -536,8 +424,7 @@
 
   window.handleTransferType = function() {
     const type = document.getElementById('op-type').value;
-    const salesTypes = CLOSED_TYPES;
-    document.getElementById('op-closer-wrap').style.display = salesTypes.includes(type) ? 'block' : 'none';
+    document.getElementById('op-closer-wrap').style.display = CLOSED_TYPES.includes(type) ? 'block' : 'none';
     updateOpenerCommPreview();
   };
 
@@ -548,11 +435,8 @@
     const phone      = document.getElementById('op-phone').value.trim();
     const closer     = document.getElementById('op-closer').value;
 
-    if (!openerName || !type || !date || !phone) {
-      toast('Please complete all required fields.'); return;
-    }
-    const salesTypes = CLOSED_TYPES;
-    if (salesTypes.includes(type) && !closer) { toast('Please select a Closer for this transfer type.'); return; }
+    if (!openerName || !type || !date || !phone) { toast('Please complete all required fields.'); return; }
+    if (CLOSED_TYPES.includes(type) && !closer)  { toast('Please select a Closer for this transfer type.'); return; }
 
     const comm = openerCommForNext(type);
     const t = {
@@ -561,15 +445,8 @@
       openerEmail: currentUser.email, createdAt: new Date().toISOString()
     };
     try {
-      const ref = await addDoc(collection(db, 'transfers'), t);
-      t.id = ref.id;
-      transfers.unshift(t);
-      syncGlobals();
-
-      const total = transfers.reduce((s, x) => s + (x.comm || 0), 0);
-      document.getElementById('op-total').textContent = '$' + total;
-      renderOpenerDashboard();
-
+      await addDoc(collection(db, 'transfers'), t);
+      // Real-time listener will update the UI
       ['op-date','op-phone'].forEach(id => document.getElementById(id).value = '');
       document.getElementById('op-type').value = '';
       document.getElementById('op-closer').value = '';
@@ -577,9 +454,7 @@
       document.getElementById('op-comm-preview').textContent = '$—';
       document.getElementById('op-tier-label').textContent = '';
       updateOpenerCommPreview();
-
       toast('🔥 Nice one, keep going!', 'fire');
-      if (window.refreshEOD) window.refreshEOD();
     } catch (err) { toast('Failed to submit. Check your connection.'); console.error(err); }
   };
 
@@ -610,18 +485,17 @@
   };
 
   window.submitCloser = async function() {
-    const name         = document.getElementById('cl-name').value;
-    const opener       = document.getElementById('cl-opener').value;
-    const dealType     = document.getElementById('cl-deal-type').value;
-    const transferType = document.getElementById('cl-transfer-type').value;
-    const client       = document.getElementById('cl-client').value.trim();
-    const phone        = document.getElementById('cl-phone').value.trim();
-    const debt         = document.getElementById('cl-debt').value;
-    const monthly      = document.getElementById('cl-monthly').value;
-    const firstpay     = document.getElementById('cl-firstpay').value;
-    const closing      = document.getElementById('cl-closing').value;
+    const name     = document.getElementById('cl-name').value;
+    const opener   = document.getElementById('cl-opener').value;
+    const dealType = document.getElementById('cl-deal-type').value;
+    const client   = document.getElementById('cl-client').value.trim();
+    const phone    = document.getElementById('cl-phone').value.trim();
+    const debt     = document.getElementById('cl-debt').value;
+    const monthly  = document.getElementById('cl-monthly').value;
+    const firstpay = document.getElementById('cl-firstpay').value;
+    const closing  = document.getElementById('cl-closing').value;
 
-    if (!name || !opener || !dealType || !transferType || !client || !phone || !debt || !monthly) {
+    if (!name || !opener || !dealType || !client || !phone || !debt || !monthly) {
       toast('Please complete all required fields.'); return;
     }
     const base       = closerBaseComm(monthly);
@@ -631,33 +505,23 @@
     const comm       = base * multiplier;
 
     const d = {
-      name, opener, dealType, transferType, client, phone, debt, monthly, firstpay, closing,
+      name, opener, dealType, client, phone, debt, monthly, firstpay, closing,
       closingDate: dateStr, comm, status: 'Pending',
       closerEmail: currentUser.email, createdAt: new Date().toISOString()
     };
     try {
-      const ref = await addDoc(collection(db, 'deals'), d);
-      d.id = ref.id;
-      deals.unshift(d);
-      syncGlobals();
-
-      const wrap = document.getElementById('cl-deals');
-      if (wrap.querySelector('.empty')) wrap.innerHTML = '';
-      wrap.insertAdjacentHTML('afterbegin', buildCloserCard(d));
-
+      await addDoc(collection(db, 'deals'), d);
+      // Real-time listener handles UI update
       ['cl-client','cl-phone','cl-debt','cl-monthly','cl-firstpay','cl-closing'].forEach(id => document.getElementById(id).value = '');
       document.getElementById('cl-opener').value = '';
       document.getElementById('cl-deal-type').value = '';
-      document.getElementById('cl-transfer-type').value = '';
       document.getElementById('cl-commission').value = '$0';
       document.getElementById('cl-tier-info').textContent = '';
-
       toast('🔥 Deal submitted! Pending admin approval.', 'fire');
-      if (window.refreshEOD) window.refreshEOD();
     } catch (err) { toast('Failed to submit. Check your connection.'); console.error(err); }
   };
 
-  // ── ADMIN ─────────────────────────────────
+  // ── ADMIN STATS ───────────────────────────
   function renderAdminStats() {
     const pending  = deals.filter(d => d.status === 'Pending').length;
     const approved = deals.filter(d => d.status === 'Approved').length;
@@ -666,29 +530,97 @@
     document.getElementById('adm-pending').textContent  = pending;
   }
 
-  window.refreshAdmin = async function() {
-    if (!currentUser || currentUser.role !== 'admin') return;
-    await loadGoLiveDate();
-    await loadData();
+  // ── ADMIN TASKS (Pending / Approved / Declined) ──
+  function renderAdminTasks() {
+    const pending  = deals.filter(d => d.status === 'Pending');
+    const approved = deals.filter(d => d.status === 'Approved');
+    const declined = deals.filter(d => d.status === 'Declined');
+
+    // Update tab counts
+    document.getElementById('tasks-tab-pending').querySelector('.tab-count').textContent  = pending.length;
+    document.getElementById('tasks-tab-approved').querySelector('.tab-count').textContent = approved.length;
+    document.getElementById('tasks-tab-declined').querySelector('.tab-count').textContent = declined.length;
+
+    // Render active pane
+    const activeTab = document.querySelector('.tasks-tab.active')?.dataset.tab || 'pending';
+    renderTaskPane(activeTab);
+  }
+
+  function renderTaskPane(tab) {
+    const wrap = document.getElementById('tasks-pane');
+    let items;
+    if (tab === 'pending')  items = deals.filter(d => d.status === 'Pending');
+    if (tab === 'approved') items = deals.filter(d => d.status === 'Approved');
+    if (tab === 'declined') items = deals.filter(d => d.status === 'Declined');
+
+    if (!items || items.length === 0) {
+      wrap.innerHTML = `<div class="empty">${
+        tab === 'pending'  ? 'No pending deals — all clear! ✅' :
+        tab === 'approved' ? 'No approved deals yet.' :
+        'No declined deals.'
+      }</div>`;
+      return;
+    }
+
+    wrap.innerHTML = items.map(d => buildTaskCard(d, tab)).join('');
+  }
+
+  window.switchTaskTab = function(tab) {
+    document.querySelectorAll('.tasks-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    renderTaskPane(tab);
   };
+
+  function buildTaskCard(d, tab) {
+    const isPending = tab === 'pending';
+    return `
+      <div class="task-card ${tab}">
+        <div class="task-card-header">
+          <div>
+            <span class="task-client">${d.client || '—'}</span>
+            <span class="task-meta">${d.name} → ${d.opener || '—'} · ${d.dealType || '—'}</span>
+          </div>
+          <span class="task-date">${fmtDate(d.createdAt)}</span>
+        </div>
+        <div class="task-details">
+          <div class="task-detail-item"><span class="task-detail-label">Phone</span><span>${d.phone || '—'}</span></div>
+          <div class="task-detail-item"><span class="task-detail-label">Debt</span><span>$${Number(d.debt||0).toLocaleString()}</span></div>
+          <div class="task-detail-item"><span class="task-detail-label">Monthly</span><span>$${d.monthly || '—'}</span></div>
+          <div class="task-detail-item"><span class="task-detail-label">First Pay</span><span>${fmtDate(d.firstpay)}</span></div>
+          <div class="task-detail-item"><span class="task-detail-label">Closing</span><span>${fmtDate(d.closing)}</span></div>
+          <div class="task-detail-item"><span class="task-detail-label">Commission</span><span class="task-comm">$${d.comm}</span></div>
+        </div>
+        ${isPending ? `
+          <div class="task-actions">
+            <div class="comm-edit-wrap">
+              <label style="font-size:9px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;display:block;margin-bottom:4px;">Edit Commission ($)</label>
+              <input class="admin-comm-edit" type="number" id="comm-${d.id}" value="${d.comm}" placeholder="Commission amount…"/>
+            </div>
+            <div class="action-btns">
+              <button class="btn-approve" onclick="adminAction('${d.id}','Approved')">✓ Approve</button>
+              <button class="btn-decline" onclick="adminAction('${d.id}','Declined')">✗ Decline</button>
+            </div>
+          </div>` : `
+          <div style="padding:8px 0 0;font-size:12px;color:var(--muted);">
+            Status: <b style="color:${tab==='approved'?'var(--green)':'var(--red)'}">${tab === 'approved' ? '✅ Approved' : '❌ Declined'}</b>
+          </div>`}
+      </div>`;
+  }
 
   // ── CASCADING FILTER LOGIC ────────────────
   window.onRoleTypeChange = function() {
-    const role     = document.getElementById('f-role-type').value;
-    const dealWrap = document.getElementById('f-deal-type-wrap');
-    const dealSel  = document.getElementById('f-deal-type');
+    const role    = document.getElementById('f-role-type').value;
+    const dealWrap  = document.getElementById('f-deal-type-wrap');
+    const dealSel   = document.getElementById('f-deal-type');
     const statusWrap = document.getElementById('f-status-wrap');
 
-    // Reset deal type
     dealSel.innerHTML = '<option value="All">All Types</option>';
 
     if (role === 'Opener') {
       dealWrap.style.display = 'block';
       statusWrap.style.display = 'none';
-      [
-        ['PccSub10','PCC Sub 10K'],['PccAbove10','PCC Above 10K'],
-        ['TaxAbove10','Tax Above 10K'],['TaxBelow10','Tax Below 10K'],
-        ['Student Loan','Student Loan']
+      [['PccSub10','PCC Sub 10K'],['PccAbove10','PCC Above 10K'],
+       ['TaxAbove10','Tax Above 10K'],['TaxBelow10','Tax Below 10K'],
+       ['Student Loan','Student Loan']
       ].forEach(([v,l]) => { const o=document.createElement('option');o.value=v;o.textContent=l;dealSel.appendChild(o); });
     } else if (role === 'Closer') {
       dealWrap.style.display = 'block';
@@ -731,8 +663,8 @@
   }
 
   function renderAdminResults() {
-    const f        = getFilters();
-    const role     = f.roleType;
+    const f         = getFilters();
+    const role      = f.roleType;
     const dealsWrap = document.getElementById('adm-deals');
     const xferWrap  = document.getElementById('adm-transfers');
     const dealsLbl  = document.getElementById('adm-deals-label');
@@ -740,115 +672,74 @@
     const countEl   = document.getElementById('f-count');
 
     if (role === 'Opener') {
-      // Show only transfers
-      dealsWrap.parentElement.style.display = 'none';
+      dealsWrap.closest('.adm-section').style.display = 'none';
       dealsLbl.style.display = 'none';
       xferLbl.style.display  = 'block';
-      xferWrap.parentElement.style.display = 'block';
+      xferWrap.closest('.adm-section').style.display = 'block';
       const filtered = transfers.filter(t => transferMatchesFilters(t, f));
       if (countEl) countEl.innerHTML = `Showing <span>${filtered.length}</span> opener transfer${filtered.length!==1?'s':''}`;
-      if (filtered.length === 0) { xferWrap.innerHTML = '<div class="empty">No transfers match the selected filters.</div>'; return; }
-      xferWrap.innerHTML = '';
-      filtered.forEach(t => {
-        xferWrap.insertAdjacentHTML('beforeend', `
-          <div class="admin-deal">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-              <span class="deal-status status-pending">Transfer</span>
-              <span style="font-size:11px;color:var(--muted)">${fmtDate(t.date || t.createdAt)}</span>
-            </div>
-            <div style="line-height:1.9;font-size:13px;">
-              <b>Opener:</b> ${t.name || '—'}<br>
-              <b>Lead Source:</b> ${t.type || '—'}<br>
-              ${t.closer ? `<b>Assigned Closer:</b> ${t.closer}<br>` : ''}
-              <b>Phone:</b> ${t.phone || '—'}<br>
-              <b>Date:</b> ${fmtDate(t.date)}<br>
-              <b>Commission:</b> <span style="color:var(--green);font-weight:700;">$${t.comm}</span>
-            </div>
-          </div>`);
-      });
-
+      renderTransfersInWrap(filtered, xferWrap);
     } else if (role === 'Closer') {
-      // Show only deals
-      xferWrap.parentElement.style.display = 'none';
+      xferWrap.closest('.adm-section').style.display = 'none';
       xferLbl.style.display  = 'none';
       dealsLbl.style.display = 'block';
-      dealsWrap.parentElement.style.display = 'block';
+      dealsWrap.closest('.adm-section').style.display = 'block';
       const filtered = deals.filter(d => dealMatchesFilters(d, f));
       if (countEl) countEl.innerHTML = `Showing <span>${filtered.length}</span> closer deal${filtered.length!==1?'s':''}`;
-      renderDealsInWrap(filtered, dealsWrap);
-
+      renderAllDealsInWrap(filtered, dealsWrap);
     } else {
-      // All — show both
       dealsLbl.style.display = 'block';
       xferLbl.style.display  = 'block';
-      dealsWrap.parentElement.style.display = 'block';
-      xferWrap.parentElement.style.display  = 'block';
+      dealsWrap.closest('.adm-section').style.display = 'block';
+      xferWrap.closest('.adm-section').style.display  = 'block';
       const filteredDeals = deals.filter(d => dealMatchesFilters(d, f));
       const filteredXfer  = transfers.filter(t => transferMatchesFilters(t, f));
       if (countEl) countEl.innerHTML = `<span>${filteredDeals.length}</span> deal${filteredDeals.length!==1?'s':''} · <span>${filteredXfer.length}</span> transfer${filteredXfer.length!==1?'s':''}`;
-      renderDealsInWrap(filteredDeals, dealsWrap);
-      if (filteredXfer.length === 0) { xferWrap.innerHTML = '<div class="empty">No transfers match the selected filters.</div>'; return; }
-      xferWrap.innerHTML = '';
-      filteredXfer.forEach(t => {
-        xferWrap.insertAdjacentHTML('beforeend', `
-          <div class="admin-deal">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-              <span class="deal-status status-pending">Transfer</span>
-              <span style="font-size:11px;color:var(--muted)">${fmtDate(t.date || t.createdAt)}</span>
-            </div>
-            <div style="line-height:1.9;font-size:13px;">
-              <b>Opener:</b> ${t.name || '—'} &nbsp;|&nbsp; <b>Lead Source:</b> ${t.type || '—'}<br>
-              ${t.closer ? `<b>Assigned Closer:</b> ${t.closer}<br>` : ''}
-              <b>Phone:</b> ${t.phone || '—'}<br>
-              <b>Commission:</b> <span style="color:var(--green);font-weight:700;">$${t.comm}</span>
-            </div>
-          </div>`);
-      });
+      renderAllDealsInWrap(filteredDeals, dealsWrap);
+      renderTransfersInWrap(filteredXfer, xferWrap);
     }
   }
 
-  function renderDealsInWrap(filtered, wrap) {
-    if (filtered.length === 0) { wrap.innerHTML = '<div class="empty">No deals match the selected filters.</div>'; return; }
-    const sorted = [...filtered].sort((a,b) => ({'Pending':0,'Approved':1,'Declined':2}[a.status]||0)-({'Pending':0,'Approved':1,'Declined':2}[b.status]||0));
-    wrap.innerHTML = '';
-    sorted.forEach(d => {
-      const resolved = d.status !== 'Pending';
-      wrap.insertAdjacentHTML('beforeend', `
-        <div class="admin-deal ${resolved ? 'deal-resolved' : ''}">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-            <span class="deal-status ${statusClass(d.status)}">${d.status}</span>
-            <span style="font-size:11px;color:var(--muted)">${fmtDate(d.createdAt)}</span>
-          </div>
-          <div style="line-height:1.9;font-size:13px;">
-            <b>Closer:</b> ${d.name} &nbsp;|&nbsp; <b>Client:</b> ${d.client || '—'}<br>
-            <b>Opener:</b> ${d.opener || '—'} &nbsp;|&nbsp; <b>Deal Type:</b> ${d.dealType || '—'}<br>
-            <b>Transfer Type:</b> ${d.transferType || '—'}<br>
-            <b>Phone:</b> ${d.phone || '—'}<br>
-            <b>First Pay:</b> ${fmtDate(d.firstpay)} &nbsp;·&nbsp; <b>Monthly:</b> $${d.monthly || '—'}<br>
-            <b>Closing:</b> ${fmtDate(d.closing)}<br>
-          </div>
-          ${resolved
-            ? `<div style="margin-top:8px;padding:8px 12px;background:var(--surface);border-radius:8px;font-size:13px;">
-                 Commission: <b style="color:var(--green)">$${d.comm}</b>
-                 <span style="font-size:11px;color:var(--muted);margin-left:8px;">(${d.status})</span>
-               </div>`
-            : `<div class="admin-actions">
-                 <div class="comm-edit-wrap">
-                   <label style="font-size:9px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;display:block;margin-bottom:4px;">Edit Commission ($)</label>
-                   <input class="admin-comm-edit" type="number" id="comm-${d.id}" value="${d.comm}" placeholder="Commission amount…"/>
-                 </div>
-                 <div class="action-btns">
-                   <button class="btn-approve" onclick="adminAction('${d.id}','Approved')">✓ Approve</button>
-                   <button class="btn-decline" onclick="adminAction('${d.id}','Declined')">✗ Decline</button>
-                 </div>
-               </div>`}
-        </div>`);
-    });
+  function renderTransfersInWrap(filtered, wrap) {
+    if (filtered.length === 0) { wrap.innerHTML = '<div class="empty">No transfers match the selected filters.</div>'; return; }
+    wrap.innerHTML = filtered.map(t => `
+      <div class="admin-deal">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span class="deal-status status-pending">Transfer</span>
+          <span style="font-size:11px;color:var(--muted)">${fmtDate(t.date || t.createdAt)}</span>
+        </div>
+        <div style="line-height:1.9;font-size:13px;">
+          <b>Opener:</b> ${t.name || '—'}<br>
+          <b>Lead Source:</b> ${t.type || '—'}<br>
+          ${t.closer ? `<b>Assigned Closer:</b> ${t.closer}<br>` : ''}
+          <b>Phone:</b> ${t.phone || '—'}<br>
+          <b>Date:</b> ${fmtDate(t.date)}<br>
+          <b>Commission:</b> <span style="color:var(--green);font-weight:700;">$${t.comm}</span>
+        </div>
+      </div>`).join('');
   }
 
-  // Keep these for backward compat (called by renderDashboard)
-  function renderAdminDeals()     { renderAdminResults(); }
-  function renderAdminTransfers() { /* handled by renderAdminResults */ }
+  function renderAllDealsInWrap(filtered, wrap) {
+    if (filtered.length === 0) { wrap.innerHTML = '<div class="empty">No deals match the selected filters.</div>'; return; }
+    wrap.innerHTML = filtered.map(d => `
+      <div class="admin-deal ${d.status !== 'Pending' ? 'deal-resolved' : ''}">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span class="deal-status ${statusClass(d.status)}">${d.status}</span>
+          <span style="font-size:11px;color:var(--muted)">${fmtDate(d.createdAt)}</span>
+        </div>
+        <div style="line-height:1.9;font-size:13px;">
+          <b>Closer:</b> ${d.name} &nbsp;|&nbsp; <b>Client:</b> ${d.client || '—'}<br>
+          <b>Opener:</b> ${d.opener || '—'} &nbsp;|&nbsp; <b>Deal Type:</b> ${d.dealType || '—'}<br>
+          <b>Phone:</b> ${d.phone || '—'}<br>
+          <b>First Pay:</b> ${fmtDate(d.firstpay)} &nbsp;·&nbsp; <b>Monthly:</b> $${d.monthly || '—'}<br>
+          <b>Closing:</b> ${fmtDate(d.closing)}<br>
+        </div>
+        <div style="margin-top:8px;padding:8px 12px;background:var(--surface);border-radius:8px;font-size:13px;">
+          Commission: <b style="color:var(--green)">$${d.comm}</b>
+          <span style="font-size:11px;color:var(--muted);margin-left:8px;">(${d.status})</span>
+        </div>
+      </div>`).join('');
+  }
 
   window.applyFilters = function() { renderAdminResults(); };
   window.clearFilters = function() {
@@ -868,7 +759,6 @@
     const f    = getFilters();
     const role = f.roleType;
     let rows   = [];
-    let filename = 'united-fund-export.csv';
 
     if (role === 'Opener' || role === 'All') {
       const filteredXfer = transfers.filter(t => transferMatchesFilters(t, f));
@@ -886,27 +776,26 @@
       const filteredDeals = deals.filter(d => dealMatchesFilters(d, f));
       if (filteredDeals.length) {
         rows.push(['--- CLOSER DEALS ---']);
-        rows.push(['Closer','Client','Phone','Opener','Deal Type','Transfer Type','First Pay Date','Monthly Payment','Closing Date','Commission','Status']);
+        rows.push(['Closer','Client','Phone','Opener','Deal Type','First Pay Date','Monthly Payment','Closing Date','Commission','Status']);
         filteredDeals.forEach(d => rows.push([
           d.name||'', d.client||'', d.phone||'', d.opener||'',
-          d.dealType||'', d.transferType||'',
-          fmtDate(d.firstpay), d.monthly||'',
+          d.dealType||'', fmtDate(d.firstpay), d.monthly||'',
           fmtDate(d.closing), d.comm||0, d.status||'Pending'
         ]));
       }
     }
 
     if (rows.length === 0) { toast('No records to export with current filters.', 'error'); return; }
-
     const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], {type:'text/csv'});
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
-    a.href = url; a.download = filename; a.click();
+    a.href = url; a.download = 'united-fund-export.csv'; a.click();
     URL.revokeObjectURL(url);
     toast('✅ CSV exported!', 'success');
   };
 
+  // ── ADMIN ACTIONS ─────────────────────────
   window.adminAction = async function(id, action) {
     const d = deals.find(x => x.id === id);
     if (!d) { toast('Deal not found. Try refreshing.', 'error'); return; }
@@ -914,12 +803,9 @@
     const editEl    = document.getElementById('comm-' + id);
     const finalComm = editEl ? (Number(editEl.value) || 0) : (d.comm || 0);
 
-    // ── COMMISSION SUGGESTION ON DECLINE ──
     if (action === 'Declined' && finalComm > 100) {
-      const p10  = Math.round(finalComm * 1.10);
-      const p25  = Math.round(finalComm * 1.25);
-      const card = document.getElementById('deal-card-' + id);
-      // Show suggestion panel instead of immediately declining
+      const p10 = Math.round(finalComm * 1.10);
+      const p25 = Math.round(finalComm * 1.25);
       const existingSug = document.getElementById('sug-' + id);
       if (existingSug) { existingSug.remove(); }
       const sugHtml = `
@@ -942,10 +828,8 @@
             <button class="sug-btn-decline" onclick="confirmDecline('${id}', ${finalComm})">✗ Decline anyway</button>
           </div>
         </div>`;
-      if (editEl) {
-        editEl.closest('.admin-actions').insertAdjacentHTML('beforeend', sugHtml);
-      }
-      return; // don't proceed yet
+      editEl?.closest('.task-actions')?.insertAdjacentHTML('beforeend', sugHtml);
+      return;
     }
 
     await applyDealAction(id, action, finalComm);
@@ -975,7 +859,6 @@
       finalComm = Number(sel.value);
     }
     if (!finalComm) { toast('Please select an adjustment first.', 'error'); return; }
-    if (commInput) commInput.value = finalComm;
     await applyDealAction(id, 'Approved', finalComm);
   };
 
@@ -988,19 +871,11 @@
     if (!d) { toast('Deal not found.', 'error'); return; }
     try {
       await updateDoc(doc(db, 'deals', id), {
-        status: action,
-        comm: finalComm,
-        resolvedAt: new Date().toISOString()
+        status: action, comm: finalComm, resolvedAt: new Date().toISOString()
       });
-      d.status = action;
-      d.comm   = finalComm;
-      syncGlobals();
-      renderAdminStats();
-      renderAdminResults();
+      // Real-time listener updates local state and re-renders
       toast(
-        action === 'Approved'
-          ? `✅ Deal approved! Commission set to $${finalComm}`
-          : '❌ Deal declined.',
+        action === 'Approved' ? `✅ Deal approved! Commission set to $${finalComm}` : '❌ Deal declined.',
         action === 'Approved' ? 'success' : 'error'
       );
     } catch (err) {
@@ -1012,8 +887,11 @@
   // ── CARD BUILDERS ─────────────────────────
   function buildTransferCard(t) {
     const status = t.status || 'Pending';
-    const sc     = status === 'Approved' ? 'status-approved' : status === 'Declined' ? 'status-declined' : 'status-pending';
-    const label  = status === 'Approved' ? '✅ Approved!' : status === 'Declined' ? '❌ Declined' : '⏳ Pending Admin Review';
+    // Openers only see Approved or Declined (not internal Pending status text)
+    let label, sc;
+    if (status === 'Approved') { label = '✅ Approved!'; sc = 'status-approved'; }
+    else if (status === 'Declined') { label = '❌ Declined'; sc = 'status-declined'; }
+    else { label = '⏳ In Review'; sc = 'status-pending'; }
     return `<div class="deal ${status.toLowerCase()}">
       <span class="deal-status ${sc}">${label}</span><br>
       <b>${t.name}</b> &nbsp;·&nbsp; ${t.type}<br>
@@ -1025,12 +903,16 @@
 
   function buildCloserCard(d) {
     const sc    = d.status === 'Approved' ? 'status-approved' : d.status === 'Declined' ? 'status-declined' : 'status-pending';
-    const label = d.status === 'Approved' ? '✅ Approved!' : d.status === 'Declined' ? '❌ Declined' : '⏳ Pending Admin Review';
+    // Closers only see Approved/Declined, not internal "Pending Admin Review" wording
+    let label;
+    if (d.status === 'Approved') label = '✅ Approved!';
+    else if (d.status === 'Declined') label = '❌ Declined';
+    else label = '⏳ In Review';
     return `<div class="deal ${d.status.toLowerCase()}">
       <span class="deal-status ${sc}">${label}</span><br>
       <b>${d.name}</b> closed for <b>${d.client}</b><br>
       Opener: ${d.opener} &nbsp;·&nbsp; Phone: ${d.phone}<br>
-      <span style="font-size:12px;color:var(--muted)">Transfer type: <b style="color:var(--text)">${d.transferType || '—'}</b></span><br>
+      <span style="font-size:12px;color:var(--muted)">Deal type: <b style="color:var(--text)">${d.dealType || '—'}</b></span><br>
       Debt: $${Number(d.debt||0).toLocaleString()} &nbsp;·&nbsp; Monthly: $${d.monthly || '—'}<br>
       First Pay: ${fmtDate(d.firstpay)} &nbsp;·&nbsp; Closing: ${fmtDate(d.closing)}<br>
       Commission: <b>$${d.comm}</b> <span style="font-size:11px;color:var(--muted)">(${d.status})</span>
@@ -1058,6 +940,18 @@
     t.style.display = 'block';
     clearTimeout(t._t);
     t._t = setTimeout(() => t.style.display = 'none', 4000);
+  };
+
+  window.switchPanel = function(name) {
+    if (!currentUser) return;
+    const role = currentUser.role;
+    if (role === 'opener' && name !== 'opener') return;
+    if (role === 'closer' && name !== 'closer') return;
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('panel-' + name).classList.add('active');
+    document.querySelectorAll('.role-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.panel === name);
+    });
   };
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -1132,98 +1026,56 @@ body::after{
 [data-theme="dark"]  .toggle-knob{transform:translateX(0px);}
 [data-theme="light"] .toggle-knob{transform:translateX(22px);background:linear-gradient(135deg,#f59e0b,#fbbf24);}
 
-/* ── GO LIVE LAUNCH SWITCH ── */
-.go-live-card{
-  background:var(--surface);border:1px solid var(--border);
-  border-radius:18px;padding:24px 26px;margin-bottom:18px;
-  box-shadow:var(--card-shadow);transition:background .3s,border-color .3s;
-  position:relative;overflow:hidden;
-}
-.go-live-card::before{
-  content:'';position:absolute;inset:0;
-  background:linear-gradient(135deg,rgba(34,211,160,.04),rgba(56,189,248,.03));
-  pointer-events:none;
-}
-[data-theme="light"] .go-live-card::before{opacity:0;}
-.go-live-header{
-  display:flex;align-items:center;justify-content:space-between;
-  margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:14px;
-}
-.go-live-title{font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;color:var(--accent);}
-.go-live-badge{
-  font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;
-  padding:4px 12px;border-radius:20px;
-  background:rgba(245,158,11,.12);color:var(--yellow);border:1px solid rgba(245,158,11,.2);
-  transition:background .4s,color .4s,border-color .4s;
-}
-.go-live-badge.live{
-  background:rgba(34,211,160,.12);color:var(--green);border-color:rgba(34,211,160,.3);
-}
-.go-live-body{display:flex;align-items:center;gap:28px;flex-wrap:wrap;}
-.launch-switch-wrap{display:flex;flex-direction:column;align-items:center;gap:0;flex-shrink:0;}
-.guard-cover{
-  width:80px;height:30px;border-radius:8px 8px 0 0;
-  border:1px solid var(--border);border-bottom:none;
-  background:var(--surface2);
-  display:flex;align-items:center;justify-content:center;
-  cursor:pointer;user-select:none;
-  transition:background .25s,border-color .25s;
-}
-.guard-cover:hover{border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.06);}
-.guard-cover.open{background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.4);}
-.guard-cover .cover-label{
-  font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;
-  color:var(--muted);transition:color .25s;
-}
-.guard-cover.open .cover-label{color:var(--yellow);}
-.launch-switch-base{
-  width:80px;height:48px;border-radius:0 0 12px 12px;
-  border:1px solid var(--border);background:var(--surface2);
-  display:flex;align-items:center;justify-content:center;
-  transition:border-color .3s;
-}
-.launch-btn{
-  width:44px;height:44px;border-radius:50%;
-  border:1px solid var(--border);background:var(--surface);
-  cursor:pointer;display:flex;align-items:center;justify-content:center;
-  font-size:20px;line-height:1;
-  transition:background .3s,border-color .3s,transform .15s;user-select:none;
-}
-.launch-btn:not(.locked):hover{background:rgba(56,189,248,.08);border-color:rgba(56,189,248,.4);transform:scale(1.06);}
-.launch-btn:not(.locked):active{transform:scale(0.93);}
-.launch-btn.locked{cursor:not-allowed;opacity:.5;}
-.launch-btn.live{background:rgba(34,211,160,.1);border-color:rgba(34,211,160,.4);opacity:1;}
-.go-live-info{flex:1;min-width:180px;}
-.go-live-status-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
-.go-live-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);transition:background .4s;flex-shrink:0;}
-.go-live-dot.live{background:var(--green);animation:glpulse 1.4s infinite;}
-@keyframes glpulse{0%,100%{opacity:1}50%{opacity:.3}}
-.go-live-status-text{font-size:14px;font-weight:600;color:var(--muted);transition:color .3s;letter-spacing:.3px;}
-.go-live-status-text.live{color:var(--green);}
-.go-live-date{font-size:13px;color:var(--muted);margin-bottom:8px;}
-.go-live-date span{color:var(--text);font-weight:600;}
-.go-live-hint{font-size:11px;color:var(--muted);letter-spacing:.3px;line-height:1.5;transition:color .3s;min-height:32px;}
-
 /* ── LOGIN ── */
 #login-screen,#force-pw-screen{
   position:fixed;inset:0;display:flex;flex-direction:column;
   align-items:center;justify-content:center;z-index:100;
-  background:var(--bg);padding:24px;animation:fadeIn .5s ease;transition:background .3s;
+  background:var(--bg);padding:24px;transition:background .3s;
+  overflow:hidden;
 }
 #login-screen.hidden{animation:fadeOut .4s ease forwards;pointer-events:none;}
-@keyframes fadeIn{from{opacity:0}to{opacity:1}}
-@keyframes fadeOut{from{opacity:1}to{opacity:0}}
-.login-glow{
-  position:absolute;width:700px;height:700px;border-radius:50%;
-  background:radial-gradient(circle,rgba(56,189,248,.1) 0%,rgba(99,102,241,.05) 50%,transparent 70%);
-  pointer-events:none;top:50%;left:50%;transform:translate(-50%,-60%);transition:opacity .3s;
+
+/* Animated aurora behind login */
+#login-screen::before{
+  content:'';position:absolute;inset:0;z-index:0;
+  background:
+    radial-gradient(ellipse 60% 50% at 20% 50%, rgba(99,102,241,.18) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 50% at 80% 50%, rgba(56,189,248,.14) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 40% at 50% 80%, rgba(34,211,160,.08) 0%, transparent 60%);
+  animation: auroraShift 8s ease-in-out infinite alternate;
+  pointer-events:none;
 }
-[data-theme="light"] .login-glow{opacity:0;}
+[data-theme="light"] #login-screen::before{
+  background:
+    radial-gradient(ellipse 60% 50% at 20% 50%, rgba(79,70,229,.08) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 50% at 80% 50%, rgba(2,132,199,.07) 0%, transparent 60%);
+}
+@keyframes auroraShift{
+  from{opacity:.7;transform:scale(1);}
+  to{opacity:1;transform:scale(1.08);}
+}
+
+/* Floating orbs */
+.login-orb{
+  position:absolute;border-radius:50%;filter:blur(60px);pointer-events:none;z-index:0;
+  animation:orbFloat 6s ease-in-out infinite alternate;
+}
+.login-orb-1{width:300px;height:300px;top:-80px;left:-60px;background:rgba(99,102,241,.12);animation-delay:0s;}
+.login-orb-2{width:250px;height:250px;bottom:-60px;right:-40px;background:rgba(56,189,248,.1);animation-delay:2s;}
+.login-orb-3{width:180px;height:180px;top:50%;left:70%;background:rgba(34,211,160,.08);animation-delay:4s;}
+@keyframes orbFloat{from{transform:translate(0,0) scale(1);}to{transform:translate(20px,30px) scale(1.1);}}
+[data-theme="light"] .login-orb{opacity:.5;}
+
+@keyframes fadeIn{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
+@keyframes fadeOut{from{opacity:1;}to{opacity:0;}}
+
 .login-box{
   background:var(--surface);border:1px solid var(--border);
   border-radius:24px;padding:44px 40px 36px;
   width:100%;max-width:420px;position:relative;z-index:1;
-  box-shadow:var(--card-shadow);transition:background .3s,border-color .3s,box-shadow .3s;
+  box-shadow:var(--card-shadow), 0 0 60px rgba(56,189,248,.06);
+  transition:background .3s,border-color .3s,box-shadow .3s;
+  animation:fadeIn .6s cubic-bezier(.22,1,.36,1) both;
 }
 .login-logo{
   font-family:'Bebas Neue',sans-serif;font-size:58px;letter-spacing:6px;
@@ -1231,7 +1083,22 @@ body::after{
   -webkit-background-clip:text;-webkit-text-fill-color:transparent;
   text-align:center;line-height:1;
 }
-.login-welcome{text-align:center;margin-top:8px;margin-bottom:6px;font-size:13px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--muted);}
+/* Animated welcome text — cycles through colors */
+.login-welcome{
+  text-align:center;margin-top:8px;margin-bottom:6px;
+  font-size:13px;font-weight:600;letter-spacing:2px;text-transform:uppercase;
+  background:linear-gradient(90deg, var(--accent), var(--purple), var(--green), var(--accent));
+  background-size:300% 100%;
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  animation:welcomeFlow 4s linear infinite;
+}
+[data-theme="light"] .login-welcome{
+  background:linear-gradient(90deg, var(--accent2), var(--accent3), var(--green), var(--accent2));
+  background-size:300% 100%;
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+}
+@keyframes welcomeFlow{from{background-position:0% 50%;}to{background-position:300% 50%;}}
+
 .login-sub{text-align:center;font-size:12px;color:var(--muted);letter-spacing:3px;text-transform:uppercase;margin-bottom:32px;font-style:italic;opacity:.5;}
 .role-selector{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:4px;}
 .role-sel-btn{
@@ -1263,7 +1130,14 @@ body::after{
   color:#fff;font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:4px;
   cursor:pointer;transition:opacity .2s,box-shadow .2s;
   box-shadow:0 4px 28px rgba(14,165,233,.35);
+  position:relative;overflow:hidden;
 }
+.login-btn::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,transparent 40%,rgba(255,255,255,.1) 60%,transparent 80%);
+  transform:translateX(-100%);transition:transform .6s ease;
+}
+.login-btn:hover::after{transform:translateX(100%);}
 .login-btn:hover{opacity:.9;box-shadow:0 6px 36px rgba(56,189,248,.45);}
 .login-btn:disabled{opacity:.5;cursor:not-allowed;}
 .login-error{margin-top:14px;text-align:center;font-size:12px;color:var(--red);font-weight:600;letter-spacing:1px;display:none;}
@@ -1418,6 +1292,7 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .tier-step.next .tier-dot{background:var(--accent);color:#fff;}
 .tier-info-wrap{display:flex;flex-direction:column;gap:2px;}
 .tier-step-label{font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.5px;}
+.tier-step.done .tier-step-label,.tier-step.next .tier-step-label{color:inherit;}
 .tier-step.done .tier-step-label{color:var(--green);}
 .tier-step.next .tier-step-label{color:var(--accent);}
 .tier-step-rate{font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:1px;color:var(--text);}
@@ -1434,8 +1309,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .comm-table tr:last-child td{border-bottom:none;}
 .comm-table .amt{color:var(--green);font-weight:600;}
 .comm-table .note{color:var(--muted);font-size:11px;}
-
-/* ── SECTION DIVIDER ── */
 .comm-table .section-row td{
   background:rgba(56,189,248,.04);
   font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;
@@ -1447,14 +1320,74 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .stat-box{background:var(--surface2);border-radius:12px;padding:16px;text-align:center;transition:background .3s;}
 .stat-label{font-size:10px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:4px;}
 .stat-value{font-family:'Bebas Neue',sans-serif;font-size:34px;}
+
+/* ── TASKS SECTION ── */
+.tasks-tabs{display:flex;gap:6px;margin-bottom:14px;}
+.tasks-tab{
+  flex:1;display:flex;align-items:center;justify-content:center;gap:8px;
+  padding:11px 16px;border-radius:10px;border:1px solid var(--border);
+  background:var(--surface2);cursor:pointer;transition:all .2s;
+  font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);
+}
+.tasks-tab:hover{border-color:rgba(56,189,248,.3);color:var(--text);}
+.tasks-tab.active.pending-tab{
+  background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.4);
+  color:var(--yellow);box-shadow:0 0 14px rgba(245,158,11,.1);
+}
+.tasks-tab.active.approved-tab{
+  background:rgba(34,211,160,.1);border-color:rgba(34,211,160,.4);
+  color:var(--green);box-shadow:0 0 14px rgba(34,211,160,.1);
+}
+.tasks-tab.active.declined-tab{
+  background:rgba(244,63,94,.1);border-color:rgba(244,63,94,.3);
+  color:var(--red);box-shadow:0 0 14px rgba(244,63,94,.08);
+}
+.tab-count{
+  font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:1px;
+  background:var(--border);border-radius:20px;padding:1px 8px;min-width:28px;text-align:center;
+  transition:background .2s,color .2s;
+}
+.tasks-tab.active .tab-count{background:currentColor;color:var(--bg);}
+[data-theme="light"] .tasks-tab.active .tab-count{color:white;}
+
+/* ── TASK CARDS ── */
+.task-card{
+  background:var(--surface2);border:1px solid var(--border);
+  border-radius:14px;padding:18px;margin-bottom:12px;
+  position:relative;overflow:hidden;
+  transition:background .3s,border-color .3s;
+}
+.task-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;}
+.task-card.pending::before{background:var(--yellow);}
+.task-card.approved::before{background:var(--green);}
+.task-card.declined::before{background:var(--red);}
+.task-card-header{
+  display:flex;align-items:flex-start;justify-content:space-between;
+  margin-bottom:14px;gap:12px;
+}
+.task-client{
+  font-size:16px;font-weight:700;color:var(--text);display:block;margin-bottom:3px;
+}
+.task-meta{font-size:11px;color:var(--muted);letter-spacing:.3px;display:block;}
+.task-date{font-size:11px;color:var(--muted);white-space:nowrap;flex-shrink:0;}
+.task-details{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:8px;
+  margin-bottom:14px;
+}
+.task-detail-item{
+  background:rgba(255,255,255,.03);border-radius:8px;padding:8px 10px;
+}
+[data-theme="light"] .task-detail-item{background:rgba(0,0,0,.03);}
+.task-detail-label{font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:3px;}
+.task-detail-item span:not(.task-detail-label){font-size:13px;font-weight:600;color:var(--text);}
+.task-comm{color:var(--green) !important;}
+.task-actions{border-top:1px solid var(--border);padding-top:14px;}
+
 .admin-deal{
   background:var(--surface2);border:1px solid var(--border);
   border-radius:12px;padding:18px;margin-top:10px;
   font-size:13px;transition:background .3s,border-color .3s;
 }
-.admin-actions{margin-top:14px;border-top:1px solid var(--border);padding-top:14px;}
-.comm-edit-wrap{margin-bottom:10px;}
-.comm-edit-wrap label{margin-top:0 !important;}
 .action-btns{display:flex;gap:8px;}
 .admin-comm-edit{
   width:100%;padding:10px 12px;background:var(--surface);
@@ -1463,6 +1396,8 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   transition:border .2s,box-shadow .2s;
 }
 .admin-comm-edit:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(56,189,248,.1);}
+.comm-edit-wrap{margin-bottom:10px;}
+.comm-edit-wrap label{margin-top:0 !important;}
 .btn-approve{
   flex:1;padding:11px 20px;border:none;border-radius:8px;
   background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);color:var(--green);
@@ -1488,12 +1423,10 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .sug-title{font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:2px;color:var(--yellow);margin-bottom:6px;}
 .sug-body{font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.6;}
 .sug-body b{color:var(--text);}
-.sug-row{margin-bottom:4px;}
 .sug-select{
   width:100%;padding:10px 14px;background:var(--surface);
   border:1.5px solid rgba(245,158,11,.35);border-radius:8px;color:var(--text);
-  font-family:'DM Sans',sans-serif;font-size:13px;font-weight:600;outline:none;
-  transition:border .2s;cursor:pointer;
+  font-family:'DM Sans',sans-serif;font-size:13px;font-weight:600;outline:none;cursor:pointer;
 }
 .sug-select:focus{border-color:var(--yellow);box-shadow:0 0 0 3px rgba(245,158,11,.1);}
 .sug-actions{display:flex;gap:8px;margin-top:12px;}
@@ -1529,15 +1462,8 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 .filter-results-count{font-size:11px;font-weight:600;color:var(--muted);}
 .filter-results-count span{color:var(--accent);font-family:'Bebas Neue',sans-serif;font-size:15px;}
 
-/* ── REFRESH BTN ── */
-.admin-refresh-btn{
-  display:flex;align-items:center;gap:8px;
-  padding:10px 18px;border:1px solid var(--border);border-radius:10px;
-  background:var(--surface2);color:var(--accent);font-size:11px;font-weight:700;
-  letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;transition:all .2s;
-  margin-bottom:14px;
-}
-.admin-refresh-btn:hover{border-color:var(--accent);box-shadow:0 0 12px rgba(56,189,248,.15);}
+/* ── ADMIN SECTION WRAPPER ── */
+.adm-section{margin-top:4px;}
 
 /* ── SHIFT BAR ── */
 .shift-bar{
@@ -1608,13 +1534,13 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
   .theme-toggle{top:12px;right:12px;}
   .action-btns{flex-direction:column;}
   .row{grid-template-columns:1fr;}
-  .go-live-body{flex-direction:column;align-items:flex-start;}
+  .tasks-tabs{flex-direction:column;}
+  .task-details{grid-template-columns:repeat(2,1fr);}
 }
 </style>
 </head>
 <body>
 
-<!-- THEME TOGGLE -->
 <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" aria-label="Toggle theme">
   <div class="toggle-knob" id="toggle-knob"><span id="toggle-icon">🌙</span></div>
 </button>
@@ -1623,7 +1549,9 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
 <!-- LOGIN -->
 <div id="login-screen">
-  <div class="login-glow"></div>
+  <div class="login-orb login-orb-1"></div>
+  <div class="login-orb login-orb-2"></div>
+  <div class="login-orb login-orb-3"></div>
   <div class="login-box">
     <div class="login-logo">UNITED FUND</div>
     <div class="login-welcome">Welcome Back</div>
@@ -1645,7 +1573,8 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
 
 <!-- FORCE PASSWORD CHANGE -->
 <div id="force-pw-screen" style="display:none;">
-  <div class="login-glow"></div>
+  <div class="login-orb login-orb-1"></div>
+  <div class="login-orb login-orb-2"></div>
   <div class="login-box">
     <div class="login-logo">UNITED FUND</div>
     <div class="login-welcome">Set Your Password</div>
@@ -1829,16 +1758,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
           <option value="Debt Validation">Debt Validation</option>
         </select>
 
-        <label>Transfer Amount Type</label>
-        <select id="cl-transfer-type">
-          <option value="">Select transfer type…</option>
-          <option value="Above 10K">Above 10K</option>
-          <option value="5K+ & Above">5K+ &amp; Above</option>
-          <option value="TAX 10K+">TAX 10K+</option>
-          <option value="TAX 5K+">TAX 5K+</option>
-          <option value="Federal Student Loan">Federal Student Loan</option>
-        </select>
-
         <div class="row">
           <div><label>Client Name</label><input id="cl-client" placeholder="Full name"/></div>
           <div><label>Client Phone</label><input id="cl-phone" placeholder="Phone number"/></div>
@@ -1868,34 +1787,6 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
     <!-- ── ADMIN PANEL ── -->
     <div class="panel" id="panel-admin">
 
-      <!-- GO LIVE LAUNCH SWITCH -->
-      <div class="go-live-card" id="go-live-card">
-        <div class="go-live-header">
-          <span class="go-live-title">🚀 Go Live</span>
-          <span class="go-live-badge" id="go-live-badge">Standby</span>
-        </div>
-        <div class="go-live-body">
-          <div class="launch-switch-wrap">
-            <div class="guard-cover" id="go-live-cover" onclick="liftCover()">
-              <span class="cover-label">lift to arm</span>
-            </div>
-            <div class="launch-switch-base">
-              <div class="launch-btn locked" id="go-live-btn" data-armed="false" onclick="setGoLive()">
-                <span id="go-live-icon">🛰️</span>
-              </div>
-            </div>
-          </div>
-          <div class="go-live-info">
-            <div class="go-live-status-row">
-              <div class="go-live-dot" id="go-live-dot"></div>
-              <span class="go-live-status-text" id="go-live-status">Standby — test mode active</span>
-            </div>
-            <div class="go-live-date">Go live date: <span>Jun 15, 2026</span></div>
-            <div class="go-live-hint" id="go-live-hint">Lift the cover to arm, then press to go live</div>
-          </div>
-        </div>
-      </div>
-
       <div class="card">
         <div class="card-title">Admin Overview</div>
         <div class="admin-stats">
@@ -1905,10 +1796,26 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         </div>
       </div>
 
-      <button class="admin-refresh-btn" onclick="refreshAdmin()">
-        🔄 Refresh Data
-      </button>
+      <!-- TASKS SECTION -->
+      <div class="card">
+        <div class="card-title">📋 Tasks</div>
+        <div class="tasks-tabs">
+          <button class="tasks-tab pending-tab active" data-tab="pending" id="tasks-tab-pending" onclick="switchTaskTab('pending')">
+            Pending <span class="tab-count">0</span>
+          </button>
+          <button class="tasks-tab approved-tab" data-tab="approved" id="tasks-tab-approved" onclick="switchTaskTab('approved')">
+            Approved <span class="tab-count">0</span>
+          </button>
+          <button class="tasks-tab declined-tab" data-tab="declined" id="tasks-tab-declined" onclick="switchTaskTab('declined')">
+            Declined <span class="tab-count">0</span>
+          </button>
+        </div>
+        <div id="tasks-pane">
+          <div class="empty">No pending deals — all clear! ✅</div>
+        </div>
+      </div>
 
+      <!-- RECORDS / FILTER -->
       <div class="filter-card">
         <div class="filter-title">🔍 Filter Records</div>
         <div class="filter-grid">
@@ -1947,19 +1854,19 @@ input[readonly]{color:var(--accent);font-weight:700;border-color:rgba(56,189,248
         </div>
       </div>
 
-      <div class="section-label" id="adm-deals-label">Closer Deals — Review &amp; Approve</div>
-      <div><div id="adm-deals"><div class="empty">No deals submitted yet.</div></div></div>
+      <div class="section-label" id="adm-deals-label">Closer Deals — All Records</div>
+      <div class="adm-section"><div id="adm-deals"><div class="empty">No deals submitted yet.</div></div></div>
 
       <div class="divider"></div>
 
       <div class="section-label" id="adm-transfers-label">Opener Transfers</div>
-      <div><div id="adm-transfers"><div class="empty">No transfers submitted yet.</div></div></div>
+      <div class="adm-section"><div id="adm-transfers"><div class="empty">No transfers submitted yet.</div></div></div>
     </div>
 
   </div>
 
   <footer class="app-footer">
-    <span class="version-tag">v3.4</span>
+    <span class="version-tag">v4.0</span>
     <span class="footer-name">United Fund Tracker</span>
     <span class="footer-copy">© 2026 · Foundation Release</span>
   </footer>
@@ -2005,7 +1912,6 @@ function updateStrength(val) {
   const SHIFT_DURATION_S = 9 * 3600;
 
   function getNowEgypt() {
-    // Use Intl API for accurate Egypt time (handles DST automatically)
     const now = new Date();
     const egyptStr = now.toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
     return new Date(egyptStr);
@@ -2050,9 +1956,9 @@ function updateStrength(val) {
         <div class="eod-msg">${approved.length>0?'🔥 Incredible shift! See you tomorrow.':'💪 Every shift is a new opportunity. Rest up!'}</div>`;
     }
     if (role === 'opener') {
-      const todayT   = (window._transfers||[]).filter(t=>(t.createdAt||'').slice(0,10)===todayStr);
-      const approved = todayT.filter(t=>t.status==='Approved');
-      const totalComm= todayT.reduce((s,t)=>s+(t.comm||0),0);
+      const todayT    = (window._transfers||[]).filter(t=>(t.createdAt||'').slice(0,10)===todayStr);
+      const approved  = todayT.filter(t=>t.status==='Approved');
+      const totalComm = todayT.reduce((s,t)=>s+(t.comm||0),0);
       return `
         <div class="eod-title">🏁 Shift Summary — Great Work!</div>
         <div class="eod-grid">
