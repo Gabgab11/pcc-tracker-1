@@ -834,6 +834,81 @@
 }
 body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;transition:background .25s,color .25s;}
 
+/* ── SPLASH SCREEN ── */
+#splash{
+  position:fixed;inset:0;z-index:9999;
+  background:#070d1a;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;
+  transition:opacity .6s ease;
+}
+#splash.fade-out{opacity:0;pointer-events:none;}
+/* Aurora behind splash */
+#splash::before{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background:
+    radial-gradient(ellipse 60% 50% at 20% 50%,rgba(99,102,241,.2) 0%,transparent 60%),
+    radial-gradient(ellipse 60% 50% at 80% 50%,rgba(79,126,255,.16) 0%,transparent 60%),
+    radial-gradient(ellipse 40% 40% at 50% 80%,rgba(29,179,122,.09) 0%,transparent 60%);
+  animation:auroraShift 8s ease-in-out infinite alternate;
+}
+.splash-orb{position:absolute;border-radius:50%;filter:blur(70px);pointer-events:none;animation:orbFloat 6s ease-in-out infinite alternate;}
+.splash-orb-1{width:400px;height:400px;top:-120px;left:-100px;background:rgba(79,126,255,.14);}
+.splash-orb-2{width:300px;height:300px;bottom:-100px;right:-80px;background:rgba(139,111,255,.11);animation-delay:2.5s;}
+.splash-orb-3{width:220px;height:220px;top:50%;left:65%;background:rgba(29,179,122,.08);animation-delay:4.5s;}
+/* Spinner */
+.splash-spinner-wrap{position:relative;width:96px;height:96px;margin-bottom:36px;}
+.splash-spinner{
+  position:absolute;top:50%;left:50%;
+  border-radius:50%;height:96px;width:96px;
+  animation:rotate_3922 1.2s linear infinite;
+  background-color:#9b59b6;
+  background-image:linear-gradient(#8b6fff,#84cdfa,#5ad1cd);
+  transform:translate(-50%,-50%);
+}
+.splash-spinner span{
+  position:absolute;border-radius:50%;height:100%;width:100%;
+  background-color:#9b59b6;
+  background-image:linear-gradient(#8b6fff,#84cdfa,#5ad1cd);
+}
+.splash-spinner span:nth-of-type(1){filter:blur(5px);}
+.splash-spinner span:nth-of-type(2){filter:blur(10px);}
+.splash-spinner span:nth-of-type(3){filter:blur(25px);}
+.splash-spinner span:nth-of-type(4){filter:blur(50px);}
+.splash-spinner::after{
+  content:'';position:absolute;top:10px;left:10px;right:10px;bottom:10px;
+  background-color:#070d1a;border:solid 5px #0a1224;border-radius:50%;
+}
+@keyframes rotate_3922{
+  from{transform:translate(-50%,-50%) rotate(0deg);}
+  to{transform:translate(-50%,-50%) rotate(360deg);}
+}
+/* Splash text */
+.splash-wordmark{
+  font-family:'Bebas Neue',sans-serif;font-size:clamp(22px,5vw,38px);
+  letter-spacing:6px;text-align:center;line-height:1.1;
+  background:linear-gradient(135deg,#dde8f8 20%,#6b9fff);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  animation:fadeInUp .8s .3s cubic-bezier(.22,1,.36,1) both;
+}
+.splash-sub{
+  font-size:11px;font-weight:600;letter-spacing:3.5px;text-transform:uppercase;
+  margin-top:10px;
+  background:linear-gradient(90deg,#6b9fff,#8b6fff,#1db37a,#6b9fff);
+  background-size:300% 100%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  animation:welcomeFlow 3s linear infinite, fadeInUp .8s .5s cubic-bezier(.22,1,.36,1) both;
+}
+.splash-dots{
+  display:flex;gap:7px;margin-top:28px;
+  animation:fadeInUp .8s .7s cubic-bezier(.22,1,.36,1) both;
+}
+.splash-dot{
+  width:6px;height:6px;border-radius:50%;background:rgba(107,159,255,.4);
+  animation:dotPulse 1.2s ease-in-out infinite;
+}
+.splash-dot:nth-child(2){animation-delay:.2s;}
+.splash-dot:nth-child(3){animation-delay:.4s;}
+@keyframes dotPulse{0%,100%{opacity:.3;transform:scale(1);}50%{opacity:1;transform:scale(1.4);}}
+
 /* LOGIN */
 #login-screen,#force-pw-screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:100;padding:24px;overflow:hidden;}
 #login-screen::before{content:'';position:absolute;inset:0;z-index:0;pointer-events:none;background:radial-gradient(ellipse 60% 50% at 20% 50%,rgba(99,102,241,.18) 0%,transparent 60%),radial-gradient(ellipse 60% 50% at 80% 50%,rgba(79,126,255,.14) 0%,transparent 60%),radial-gradient(ellipse 40% 40% at 50% 80%,rgba(29,179,122,.08) 0%,transparent 60%);animation:auroraShift 8s ease-in-out infinite alternate;}
@@ -929,9 +1004,27 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
 /* TOPBAR EXTRAS */
 .topbar-shift{background:rgba(79,126,255,.1);border:1px solid rgba(79,126,255,.2);color:var(--accent2);font-size:10px;font-weight:500;padding:4px 10px;border-radius:20px;display:flex;align-items:center;gap:5px;white-space:nowrap;}
 .shift-dot{width:6px;height:6px;border-radius:50%;background:var(--green);}
-.theme-toggle{width:30px;height:30px;border-radius:8px;border:1px solid var(--border2);background:var(--surface2);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .2s;flex-shrink:0;}
-.theme-toggle:hover{border-color:rgba(79,126,255,.4);}
-.theme-toggle svg{stroke:var(--text2);}
+/* ── ANIMATED THEME TOGGLE ── */
+#theme-toggle-button{font-size:17px;position:relative;display:inline-block;width:3.6em;cursor:pointer;flex-shrink:0;}
+#toggle{opacity:0;width:0;height:0;position:absolute;}
+#container,#patches,#stars,#button,#sun,#moon,#cloud{transition-property:all;transition-timing-function:cubic-bezier(0.4,0,0.2,1);transition-duration:0.25s;}
+#toggle:checked + svg #container{fill:#2b4360;}
+#toggle:checked + svg #button{transform:translate(28px,2.333px);}
+#sun{opacity:1;}
+#toggle:checked + svg #sun{opacity:0;}
+#moon{opacity:0;}
+#toggle:checked + svg #moon{opacity:1;}
+#cloud{opacity:1;}
+#toggle:checked + svg #cloud{opacity:0;}
+#stars{opacity:0;}
+#toggle:checked + svg #stars{opacity:1;}
+[data-theme="light"] #theme-toggle-button #toggle{/* unchecked = light */}
+[data-theme="dark"]  #theme-toggle-button #toggle + svg #container{fill:#2b4360;}
+[data-theme="dark"]  #theme-toggle-button #toggle + svg #button{transform:translate(28px,2.333px);}
+[data-theme="dark"]  #theme-toggle-button #toggle + svg #sun{opacity:0;}
+[data-theme="dark"]  #theme-toggle-button #toggle + svg #moon{opacity:1;}
+[data-theme="dark"]  #theme-toggle-button #toggle + svg #cloud{opacity:0;}
+[data-theme="dark"]  #theme-toggle-button #toggle + svg #stars{opacity:1;}
 
 /* VIEWS */
 .view-wrap{flex:1;overflow-y:auto;padding:22px;}
@@ -1212,6 +1305,26 @@ table.ref-table{width:100%;border-collapse:collapse;}
 </style>
 </head>
 <body>
+
+<!-- ══ SPLASH SCREEN ══ -->
+<div id="splash">
+  <div class="splash-orb splash-orb-1"></div>
+  <div class="splash-orb splash-orb-2"></div>
+  <div class="splash-orb splash-orb-3"></div>
+  <div class="splash-spinner-wrap">
+    <div class="splash-spinner">
+      <span></span><span></span><span></span><span></span>
+    </div>
+  </div>
+  <div class="splash-wordmark">United Contact<br/>Center Tracker</div>
+  <div class="splash-sub">Track · Grow · Earn</div>
+  <div class="splash-dots">
+    <div class="splash-dot"></div>
+    <div class="splash-dot"></div>
+    <div class="splash-dot"></div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <!-- LOGIN -->
@@ -1312,10 +1425,50 @@ table.ref-table{width:100%;border-collapse:collapse;}
         </div>
         <!-- Shift -->
         <div class="topbar-shift"><span class="shift-dot" id="shift-status-dot"></span><span id="topbar-shift-timer">—</span></div>
-        <!-- Theme -->
-        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
-          <svg id="theme-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        </button>
+        <!-- Animated Theme Toggle -->
+        <label id="theme-toggle-button" title="Toggle light/dark mode">
+          <input type="checkbox" id="toggle" onchange="toggleTheme()"/>
+          <svg viewBox="0 0 69.667 44" xmlns="http://www.w3.org/2000/svg">
+            <g id="container" transform="translate(3.5 3.5)" fill="#87CEEB" stroke="none">
+              <rect id="background" rx="18.5" height="37" width="62.667"/>
+              <g id="stars">
+                <circle cx="17.5" cy="8.5" r="1.5" fill="white"/>
+                <circle cx="29.5" cy="14.5" r="1.5" fill="white"/>
+                <circle cx="8.5"  cy="19.5" r="1.5" fill="white"/>
+                <circle cx="38"   cy="6"    r="1"   fill="white"/>
+                <circle cx="44"   cy="17"   r="1"   fill="white"/>
+                <circle cx="49"   cy="9"    r="1"   fill="white"/>
+              </g>
+              <g id="cloud" transform="translate(26 8)">
+                <ellipse cx="13" cy="12" rx="13" ry="9" fill="white"/>
+                <ellipse cx="5"  cy="14" rx="7"  ry="6" fill="white"/>
+                <ellipse cx="22" cy="14" rx="6"  ry="5" fill="white"/>
+              </g>
+            </g>
+            <g id="button" transform="translate(2.333 2.333)">
+              <circle id="button-bg" cx="19.667" cy="19.667" r="19.667" fill="#fff"/>
+              <g id="sun" transform="translate(6.5 6.5)">
+                <circle cx="13.167" cy="13.167" r="7" fill="#FFCC00"/>
+                <g stroke="#FFCC00" stroke-width="2" stroke-linecap="round">
+                  <line x1="13.167" y1="1"      x2="13.167" y2="4"/>
+                  <line x1="13.167" y1="22.333" x2="13.167" y2="25.333"/>
+                  <line x1="1"      y1="13.167" x2="4"      y2="13.167"/>
+                  <line x1="22.333" y1="13.167" x2="25.333" y2="13.167"/>
+                  <line x1="4.929"  y1="4.929"  x2="7.05"   y2="7.05"/>
+                  <line x1="19.283" y1="19.283" x2="21.404" y2="21.404"/>
+                  <line x1="21.404" y1="4.929"  x2="19.283" y2="7.05"/>
+                  <line x1="7.05"   y1="19.283" x2="4.929"  y2="21.404"/>
+                </g>
+              </g>
+              <g id="moon" transform="translate(7.667 6.5)">
+                <path d="M 13.667 0 A 13.167 13.167 0 1 0 13.667 26.333 A 9 9 0 1 1 13.667 0 Z" fill="#BDC3C7"/>
+                <circle cx="19" cy="5"  r="1.5" fill="#A0A8AE"/>
+                <circle cx="14" cy="10" r="1"   fill="#A0A8AE"/>
+                <circle cx="21" cy="12" r="1.2" fill="#A0A8AE"/>
+              </g>
+            </g>
+          </svg>
+        </label>
       </div>
     </div>
 
@@ -1554,10 +1707,14 @@ table.ref-table{width:100%;border-collapse:collapse;}
 function applyTheme(t){
   document.documentElement.setAttribute('data-theme',t);
   localStorage.setItem('ucc-theme',t);
-  const icon=document.getElementById('theme-icon');if(!icon)return;
-  icon.innerHTML=t==='dark'?'<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>':'<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>';
+  // sync checkbox state: checked = dark mode
+  const cb = document.getElementById('toggle');
+  if (cb) cb.checked = (t === 'dark');
 }
-function toggleTheme(){ applyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark'); }
+function toggleTheme(){
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+}
 
 function updateStrength(val){
   const bar=document.getElementById('pw-bar');if(!bar)return;
@@ -1615,8 +1772,21 @@ function updateStrength(val){
   }
   document.addEventListener('DOMContentLoaded',()=>{setInterval(tick,1000);tick();});
 })();
+
+// ── SPLASH DISMISS ──
+(function(){
+  function dismissSplash(){
+    const s=document.getElementById('splash');
+    if(!s)return;
+    s.classList.add('fade-out');
+    setTimeout(()=>{ s.style.display='none'; },650);
+  }
+  // Dismiss after 2.6s, or sooner if fonts loaded
+  document.addEventListener('DOMContentLoaded',()=>{
+    setTimeout(dismissSplash, 2600);
+  });
+})();
 </script>
 </body>
 </html>
-
 
