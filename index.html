@@ -363,6 +363,9 @@
       </div>
       <div class="sb-nav-item" data-view="admin-mortgage" onclick="switchView('admin-mortgage')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Mortgage Records
+      </div>
+      <div class="sb-nav-item" data-view="admin-commission" onclick="switchView('admin-commission')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M15.5 9.5c0-1.6-1.57-2.5-3.5-2.5s-3.5 0.9-3.5 2.5c0 3.4 7 1.6 7 5 0 1.6-1.57 2.5-3.5 2.5s-3.5-0.9-3.5-2.5"/></svg>Commission Structure
       </div>`;
     } else if(role==='closer'){
       nav.innerHTML=`
@@ -405,7 +408,7 @@
   window.switchView=function(viewName){
     const role=currentUser?.role;
     const allowed={
-      admin:   ['admin-overview','admin-deals','admin-mortgage'],
+      admin:   ['admin-overview','admin-deals','admin-mortgage','admin-commission'],
       closer:  ['closer-dashboard','closer-submit','closer-history'],
       opener:  ['opener-dashboard','opener-submit','opener-history'],
       mortgage:['mtg-dashboard','mtg-submit','mtg-records'],
@@ -415,7 +418,7 @@
     const el=document.getElementById('view-'+viewName);
     if(el)el.style.display='block';
     document.querySelectorAll('.sb-nav-item').forEach(n=>n.classList.toggle('active',n.dataset.view===viewName));
-    const crumbs={'admin-overview':'Overview','admin-deals':'Deals & Transfers','admin-mortgage':'Mortgage Records','closer-dashboard':'Dashboard','closer-submit':'Submit Deal','closer-history':'My Deals','opener-dashboard':'Dashboard','opener-submit':'Submit Transfer','opener-history':'My Transfers','mtg-dashboard':'Dashboard','mtg-submit':'Submit Transfer','mtg-records':'My Records'};
+    const crumbs={'admin-overview':'Overview','admin-deals':'Deals & Transfers','admin-mortgage':'Mortgage Records','admin-commission':'Commission Structure','closer-dashboard':'Dashboard','closer-submit':'Submit Deal','closer-history':'My Deals','opener-dashboard':'Dashboard','opener-submit':'Submit Transfer','opener-history':'My Transfers','mtg-dashboard':'Dashboard','mtg-submit':'Submit Transfer','mtg-records':'My Records'};
     document.getElementById('breadcrumb').textContent=crumbs[viewName]||viewName;
     if(viewName==='opener-submit'){autoFillOpenerName();updateOpenerCommPreview();}
     if(viewName==='closer-submit')autoFillCloserName();
@@ -424,6 +427,7 @@
     if(viewName==='admin-deals')renderAdminResults();
     if(viewName==='admin-overview')renderAdminOverview();
     if(viewName==='admin-mortgage')renderAdminMortgage();
+    if(viewName==='admin-commission')renderAdminCommission();
     if(viewName==='mtg-dashboard')renderMtgDashboard();
     if(viewName==='mtg-records')renderMtgRecords();
     if(viewName==='mtg-submit')autoFillMtgAgent();
@@ -437,6 +441,8 @@
       if(ad&&ad.style.display!=='none')renderAdminResults();
       const am=document.getElementById('view-admin-mortgage');
       if(am&&am.style.display!=='none')renderAdminMortgage();
+      const ac=document.getElementById('view-admin-commission');
+      if(ac&&ac.style.display!=='none')renderAdminCommission();
     }
     if(role==='closer'){renderCloserDashboard();renderCloserHistory();}
     if(role==='opener'){renderOpenerDashboard();renderOpenerHistory();}
@@ -592,6 +598,122 @@
       </div>
     </div>`).join('');
   }
+
+  // ── COMMISSION STRUCTURE (admin) ──────────────────────────────────
+  // Pay-period cycle: every period runs from the 28th of one month through
+  // the 27th of the next ("cutoff day" = 27th). All totals here are derived
+  // fresh from the live `deals` / `transfers` arrays on every render, and
+  // only ever count items with status === 'Approved' (i.e. the admin's
+  // final approved/edited commission value) — never Pending or Declined —
+  // so there is no possibility of double-counting or stale accumulation.
+  window._ccExpanded = window._ccExpanded || {};
+  window._ccActiveTab = window._ccActiveTab || 'closer';
+
+  function ccPad(n){return String(n).padStart(2,'0');}
+  function ccFmt(d){return `${d.getFullYear()}-${ccPad(d.getMonth()+1)}-${ccPad(d.getDate())}`;}
+
+  // Given any YYYY-MM-DD date, return the pay period that date falls into.
+  function ccPeriodForDate(dateStr){
+    if(!dateStr) dateStr=getNowEgypt().toISOString().slice(0,10);
+    const parts=dateStr.slice(0,10).split('-').map(Number);
+    const y=parts[0],m=parts[1]-1,dd=parts[2]||1;
+    let endY=y, endM=m;
+    if(dd>27){ endM+=1; if(endM>11){endM=0;endY+=1;} }
+    const end=new Date(endY,endM,27);
+    const start=new Date(endY,endM-1,28);
+    return { start:ccFmt(start), end:ccFmt(end), key:ccFmt(end) };
+  }
+  function ccCurrentPeriod(){ return ccPeriodForDate(getNowEgypt().toISOString().slice(0,10)); }
+  function ccPeriodLabel(endKey){
+    const end=new Date(endKey+'T00:00:00');
+    const start=new Date(end.getFullYear(),end.getMonth()-1,28);
+    const mo=d=>d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+    return `${mo(start)} – ${mo(end)}, ${end.getFullYear()}`;
+  }
+
+  // Aggregate APPROVED-ONLY commission per person, bucketed by pay period.
+  // Reads straight from the source array every time — nothing is ever
+  // accumulated/cached across renders, so re-renders can't double count.
+  function ccAggregate(records, dateField, nameField){
+    const out={};
+    (records||[]).forEach(r=>{
+      if(r.status!=='Approved') return;          // only finalized/admin-approved commission
+      const name=r[nameField]; if(!name) return;
+      const dateStr=(r[dateField]||r.createdAt||'').slice(0,10);
+      if(!dateStr) return;
+      const periodKey=ccPeriodForDate(dateStr).key;
+      const comm=Number(r.comm)||0;
+      if(!out[name]) out[name]={allTime:0,count:0,periods:{}};
+      out[name].allTime+=comm;
+      out[name].count+=1;
+      if(!out[name].periods[periodKey]) out[name].periods[periodKey]={total:0,count:0};
+      out[name].periods[periodKey].total+=comm;
+      out[name].periods[periodKey].count+=1;
+    });
+    return out;
+  }
+
+  function renderAdminCommission(){
+    const closerAgg=ccAggregate(deals,'closingDate','name');
+    const openerAgg=ccAggregate(transfers,'date','name');
+    const period=ccCurrentPeriod();
+
+    const lbl=document.getElementById('cc-period-label'); if(lbl)lbl.textContent=ccPeriodLabel(period.key);
+    const today=getNowEgypt(); today.setHours(0,0,0,0);
+    const endDate=new Date(period.end+'T00:00:00');
+    const daysLeft=Math.max(0,Math.round((endDate-today)/86400000));
+    const dl=document.getElementById('cc-days-left');
+    if(dl)dl.textContent=daysLeft===0?'Cutoff is today — totals finalize tonight':`${daysLeft} day${daysLeft!==1?'s':''} until the ${period.end.slice(-2)}th cutoff`;
+
+    const closerTotal=CLOSER_NAMES.reduce((s,n)=>s+(closerAgg[n]?.periods[period.key]?.total||0),0);
+    const openerTotal=OPENER_NAMES.reduce((s,n)=>s+(openerAgg[n]?.periods[period.key]?.total||0),0);
+    const pt=document.getElementById('cc-period-total'); if(pt)pt.textContent='$'+(closerTotal+openerTotal).toLocaleString();
+
+    const cl=document.getElementById('cc-closer-list'); if(cl)cl.innerHTML=ccBuildRoster(CLOSER_NAMES,closerAgg,period.key,'closer');
+    const ol=document.getElementById('cc-opener-list'); if(ol)ol.innerHTML=ccBuildRoster(OPENER_NAMES,openerAgg,period.key,'opener');
+  }
+
+  function ccBuildRoster(names,agg,periodKey,kind){
+    const rows=names.map(n=>{
+      const a=agg[n]||{allTime:0,count:0,periods:{}};
+      const cur=a.periods[periodKey]?.total||0;
+      return {name:n,allTime:a.allTime,cur,count:a.count,periods:a.periods};
+    }).sort((a,b)=>b.allTime-a.allTime);
+    const max=Math.max(1,...rows.map(r=>r.allTime));
+    if(!rows.length)return '<div class="empty-state">No team members configured.</div>';
+    return rows.map(r=>{
+      const expanded=!!window._ccExpanded[kind+':'+r.name];
+      return `<div class="cc-person">
+        <div class="cc-person-row" onclick="toggleCcPerson('${kind}','${r.name}')">
+          <div class="cc-person-left">
+            <div class="cc-person-avatar">${r.name.slice(0,2).toUpperCase()}</div>
+            <div><div class="cc-person-name">${r.name}</div><div class="cc-person-sub">${r.count} approved ${kind==='closer'?'deal':'transfer'}${r.count!==1?'s':''}</div></div>
+          </div>
+          <div class="cc-person-right">
+            <div class="cc-person-cur">$${r.cur.toLocaleString()}<span>This Period</span></div>
+            <div class="cc-person-total">$${r.allTime.toLocaleString()}<span>All-Time</span></div>
+            <div class="cc-chevron">${expanded?'▾':'▸'}</div>
+          </div>
+        </div>
+        <div class="cc-bar-track"><div class="cc-bar-fill" style="width:${Math.round((r.allTime/max)*100)}%"></div></div>
+        <div class="cc-person-detail" id="cc-detail-${kind}-${r.name}" style="display:${expanded?'block':'none'}">${ccBuildMonthlyTable(r.periods)}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function ccBuildMonthlyTable(periods){
+    const keys=Object.keys(periods||{}).sort((a,b)=>b.localeCompare(a));
+    if(!keys.length)return '<div class="empty-state">No approved commission yet.</div>';
+    return `<table class="ref-table cc-monthly-table"><thead><tr><th>Pay Period (28th → 27th)</th><th>Approved</th><th>Commission</th></tr></thead><tbody>
+      ${keys.map(k=>`<tr><td>${ccPeriodLabel(k)}</td><td>${periods[k].count}</td><td class="ref-amt">$${periods[k].total.toLocaleString()}</td></tr>`).join('')}
+    </tbody></table>`;
+  }
+
+  window.toggleCcPerson=function(kind,name){
+    const k=kind+':'+name;
+    window._ccExpanded[k]=!window._ccExpanded[k];
+    renderAdminCommission();
+  };
 
   // ── ADMIN RECORDS VIEW ──
   window.onRoleTypeChange=function(){
@@ -1080,6 +1202,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
 
 /* LAYOUT */
 .two-col{display:grid;grid-template-columns:1.5fr 1fr;gap:12px;margin-bottom:12px;}
+.cc-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
 .panel-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;}
 .panel-card-title{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;}
 .panel-card-action{font-size:11px;color:var(--accent);cursor:pointer;letter-spacing:0;text-transform:none;font-weight:400;}
@@ -1204,6 +1327,31 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .ref-table .ref-amt{color:var(--green);font-weight:600;}
 .ref-table .ref-section td{background:rgba(79,126,255,.04);color:var(--accent2);font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:6px 16px;}
 
+/* COMMISSION STRUCTURE */
+.cc-period-banner{background:linear-gradient(135deg,rgba(79,126,255,.1),rgba(139,111,255,.06));border:1px solid rgba(79,126,255,.2);border-radius:12px;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px;}
+.cc-period-banner-label{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:3px;}
+.cc-period-banner-range{font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:1px;color:var(--text);}
+.cc-period-banner-days{font-size:11px;color:var(--accent2);margin-top:3px;}
+.cc-period-banner-total{text-align:right;}
+.cc-period-banner-amount{font-family:'Bebas Neue',sans-serif;font-size:30px;letter-spacing:1px;color:var(--accent2);}
+.cc-person{border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:8px;background:var(--surface2);}
+.cc-person-row{display:flex;align-items:center;justify-content:space-between;cursor:pointer;gap:10px;}
+.cc-person-left{display:flex;align-items:center;gap:9px;min-width:0;}
+.cc-person-avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0;}
+.cc-person-name{font-size:13px;font-weight:600;color:var(--text);}
+.cc-person-sub{font-size:11px;color:var(--text2);margin-top:1px;}
+.cc-person-right{display:flex;align-items:center;gap:14px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;}
+.cc-person-cur,.cc-person-total{text-align:right;font-size:13px;font-weight:600;line-height:1.3;}
+.cc-person-cur span,.cc-person-total span{display:block;font-size:9px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--text3);}
+.cc-person-cur{color:var(--accent2);}
+.cc-person-total{color:var(--green);}
+.cc-chevron{font-size:11px;color:var(--text3);width:14px;text-align:center;}
+.cc-bar-track{height:3px;background:rgba(255,255,255,.05);border-radius:2px;overflow:hidden;margin-top:9px;}
+.cc-bar-fill{height:100%;background:linear-gradient(90deg,var(--green),#22e89a);border-radius:2px;transition:width .5s;}
+.cc-person-detail{margin-top:11px;padding-top:11px;border-top:1px solid var(--border);}
+.cc-monthly-table{width:100%;}
+.cc-monthly-table th,.cc-monthly-table td{padding:6px 10px;}
+
 /* EARNINGS BANNER */
 .earnings-banner{background:linear-gradient(135deg,rgba(79,126,255,.1),rgba(107,159,255,.06));border:1px solid rgba(79,126,255,.2);border-radius:12px;padding:15px 20px;display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
 .earnings-label{font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text2);}
@@ -1324,7 +1472,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
 @media(max-width:768px){
   .sidebar{display:none;}
   .stats-row-3,.stats-row-4,.stats-row-7{grid-template-columns:repeat(2,1fr);}
-  .two-col,.field-row,.ar-grid,.filter-grid{grid-template-columns:1fr;}
+  .two-col,.field-row,.ar-grid,.filter-grid,.cc-grid{grid-template-columns:1fr;}
   .tier-steps,.opener-edit-fields{grid-template-columns:1fr;}
   .task-details{grid-template-columns:repeat(2,1fr);}
   .tasks-tabs{flex-direction:column;}
@@ -1577,6 +1725,32 @@ table.ref-table{width:100%;border-collapse:collapse;}
         <div class="view-header"><div class="view-title">Mortgage Records</div><div class="view-sub">Isolated from all opener and closer data.</div></div>
         <div class="mtg-stat-banner"><div class="mtg-stat-item"><div class="mtg-stat-val" id="adm-mtg-count">0</div><div class="mtg-stat-lbl">Transfers (filtered)</div></div></div>
         <div id="adm-mtg-list"><div class="empty-state">No mortgage transfers in this date range.</div></div>
+      </div>
+
+      <!-- ══ ADMIN COMMISSION STRUCTURE ══ -->
+      <div class="view" id="view-admin-commission">
+        <div class="view-header"><div class="view-title">Commission Structure</div><div class="view-sub">Approved commission only · pay periods run the 28th → 27th of every month.</div></div>
+        <div class="cc-period-banner">
+          <div>
+            <div class="cc-period-banner-label">Current Pay Period</div>
+            <div class="cc-period-banner-range" id="cc-period-label">—</div>
+            <div class="cc-period-banner-days" id="cc-days-left">—</div>
+          </div>
+          <div class="cc-period-banner-total">
+            <div class="cc-period-banner-label">Approved This Period</div>
+            <div class="cc-period-banner-amount" id="cc-period-total">$0</div>
+          </div>
+        </div>
+        <div class="cc-grid">
+          <div class="panel-card">
+            <div class="panel-card-title">Closers</div>
+            <div id="cc-closer-list"><div class="empty-state">Loading…</div></div>
+          </div>
+          <div class="panel-card">
+            <div class="panel-card-title">Openers</div>
+            <div id="cc-opener-list"><div class="empty-state">Loading…</div></div>
+          </div>
+        </div>
       </div>
 
       <!-- ══ OPENER DASHBOARD ══ -->
