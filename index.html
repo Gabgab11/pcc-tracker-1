@@ -8,7 +8,7 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-  import { getFirestore, doc, getDoc, setDoc, collection, addDoc, query, where, getDocs, updateDoc, orderBy, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, doc, getDoc, setDoc, collection, addDoc, query, where, getDocs, updateDoc, deleteDoc, orderBy, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
   import { getDatabase, ref, set, onDisconnect, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
   const firebaseConfig = {
@@ -591,13 +591,72 @@
     document.getElementById('adm-mtg-count').textContent=m.length;
     const wrap=document.getElementById('adm-mtg-list');
     if(!m.length){wrap.innerHTML='<div class="empty-state">No mortgage transfers in this date range.</div>';return;}
+    const isAdmin=currentUser?.role==='admin';
     wrap.innerHTML=m.map(r=>`<div class="mtg-record-card">
       <div class="mtg-record-top">
         <div><span class="mtg-agent">${r.agent||'—'}</span><span class="mtg-client-num">Client #${r.clientNumber||'—'}</span></div>
-        <span class="mtg-date">${fmtDate(r.date||r.createdAt)}</span>
+        <div class="ar-top-right"><span class="mtg-date">${fmtDate(r.date||r.createdAt)}</span>${isAdmin?buildDeleteBtn('mortgage',r.id,(r.agent?`${r.agent}'s record`:'this record')):''}</div>
       </div>
     </div>`).join('');
   }
+
+  // ── ADMIN-ONLY DELETE (deals, transfers, mortgage_transfers) ──
+  // Deleting a record removes its Firestore document entirely. Because every
+  // dashboard, history view, leaderboard, and the Commission Structure tab all
+  // derive their numbers live from the `deals` / `transfers` / `mtgRecords`
+  // arrays (which are kept in sync with Firestore via onSnapshot), a deleted
+  // record simply stops existing in those arrays the instant the snapshot
+  // listener fires — so every total, filter, export, and commission
+  // calculation updates immediately and automatically, with zero chance of a
+  // deleted record being counted anywhere again.
+  const COLLECTION_BY_KIND = { deal:'deals', transfer:'transfers', mortgage:'mortgage_transfers' };
+  window._pendingDelete = null;
+
+  function buildDeleteBtn(kind,id,label){
+    const safeLabel=String(label).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+    return `<button type="button" class="bin-button" title="Delete permanently" onclick="event.stopPropagation();openDeleteConfirm('${kind}','${id}','${safeLabel}')">
+      <svg class="bin-top" viewBox="0 0 39 7" fill="none" xmlns="http://www.w3.org/2000/svg"><line y1="5" x2="39" y2="5" stroke="white" stroke-width="4"/><line x1="12" y1="1.5" x2="26.0357" y2="1.5" stroke="white" stroke-width="3"/></svg>
+      <svg class="bin-bottom" viewBox="0 0 33 39" fill="none" xmlns="http://www.w3.org/2000/svg"><mask id="path-1-inside-1_8_19" fill="white"><path d="M0 0H33V35C33 37.2091 31.2091 39 29 39H4C1.79086 39 0 37.2091 0 35V0Z"/></mask><path d="M0 0H33H0ZM33 39H0H33ZM0 39V0V39ZM33 0V39V0Z" fill="white"/><path d="M0 0H33V4H0V0ZM33 39H0H33ZM0 39V0V39ZM33 0V39V0Z" fill="white" mask="url(#path-1-inside-1_8_19)"/><path d="M12 6L12 29" stroke="white" stroke-width="4"/><path d="M21 6V29" stroke="white" stroke-width="4"/></svg>
+      <svg class="garbage" viewBox="0 0 89 80" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20.8232 41.0671H79.8447" stroke="white" stroke-width="7"/><path d="M27.6953 21.0671L57.0769 64.0671" stroke="white" stroke-width="7"/></svg>
+    </button>`;
+  }
+
+  window.openDeleteConfirm=function(kind,id,label){
+    window._pendingDelete={kind,id};
+    const msgEl=document.getElementById('del-confirm-msg');
+    if(msgEl)msgEl.innerHTML=`This will permanently remove <b>${label}</b> from every dashboard, report, opener/closer view, and commission total. This cannot be undone.`;
+    document.getElementById('del-confirm-overlay').classList.add('open');
+  };
+
+  window.closeDeleteConfirm=function(){
+    window._pendingDelete=null;
+    document.getElementById('del-confirm-overlay').classList.remove('open');
+  };
+
+  window.confirmDelete=async function(){
+    const pending=window._pendingDelete;
+    if(!pending){closeDeleteConfirm();return;}
+    if(currentUser?.role!=='admin'){toast('Only an admin can delete records.','error');closeDeleteConfirm();return;}
+    const collName=COLLECTION_BY_KIND[pending.kind];
+    if(!collName){closeDeleteConfirm();return;}
+    const btn=document.getElementById('del-confirm-btn');
+    if(btn){btn.disabled=true;btn.textContent='Deleting…';}
+    try{
+      await deleteDoc(doc(db,collName,pending.id));
+      // Immediately strip the record from local state too, so totals/filters/
+      // exports update instantly even before the onSnapshot listener fires.
+      if(pending.kind==='deal')      deals      = deals.filter(x=>x.id!==pending.id);
+      if(pending.kind==='transfer')  transfers  = transfers.filter(x=>x.id!==pending.id);
+      if(pending.kind==='mortgage')  mtgRecords = mtgRecords.filter(x=>x.id!==pending.id);
+      syncGlobals();
+      renderCurrentView();
+      toast('Record permanently deleted.','success');
+    }catch(e){
+      toast('Failed to delete record.','error');console.error(e);
+    }
+    if(btn){btn.disabled=false;btn.textContent='Delete';}
+    closeDeleteConfirm();
+  };
 
   // ── COMMISSION STRUCTURE (admin) ──────────────────────────────────
   // Pay-period cycle: every period runs from the 28th of one month through
@@ -739,7 +798,7 @@
     else{dSec.style.display='block';tSec.style.display='block';}
     if(role!=='Opener'){
       dWrap.innerHTML=!baseDeal.length?'<div class="empty-state">No deals match the current filters.</div>':baseDeal.map(d=>`<div class="admin-record ${d.status!=='Pending'?'resolved':''}">
-        <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${d.status==='Approved'?'badge-green':d.status==='Declined'?'badge-red':'badge-amber'}">${d.status}</div><span class="ar-name">${d.name} → ${d.client||'—'}</span></div><span class="ar-date">${fmtDate(d.createdAt)}</span></div>
+        <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${d.status==='Approved'?'badge-green':d.status==='Declined'?'badge-red':'badge-amber'}">${d.status}</div><span class="ar-name">${d.name} → ${d.client||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(d.createdAt)}</span>${buildDeleteBtn('deal',d.id,(d.client||d.name||'this deal'))}</div></div>
         <div class="ar-grid"><div class="ar-field"><span class="ar-key">Opener</span><span class="ar-val">${d.opener||'—'}</span></div><div class="ar-field"><span class="ar-key">Deal Type</span><span class="ar-val">${d.dealType||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${d.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Monthly</span><span class="ar-val">$${d.monthly||'—'}</span></div><div class="ar-field"><span class="ar-key">First Pay</span><span class="ar-val">${fmtDate(d.firstpay)}</span></div><div class="ar-field"><span class="ar-key">Closing</span><span class="ar-val">${fmtDate(d.closing)}</span></div><div class="ar-field"><span class="ar-key">Debt</span><span class="ar-val">$${Number(d.debt||0).toLocaleString()}</span></div></div>
         ${d.status!=='Pending'?`<div class="ar-comm-resolved">Commission: <strong>$${d.comm||0}</strong> <span class="ar-status-text">(${d.status})</span></div>`:`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-d-${d.id}" value="${d.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminDealAction('${d.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminDealAction('${d.id}','Declined')">✗ Decline</button></div></div>`}
       </div>`).join('');
@@ -747,7 +806,7 @@
     }
     if(role!=='Closer'){
       tWrap.innerHTML=!baseXfer.length?'<div class="empty-state">No transfers match the current filters.</div>':baseXfer.map(t=>`<div class="admin-record ${t.status!=='Pending'?'resolved':''}">
-        <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${t.status==='Approved'?'badge-green':t.status==='Declined'?'badge-red':'badge-amber'}">${t.status||'Pending'}</div><span class="ar-name">${t.name||'—'} — ${t.type||'—'}</span></div><span class="ar-date">${fmtDate(t.date||t.createdAt)}</span></div>
+        <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${t.status==='Approved'?'badge-green':t.status==='Declined'?'badge-red':'badge-amber'}">${t.status||'Pending'}</div><span class="ar-name">${t.name||'—'} — ${t.type||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(t.date||t.createdAt)}</span>${buildDeleteBtn('transfer',t.id,(t.name||'this transfer'))}</div></div>
         <div class="ar-grid"><div class="ar-field"><span class="ar-key">Lead Source</span><span class="ar-val">${t.type||'—'}</span></div>${t.closer?`<div class="ar-field"><span class="ar-key">Closer</span><span class="ar-val">${t.closer}</span></div>`:''}<div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${t.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${t.comm||0}</span></div></div>
         ${t.status!=='Pending'?`<div class="ar-comm-resolved">Commission: <strong>$${t.comm||0}</strong> <span class="ar-status-text">(${t.status||'Pending'})</span></div>`:`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-t-${t.id}" value="${t.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`}
       </div>`).join('');
@@ -1390,6 +1449,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .ar-left{display:flex;align-items:center;gap:8px;}
 .ar-name{font-size:13px;color:var(--text);}
 .ar-date{font-size:11px;color:var(--text3);}
+.ar-top-right{display:flex;align-items:center;gap:10px;flex-shrink:0;}
 .ar-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:10px;}
 .ar-field{display:flex;flex-direction:column;gap:1px;}
 .ar-key{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;}
@@ -1459,6 +1519,46 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .empty-state{text-align:center;padding:24px;color:var(--text3);font-size:13px;}
 .divider{height:1px;background:var(--border);margin:14px 0;}
 
+/* DELETE BUTTON + CONFIRM MODAL */
+.bin-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background-color: rgb(255, 95, 95);
+  cursor: pointer;
+  border: 2px solid rgb(255, 201, 201);
+  transition-duration: 0.3s;
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.bin-bottom { width: 9px; z-index: 2; }
+.bin-top { width: 10px; transform-origin: right; transition-duration: 0.3s; z-index: 2; }
+.bin-button:hover .bin-top { transform: rotate(45deg); }
+.bin-button:hover { background-color: rgb(255, 0, 0); }
+.bin-button:active { transform: scale(0.9); }
+.garbage { position: absolute; width: 8px; height: auto; z-index: 1; opacity: 0; transition: all 0.3s; }
+.bin-button:hover .garbage { animation: throw 0.4s linear; }
+@keyframes throw { from { transform: translate(-400%, -700%); opacity: 0; } to { transform: translate(0%, 0%); opacity: 1; } }
+
+#del-confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998;display:none;align-items:center;justify-content:center;padding:20px;}
+#del-confirm-overlay.open{display:flex;}
+.del-confirm-box{background:var(--surface);border:1px solid var(--border2);border-radius:16px;padding:26px;width:100%;max-width:380px;box-shadow:0 12px 50px rgba(0,0,0,.5);text-align:center;}
+.del-confirm-icon{width:46px;height:46px;border-radius:50%;background:rgba(229,69,90,.12);border:1px solid rgba(229,69,90,.3);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;color:var(--red);}
+.del-confirm-title{font-family:'Bebas Neue',sans-serif;font-size:19px;letter-spacing:1px;color:var(--text);margin-bottom:8px;}
+.del-confirm-msg{font-size:13px;color:var(--text2);line-height:1.55;margin-bottom:20px;}
+.del-confirm-msg b{color:var(--text);}
+.del-confirm-btns{display:flex;gap:8px;}
+.btn-del-cancel{flex:1;padding:11px;border:1px solid var(--border2);border-radius:9px;background:transparent;color:var(--text2);font-family:'Inter',sans-serif;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;}
+.btn-del-cancel:hover{border-color:var(--text2);color:var(--text);}
+.btn-del-confirm{flex:1;padding:11px;border:none;border-radius:9px;background:linear-gradient(135deg,var(--red),#ff6b7a);color:#fff;font-family:'Inter',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:opacity .2s;}
+.btn-del-confirm:hover{opacity:.88;}
+.btn-del-confirm:disabled{opacity:.5;cursor:not-allowed;}
+
 [data-theme="light"] .sidebar{border-right:1px solid rgba(0,0,0,.08);}
 [data-theme="light"] .topbar{background:#fff;border-bottom:1px solid rgba(0,0,0,.08);}
 [data-theme="light"] select option{background:#fff;}
@@ -1502,6 +1602,21 @@ table.ref-table{width:100%;border-collapse:collapse;}
 </div>
 
 <div id="toast"></div>
+
+<!-- DELETE CONFIRM MODAL -->
+<div id="del-confirm-overlay">
+  <div class="del-confirm-box">
+    <div class="del-confirm-icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+    </div>
+    <div class="del-confirm-title">Delete Permanently?</div>
+    <div class="del-confirm-msg" id="del-confirm-msg">This will permanently remove this record from every dashboard, report, and commission total. This cannot be undone.</div>
+    <div class="del-confirm-btns">
+      <button class="btn-del-cancel" onclick="closeDeleteConfirm()">Cancel</button>
+      <button class="btn-del-confirm" id="del-confirm-btn" onclick="confirmDelete()">Delete</button>
+    </div>
+  </div>
+</div>
 
 <!-- LOGIN -->
 <div id="login-screen">
