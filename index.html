@@ -33,7 +33,7 @@
     'sabrina@pcc.com':         { role:'closer',   name:'Sabrina'  },
     'eddy@pcc.com':            { role:'closer',   name:'Eddy'     },
     'willy@pcc.com':           { role:'closer',   name:'Willy'    },
-    'Oscar@unitedfunds.com':   { role:'opener',   name:'Oscar'    },
+    'oscar@unitedfunds.com':   { role:'opener',   name:'Oscar'    },
     'sara@unitedfunds.com':    { role:'opener',   name:'Sara'     },
     'kate@unitedfunds.com':    { role:'opener',   name:'Kate'     },
     'mona@pcc.com':            { role:'opener',   name:'Mona'     },
@@ -43,13 +43,32 @@
     'paul@ucc.com':            { role:'mortgage', name:'Paul'     },
     'liam@ucc.com':            { role:'mortgage', name:'Liam'     },
     'hidie@ucc.com':           { role:'mortgage', name:'Hidie'    },
-    'wells@ucc.com':           { role:'mortgage', name:'Wills'    },
+    'wells@ucc.com':           { role:'mortgage', name:'Wells'    },
     'jacobtheguy@ucc.com':     { role:'mortgage', name:'Jacob'    },
   };
 
-  const CLOSER_NAMES  = ['David James','Sabrina','Eddy Jackson','Willy','Nathan'];
-  const OPENER_NAMES  = ['Sara miller','Kate Wilson','Clara Williams','Sean','John Peter','Tommy Eager'];
+  const CLOSER_NAMES  = ['David','Sabrina','Eddy','Willy'];
+  const OPENER_NAMES  = ['Sara','Kate','Mona','Sean','Emmanuel','Tom','Oscar'];
   const MTG_AGENTS    = ['Paul','Liam','Hidie','Wells','Jacob'];
+
+  // ── DISPLAY ALIASES ──
+  // Cosmetic name only. The keys here (Mona, Wells, etc.) remain the real,
+  // underlying identity used everywhere for login (ROLE_MAP), Firestore writes,
+  // role arrays, and all profile/leaderboard matching — changing an alias here
+  // NEVER affects login or historical record matching. displayName() is called
+  // only at render time, wherever a name is shown to a person on screen.
+  const DISPLAY_ALIAS = {
+    'Mona':'Clara Williams',
+    'Eddy':'Eddy Jackson',
+    'Emmanuel':'John Peter',
+    'Sara':'Sara Miller',
+    'Tom':'Tommy Eager',
+    'Kate':'Kate Wilson',
+    'David':'David James',
+    'Wells':'Wills Adams',
+  };
+  function displayName(name){ return DISPLAY_ALIAS[name] || name || '—'; }
+  window.displayName = displayName;
   const CLOSED_TYPES  = ['1st Close','2nd Close','3rd Close'];
   const FLAT_COMM     = { PccSub10:1, PccAbove10:2, TaxAbove10:5, TaxBelow10:1, 'Student Loan':2 };
   const TIER_RATES    = [5, 7.50, 10];
@@ -261,7 +280,7 @@
     errEl.style.display='none';
     if(!newPass||newPass.length<8){showError(errEl,'Password must be at least 8 characters.');return;}
     if(newPass!==confirm){showError(errEl,'Passwords do not match.');return;}
-    const defs=['Admin123','David123','Sabrina123','Eddy123','Willy123','Nate123','Sara123','Kate123','Mona123','Sean123','Emmanuel123','Tom123','Paul123','Liam123','Hidie123','Wells123','Jacob123'];
+    const defs=['Admin123','David123','Sabrina123','Eddy123','Willy123','Oscar123','Sara123','Kate123','Mona123','Sean123','Emmanuel123','Tom123','Paul123','Liam123','Hidie123','Wells123','Jacob123'];
     if(defs.map(d=>d.toLowerCase()).includes(newPass.toLowerCase())){showError(errEl,'Please choose a different password from your temporary one.');return;}
     btn.textContent='Saving…';btn.disabled=true;
     try{
@@ -300,11 +319,11 @@
   async function launchApp(){
     document.getElementById('app').style.display='flex';
     const role=currentUser.role;
-    document.getElementById('sb-user-name').textContent=currentUser.name;
+    document.getElementById('sb-user-name').textContent=displayName(currentUser.name);
     document.getElementById('sb-user-role').textContent=role.charAt(0).toUpperCase()+role.slice(1);
-    document.getElementById('sb-avatar').textContent=currentUser.name.slice(0,2).toUpperCase();
+    document.getElementById('sb-avatar').textContent=displayName(currentUser.name).slice(0,2).toUpperCase();
     const hour=getNowEgypt().getHours();
-    document.getElementById('topbar-greeting').textContent=(hour<12?'Good morning':hour<17?'Good afternoon':'Good evening')+', '+currentUser.name;
+    document.getElementById('topbar-greeting').textContent=(hour<12?'Good morning':hour<17?'Good afternoon':'Good evening')+', '+displayName(currentUser.name);
     buildSidebarNav(role);
     window._gdf={from:null,to:null,preset:'all',roleScope:'all'};
     updateGdfBadge();
@@ -477,10 +496,10 @@
     ].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
     const recent=tagged.slice(0,5);
     feed.innerHTML=recent.length?recent.map(x=>{
-      const label = x._kind==='deal' ? `${x.name} <span class="feed-sep">·</span> ${x.client||'—'}`
-                  : x._kind==='transfer' ? `${x.name||'—'} <span class="feed-sep">·</span> ${x.type||'—'}`
-                  : `${x.agent||'—'} <span class="feed-sep">·</span> Client #${x.clientNumber||'—'}`;
-      const sub = x._kind==='deal' ? (x.dealType||'—') : x._kind==='transfer' ? (x.closer?'→ '+x.closer:'Opener transfer') : 'Mortgage transfer';
+      const label = x._kind==='deal' ? `${displayName(x.name)} <span class="feed-sep">·</span> ${x.client||'—'}`
+                  : x._kind==='transfer' ? `${displayName(x.name)||'—'} <span class="feed-sep">·</span> ${x.type||'—'}`
+                  : `${displayName(x.agent)||'—'} <span class="feed-sep">·</span> ${x.phone||'—'}`;
+      const sub = x._kind==='deal' ? (x.dealType||'—') : x._kind==='transfer' ? (x.closer?'→ '+displayName(x.closer):'Opener transfer') : 'Mortgage transfer';
       return `<div class="feed-row">
         <div class="feed-dot ${x.status==='Approved'?'green':x.status==='Declined'?'red':'amber'}"></div>
         <div class="feed-info"><div class="feed-name">${label}</div><div class="feed-sub">${sub}</div></div>
@@ -562,7 +581,7 @@
     const isPending=tab==='pending';
     return`<div class="task-card ${tab}">
       <div class="task-card-header">
-        <div><span class="task-client">${d.client||'—'}</span><span class="task-meta">${d.name} → ${d.opener||'—'} · ${d.dealType||'—'}</span></div>
+        <div><span class="task-client">${d.client||'—'}</span><span class="task-meta">${displayName(d.name)} → ${d.opener?displayName(d.opener):'—'} · ${d.dealType||'—'}</span></div>
         <span class="task-date">${fmtDate(d.createdAt)}</span>
       </div>
       <div class="task-details">
@@ -582,7 +601,7 @@
     const isPending=tab==='pending';
     return`<div class="task-card ${tab}" style="border-left-color:var(--teal)">
       <div class="task-card-header">
-        <div><span class="task-client">${t.name||'—'}</span><span class="task-meta">${t.type||'—'}${t.closer?' → '+t.closer:''}</span></div>
+        <div><span class="task-client">${displayName(t.name)||'—'}</span><span class="task-meta">${t.type||'—'}${t.closer?' → '+displayName(t.closer):''}</span></div>
         <span class="task-date">${fmtDate(t.createdAt)}</span>
       </div>
       <div class="task-details">
@@ -599,7 +618,7 @@
     const isPending=tab==='pending';
     return`<div class="task-card ${tab}" style="border-left-color:var(--teal)">
       <div class="task-card-header">
-        <div><span class="task-client">${r.agent||'—'}</span><span class="task-meta">Client #${r.clientNumber||'—'}</span></div>
+        <div><span class="task-client">${displayName(r.agent)||'—'}</span><span class="task-meta">${r.phone||'—'}</span></div>
         <span class="task-date">${fmtDate(r.createdAt)}</span>
       </div>
       <div class="task-details">
@@ -635,8 +654,8 @@
     const wrap=document.getElementById('adm-mtg-list');
     if(!m.length){wrap.innerHTML='<div class="empty-state">No mortgage transfers in this date range.</div>';return;}
     wrap.innerHTML=m.map(r=>`<div class="admin-record ${r.status&&r.status!=='Pending'?'resolved':''}">
-      <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${r.status==='Approved'?'badge-green':r.status==='Declined'?'badge-red':'badge-amber'}">${r.status||'Pending'}</div><span class="ar-name">${r.agent||'—'} — Client #${r.clientNumber||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(r.date||r.createdAt)}</span>${buildDeleteBtn('mortgage',r.id,(r.agent?`${r.agent}'s record`:'this record'))}</div></div>
-      <div class="ar-grid"><div class="ar-field"><span class="ar-key">Agent</span><span class="ar-val">${r.agent||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${r.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Client #</span><span class="ar-val">${r.clientNumber||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${r.comm||0}</span></div></div>
+      <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${r.status==='Approved'?'badge-green':r.status==='Declined'?'badge-red':'badge-amber'}">${r.status||'Pending'}</div><span class="ar-name">${displayName(r.agent)||'—'} — ${r.phone||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(r.date||r.createdAt)}</span>${buildDeleteBtn('mortgage',r.id,(r.agent?`${displayName(r.agent)}'s record`:'this record'))}</div></div>
+      <div class="ar-grid"><div class="ar-field"><span class="ar-key">Agent</span><span class="ar-val">${displayName(r.agent)||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${r.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${r.comm||0}</span></div></div>
       ${r.status&&r.status!=='Pending'?`<div class="ar-comm-resolved">Commission: <strong>$${r.comm||0}</strong> <span class="ar-status-text">(${r.status})</span></div>`:`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`}
     </div>`).join('');
   }
@@ -827,11 +846,12 @@
     const max=Math.max(1,...stats.map(r=>r.totalComm));
     return stats.map(r=>{
       const cur=r.periods[periodKey]?.total||0;
+      const dn=displayName(r.name);
       return `<div class="cc-person" onclick="openAgentProfile('${kind}','${r.name.replace(/'/g,"\\'")}')">
         <div class="cc-person-row">
           <div class="cc-person-left">
-            <div class="cc-person-avatar">${r.name.slice(0,2).toUpperCase()}</div>
-            <div><div class="cc-person-name">${r.name}</div><div class="cc-person-sub">${r.approved} approved ${CC_ROLE_CFG[kind].label}${r.approved!==1?'s':''} · ${r.submissions} total</div></div>
+            <div class="cc-person-avatar">${dn.slice(0,2).toUpperCase()}</div>
+            <div><div class="cc-person-name">${dn}</div><div class="cc-person-sub">${r.approved} approved ${CC_ROLE_CFG[kind].label}${r.approved!==1?'s':''} · ${r.submissions} total</div></div>
           </div>
           <div class="cc-person-right">
             <div class="cc-person-cur">$${cur.toLocaleString()}<span>This Period</span></div>
@@ -859,7 +879,7 @@
     if(!rows.length){ wrap.innerHTML='<div class="empty-state">No team members configured.</div>'; return; }
     const max=Math.max(1,...rows.map(r=>r.totalComm));
     wrap.innerHTML=rows.map((r,i)=>`<div class="bar-row cc-lb-row" onclick="openAgentProfile('${r.kind}','${r.name.replace(/'/g,"\\'")}')">
-      <div class="bar-label-wrap"><span class="bar-name"><b class="cc-lb-rank">#${i+1}</b> ${r.name} <span class="badge-teal status-badge" style="margin-left:5px;text-transform:capitalize">${r.kind}</span></span><span class="bar-val">$${r.totalComm.toLocaleString()}</span></div>
+      <div class="bar-label-wrap"><span class="bar-name"><b class="cc-lb-rank">#${i+1}</b> ${displayName(r.name)} <span class="badge-teal status-badge" style="margin-left:5px;text-transform:capitalize">${r.kind}</span></span><span class="bar-val">$${r.totalComm.toLocaleString()}</span></div>
       <div class="bar-track"><div class="bar-fill" style="width:${Math.round((r.totalComm/max)*100)}%"></div></div>
     </div>`).join('');
   }
@@ -889,16 +909,17 @@
     ).join('') || '<div class="empty-state">No approved months yet.</div>';
 
     const recordRows = recordsSorted.slice(0,8).map(rec=>{
-      const label = kind==='closer' ? (rec.client||'—') : kind==='opener' ? (rec.name+' · '+(rec.type||'—')) : ('Client #'+(rec.clientNumber||'—'));
+      const label = kind==='closer' ? (rec.client||'—') : kind==='opener' ? (displayName(rec.name)+' · '+(rec.type||'—')) : (rec.phone||'—');
       const phone = rec.phone||'—';
       return `<tr><td>${fmtDate(rec.createdAt)}</td><td>${label}</td><td>${phone}</td><td><span class="status-badge ${rec.status==='Approved'?'badge-green':rec.status==='Declined'?'badge-red':'badge-amber'}">${rec.status||'Pending'}</span></td><td class="ref-amt">$${rec.comm||0}</td></tr>`;
     }).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--text3)">No records yet.</td></tr>`;
 
+    const dn=displayName(r.name);
     return `
       <div class="ap-header">
-        <div class="ap-avatar">${r.name.slice(0,2).toUpperCase()}</div>
+        <div class="ap-avatar">${dn.slice(0,2).toUpperCase()}</div>
         <div>
-          <div class="ap-name">${r.name}</div>
+          <div class="ap-name">${dn}</div>
           <div class="ap-role">${kind.charAt(0).toUpperCase()+kind.slice(1)} · Rank <b>#${rank}</b> of ${totalAgents}</div>
         </div>
       </div>
@@ -947,16 +968,16 @@
     else{dSec.style.display='block';tSec.style.display='block';}
     if(role!=='Opener'){
       dWrap.innerHTML=!baseDeal.length?'<div class="empty-state">No deals match the current filters.</div>':baseDeal.map(d=>`<div class="admin-record ${d.status!=='Pending'?'resolved':''}">
-        <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${d.status==='Approved'?'badge-green':d.status==='Declined'?'badge-red':'badge-amber'}">${d.status}</div><span class="ar-name">${d.name} → ${d.client||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(d.createdAt)}</span>${buildDeleteBtn('deal',d.id,(d.client||d.name||'this deal'))}</div></div>
-        <div class="ar-grid"><div class="ar-field"><span class="ar-key">Opener</span><span class="ar-val">${d.opener||'—'}</span></div><div class="ar-field"><span class="ar-key">Deal Type</span><span class="ar-val">${d.dealType||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${d.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Monthly</span><span class="ar-val">$${d.monthly||'—'}</span></div><div class="ar-field"><span class="ar-key">First Pay</span><span class="ar-val">${fmtDate(d.firstpay)}</span></div><div class="ar-field"><span class="ar-key">Closing</span><span class="ar-val">${fmtDate(d.closing)}</span></div><div class="ar-field"><span class="ar-key">Debt</span><span class="ar-val">$${Number(d.debt||0).toLocaleString()}</span></div></div>
+        <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${d.status==='Approved'?'badge-green':d.status==='Declined'?'badge-red':'badge-amber'}">${d.status}</div><span class="ar-name">${displayName(d.name)} → ${d.client||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(d.createdAt)}</span>${buildDeleteBtn('deal',d.id,(d.client||displayName(d.name)||'this deal'))}</div></div>
+        <div class="ar-grid"><div class="ar-field"><span class="ar-key">Opener</span><span class="ar-val">${d.opener?displayName(d.opener):'—'}</span></div><div class="ar-field"><span class="ar-key">Deal Type</span><span class="ar-val">${d.dealType||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${d.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Monthly</span><span class="ar-val">$${d.monthly||'—'}</span></div><div class="ar-field"><span class="ar-key">First Pay</span><span class="ar-val">${fmtDate(d.firstpay)}</span></div><div class="ar-field"><span class="ar-key">Closing</span><span class="ar-val">${fmtDate(d.closing)}</span></div><div class="ar-field"><span class="ar-key">Debt</span><span class="ar-val">$${Number(d.debt||0).toLocaleString()}</span></div></div>
         ${d.status!=='Pending'?`<div class="ar-comm-resolved">Commission: <strong>$${d.comm||0}</strong> <span class="ar-status-text">(${d.status})</span></div>`:`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-d-${d.id}" value="${d.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminDealAction('${d.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminDealAction('${d.id}','Declined')">✗ Decline</button></div></div>`}
       </div>`).join('');
       if(countEl&&role==='Closer')countEl.textContent=baseDeal.length+' deal'+(baseDeal.length!==1?'s':'');
     }
     if(role!=='Closer'){
       tWrap.innerHTML=!baseXfer.length?'<div class="empty-state">No transfers match the current filters.</div>':baseXfer.map(t=>`<div class="admin-record ${t.status!=='Pending'?'resolved':''}">
-        <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${t.status==='Approved'?'badge-green':t.status==='Declined'?'badge-red':'badge-amber'}">${t.status||'Pending'}</div><span class="ar-name">${t.name||'—'} — ${t.type||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(t.date||t.createdAt)}</span>${buildDeleteBtn('transfer',t.id,(t.name||'this transfer'))}</div></div>
-        <div class="ar-grid"><div class="ar-field"><span class="ar-key">Lead Source</span><span class="ar-val">${t.type||'—'}</span></div>${t.closer?`<div class="ar-field"><span class="ar-key">Closer</span><span class="ar-val">${t.closer}</span></div>`:''}<div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${t.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${t.comm||0}</span></div></div>
+        <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${t.status==='Approved'?'badge-green':t.status==='Declined'?'badge-red':'badge-amber'}">${t.status||'Pending'}</div><span class="ar-name">${displayName(t.name)||'—'} — ${t.type||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(t.date||t.createdAt)}</span>${buildDeleteBtn('transfer',t.id,(displayName(t.name)||'this transfer'))}</div></div>
+        <div class="ar-grid"><div class="ar-field"><span class="ar-key">Lead Source</span><span class="ar-val">${t.type||'—'}</span></div>${t.closer?`<div class="ar-field"><span class="ar-key">Closer</span><span class="ar-val">${displayName(t.closer)}</span></div>`:''}<div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${t.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${t.comm||0}</span></div></div>
         ${t.status!=='Pending'?`<div class="ar-comm-resolved">Commission: <strong>$${t.comm||0}</strong> <span class="ar-status-text">(${t.status||'Pending'})</span></div>`:`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-t-${t.id}" value="${t.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`}
       </div>`).join('');
       if(countEl&&role==='Opener')countEl.textContent=baseXfer.length+' transfer'+(baseXfer.length!==1?'s':'');
@@ -977,8 +998,8 @@
     const f=getFilters(),role=f.roleType;let rows=[];
     const baseDeal=gdfDeals().filter(d=>{if(f.status!=='All'&&d.status!==f.status)return false;if(f.dealType!=='All'&&d.dealType!==f.dealType)return false;return true;});
     const baseXfer=gdfXfers().filter(t=>{if(f.dealType!=='All'&&t.type!==f.dealType)return false;return true;});
-    if(role==='Opener'||role==='All'){if(baseXfer.length){rows.push(['--- OPENER TRANSFERS ---']);rows.push(['Opener','Lead Source','Closer','Phone','Date','Commission','Status']);baseXfer.forEach(t=>rows.push([t.name||'',t.type||'',t.closer||'',t.phone||'',(t.date||t.createdAt||'').slice(0,10),t.comm||0,t.status||'Pending']));rows.push([]);}}
-    if(role==='Closer'||role==='All'){if(baseDeal.length){rows.push(['--- CLOSER DEALS ---']);rows.push(['Closer','Client','Phone','Opener','Deal Type','First Pay','Monthly','Closing','Commission','Status']);baseDeal.forEach(d=>rows.push([d.name||'',d.client||'',d.phone||'',d.opener||'',d.dealType||'',fmtDate(d.firstpay),d.monthly||'',fmtDate(d.closing),d.comm||0,d.status||'Pending']));}}
+    if(role==='Opener'||role==='All'){if(baseXfer.length){rows.push(['--- OPENER TRANSFERS ---']);rows.push(['Opener','Lead Source','Closer','Phone','Date','Commission','Status']);baseXfer.forEach(t=>rows.push([displayName(t.name)||'',t.type||'',t.closer?displayName(t.closer):'',t.phone||'',(t.date||t.createdAt||'').slice(0,10),t.comm||0,t.status||'Pending']));rows.push([]);}}
+    if(role==='Closer'||role==='All'){if(baseDeal.length){rows.push(['--- CLOSER DEALS ---']);rows.push(['Closer','Client','Phone','Opener','Deal Type','First Pay','Monthly','Closing','Commission','Status']);baseDeal.forEach(d=>rows.push([displayName(d.name)||'',d.client||'',d.phone||'',d.opener?displayName(d.opener):'',d.dealType||'',fmtDate(d.firstpay),d.monthly||'',fmtDate(d.closing),d.comm||0,d.status||'Pending']));}}
     if(!rows.length){toast('No records to export.','error');return;}
     const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
     const blob=new Blob([csv],{type:'text/csv'}),url=URL.createObjectURL(blob),a=document.createElement('a');
@@ -1051,7 +1072,7 @@
         <div class="record-top"><div class="record-type">${x.type}</div><div class="status-badge ${x.status==='Approved'?'badge-green':x.status==='Declined'?'badge-red':'badge-amber'}">${x.status==='Approved'?'Approved':x.status==='Declined'?'Declined':'In Review'}</div></div>
         <div class="record-row"><span>Phone</span><span>${x.phone}</span></div>
         <div class="record-row"><span>Date</span><span>${fmtDate(x.date)}</span></div>
-        ${x.closer?`<div class="record-row"><span>Closer</span><span>${x.closer}</span></div>`:''}
+        ${x.closer?`<div class="record-row"><span>Closer</span><span>${displayName(x.closer)}</span></div>`:''}
         <div class="record-row comm-row"><span>Commission</span><span class="comm-val">$${x.comm}</span></div>
         ${isPending?`<div class="opener-edit-section" id="edit-section-${x.id}" style="display:none">
           <div class="opener-edit-fields">
@@ -1061,7 +1082,7 @@
             </select></div>
             <div class="field-mini"><label>Date</label><input type="date" id="edit-date-${x.id}" value="${x.date||''}"/></div>
             <div class="field-mini"><label>Phone</label><input type="text" id="edit-phone-${x.id}" value="${x.phone||''}"/></div>
-            <div class="field-mini" id="edit-closer-wrap-${x.id}" style="${CLOSED_TYPES.includes(x.type)?'':'display:none'}"><label>Closer</label><select id="edit-closer-${x.id}"><option value="">Select closer…</option>${CLOSER_NAMES.map(n=>`<option value="${n}" ${x.closer===n?'selected':''}>${n}</option>`).join('')}<option value="Outsource" ${x.closer==='Outsource'?'selected':''}>Outsource</option></select></div>
+            <div class="field-mini" id="edit-closer-wrap-${x.id}" style="${CLOSED_TYPES.includes(x.type)?'':'display:none'}"><label>Closer</label><select id="edit-closer-${x.id}"><option value="">Select closer…</option>${CLOSER_NAMES.map(n=>`<option value="${n}" ${x.closer===n?'selected':''}>${displayName(n)}</option>`).join('')}<option value="Outsource" ${x.closer==='Outsource'?'selected':''}>Outsource</option></select></div>
           </div>
           <div class="opener-edit-actions"><button class="btn-save-edit" onclick="saveOpenerEdit('${x.id}')">Save Changes</button><button class="btn-cancel-edit" onclick="cancelOpenerEdit('${x.id}')">Cancel</button></div>
         </div>
@@ -1093,7 +1114,7 @@
     if(!d.length){wrap.innerHTML='<div class="empty-state">No deals in this range.</div>';return;}
     wrap.innerHTML=d.map(x=>`<div class="record-card">
       <div class="record-top"><div class="record-type">${x.client||'—'}</div><div class="status-badge ${x.status==='Approved'?'badge-green':x.status==='Declined'?'badge-red':'badge-amber'}">${x.status==='Approved'?'Approved':x.status==='Declined'?'Declined':'In Review'}</div></div>
-      <div class="record-row"><span>Opener</span><span>${x.opener||'—'}</span></div>
+      <div class="record-row"><span>Opener</span><span>${x.opener?displayName(x.opener):'—'}</span></div>
       <div class="record-row"><span>Deal Type</span><span>${x.dealType||'—'}</span></div>
       <div class="record-row"><span>Phone</span><span>${x.phone||'—'}</span></div>
       <div class="record-row"><span>Debt</span><span>$${Number(x.debt||0).toLocaleString()}</span></div>
@@ -1150,25 +1171,61 @@
     document.getElementById('mtg-stat-alltime').textContent=mtgRecords.length;
     const feed=document.getElementById('mtg-recent-feed');
     const recent=m.slice(0,5);
-    feed.innerHTML=recent.length?recent.map(r=>`<div class="feed-row"><div class="feed-dot ${r.status==='Approved'?'green':r.status==='Declined'?'red':'amber'}"></div><div class="feed-info"><div class="feed-name">Client #${r.clientNumber||'—'}</div><div class="feed-sub">${r.agent||'—'} · ${fmtDate(r.date)}</div></div><div class="feed-right"><div class="feed-comm">$${r.comm||0}</div><div class="status-badge ${r.status==='Approved'?'badge-green':r.status==='Declined'?'badge-red':'badge-amber'}">${r.status||'Pending'}</div></div></div>`).join(''):'<div class="empty-state">No transfers yet.</div>';
+    feed.innerHTML=recent.length?recent.map(r=>`<div class="feed-row"><div class="feed-dot ${r.status==='Approved'?'green':r.status==='Declined'?'red':'amber'}"></div><div class="feed-info"><div class="feed-name">${r.phone||'—'}</div><div class="feed-sub">${displayName(r.agent)||'—'} · ${fmtDate(r.date)}</div></div><div class="feed-right"><div class="feed-comm">$${r.comm||0}</div><div class="status-badge ${r.status==='Approved'?'badge-green':r.status==='Declined'?'badge-red':'badge-amber'}">${r.status||'Pending'}</div></div></div>`).join(''):'<div class="empty-state">No transfers yet.</div>';
   }
   function renderMtgRecords(){
     const m=gdfMtg();
     document.getElementById('mtg-records-count').textContent=m.length+' record'+(m.length!==1?'s':'');
     const wrap=document.getElementById('mtg-records-list');
     if(!m.length){wrap.innerHTML='<div class="empty-state">No transfers in this date range.</div>';return;}
-    wrap.innerHTML=m.map(r=>`<div class="record-card">
-      <div class="record-top"><div class="record-type">Client #${r.clientNumber||'—'}</div><div class="status-badge ${r.status==='Approved'?'badge-green':r.status==='Declined'?'badge-red':'badge-amber'}">${r.status||'Pending'}</div></div>
-      <div class="record-row"><span>Phone</span><span>${r.phone||'—'}</span></div>
-      <div class="record-row"><span>Date</span><span>${fmtDate(r.date||r.createdAt)}</span></div>
-      <div class="record-row comm-row"><span>Commission</span><span class="comm-val">$${r.comm||0}</span></div>
-    </div>`).join('');
+    const groups={Pending:[],Approved:[],Declined:[]};
+    m.forEach(r=>{const s=r.status||'Pending';(groups[s]||(groups.Pending)).push(r);});
+    const order=['Pending','Approved','Declined'];
+    const icons={Pending:'⏳',Approved:'✅',Declined:'🔄'};
+    wrap.innerHTML=order.map(status=>{
+      const list=groups[status];if(!list.length)return'';
+      const gid='mtg-grp-'+status;
+      const cards=list.map(r=>{
+        const isDeclined=r.status==='Declined';
+        const ph=(r.phone||'').replace(/'/g,"\'");
+        const dt=r.date||'';
+        const resubBtn=isDeclined?`<button class="btn-mtg-resubmit" onclick="mtgResubmit('${ph}','${dt}')">↩ Resubmit</button>`:'';
+        return `<div class="mtg-rec-card mtg-status-${status.toLowerCase()}">
+          <div class="mtg-rec-row"><span class="mtg-rec-label">Phone</span><span>${r.phone||'—'}</span></div>
+          <div class="mtg-rec-row"><span class="mtg-rec-label">Date</span><span>${fmtDate(r.date||r.createdAt)}</span></div>
+          ${r.comm?`<div class="mtg-rec-row"><span class="mtg-rec-label">Commission</span><span class="comm-val">$${r.comm}</span></div>`:''}
+          ${resubBtn}
+        </div>`;
+      }).join('');
+      return `<div class="mtg-group">
+        <div class="mtg-group-header" onclick="toggleMtgGroup('${gid}')">
+          <span>${icons[status]} ${status} <span class="mtg-group-count">${list.length}</span></span>
+          <span class="mtg-group-chevron" id="${gid}-icon">▾</span>
+        </div>
+        <div class="mtg-group-body" id="${gid}">${cards}</div>
+      </div>`;
+    }).join('');
   }
+  window.toggleMtgGroup=function(id){
+    const el=document.getElementById(id),ic=document.getElementById(id+'-icon');
+    if(!el)return;
+    const open=el.style.display!=='none';
+    el.style.display=open?'none':'block';
+    if(ic)ic.textContent=open?'▸':'▾';
+  };
+  window.mtgResubmit=function(phone,date){
+    switchView('mtg-submit');
+    setTimeout(()=>{
+      const ph=document.getElementById('mtg-phone'),dt=document.getElementById('mtg-date');
+      if(ph)ph.value=phone;
+      if(dt)dt.value=date;
+    },80);
+  };
   window.submitMtgTransfer=async function(){
-    const agent=document.getElementById('mtg-agent').value,client=document.getElementById('mtg-client').value.trim(),phone=document.getElementById('mtg-phone').value.trim(),date=document.getElementById('mtg-date').value;
-    if(!agent||!client||!phone||!date){toast('Please complete all fields.','error');return;}
+    const agent=document.getElementById('mtg-agent').value,phone=document.getElementById('mtg-phone').value.trim(),date=document.getElementById('mtg-date').value;
+    if(!agent||!phone||!date){toast('Please complete all fields.','error');return;}
     const btn=document.getElementById('mtg-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
-    try{await addDoc(collection(db,'mortgage_transfers'),{agent,agentEmail:currentUser.email,clientNumber:client,phone,date,comm:0,status:'Pending',createdAt:new Date().toISOString()});document.getElementById('mtg-client').value='';document.getElementById('mtg-phone').value='';document.getElementById('mtg-date').value='';toast('Transfer submitted! Pending admin approval.','success');}
+    try{await addDoc(collection(db,'mortgage_transfers'),{agent,agentEmail:currentUser.email,phone,date,comm:0,status:'Pending',createdAt:new Date().toISOString()});document.getElementById('mtg-phone').value='';document.getElementById('mtg-date').value='';toast('Transfer submitted! Pending admin approval.','success');}
     catch(e){toast('Failed to submit.','error');console.error(e);}
     btn.disabled=false;btn.textContent='Submit Transfer';
   };
@@ -1746,6 +1803,24 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .btn-del-confirm:hover{opacity:.88;}
 .btn-del-confirm:disabled{opacity:.5;cursor:not-allowed;}
 
+
+/* MORTGAGE RECORDS — grouped collapsible */
+.mtg-group{border:1px solid var(--border);border-radius:11px;overflow:hidden;margin-bottom:8px;}
+.mtg-group-header{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text);user-select:none;transition:background .15s;}
+.mtg-group-header:hover{background:rgba(255,255,255,.03);}
+.mtg-group-count{font-family:'Bebas Neue',sans-serif;font-size:14px;letter-spacing:1px;background:var(--border2);border-radius:20px;padding:0 7px;margin-left:5px;color:var(--text2);}
+.mtg-group-chevron{font-size:11px;color:var(--text3);}
+.mtg-group-body{padding:10px 12px;display:block;border-top:1px solid var(--border);}
+.mtg-rec-card{background:var(--surface2);border-radius:9px;padding:11px 13px;margin-bottom:7px;border-left:3px solid var(--border2);}
+.mtg-rec-card:last-child{margin-bottom:0;}
+.mtg-rec-card.mtg-status-pending{border-left-color:var(--amber);}
+.mtg-rec-card.mtg-status-approved{border-left-color:var(--green);}
+.mtg-rec-card.mtg-status-declined{border-left-color:var(--red);}
+.mtg-rec-row{display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border);}
+.mtg-rec-row:last-of-type{border-bottom:none;}
+.mtg-rec-label{color:var(--text2);}
+.btn-mtg-resubmit{margin-top:9px;width:100%;padding:7px;border:1px solid rgba(79,126,255,.35);border-radius:7px;background:rgba(79,126,255,.08);color:var(--accent2);font-family:'Inter',sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;}
+.btn-mtg-resubmit:hover{background:rgba(79,126,255,.16);}
 [data-theme="light"] .sidebar{border-right:1px solid rgba(0,0,0,.08);}
 [data-theme="light"] .topbar{background:#fff;border-bottom:1px solid rgba(0,0,0,.08);}
 [data-theme="light"] select option{background:#fff;}
@@ -2102,7 +2177,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
         <div class="view-header"><div class="view-title">Submit Transfer</div><div class="view-sub">Log a new lead transfer.</div></div>
         <div class="form-card">
           <div class="form-card-title">Transfer Details</div>
-          <div class="field"><label>Opener Name</label><select id="op-name"><option value="">Select your name…</option><option>Sara</option><option>Kate</option><option>Mona</option><option>Sean</option><option>Emmanuel</option><option>Tom</option></select></div>
+          <div class="field"><label>Opener Name</label><select id="op-name"><option value="">Select your name…</option><option>Sara</option><option>Kate</option><option>Mona</option><option>Sean</option><option>Emmanuel</option><option>Tom</option><option>Oscar</option></select></div>
           <div class="field"><label>Lead Source / Transfer Type</label>
             <select id="op-type" onchange="handleTransferType()">
               <option value="">Select lead source…</option>
@@ -2111,7 +2186,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
             </select>
           </div>
           <div class="comm-preview-card"><div class="comm-preview-label">Commission for this transfer</div><div class="comm-preview-amount" id="op-comm-preview">—</div><div class="comm-preview-sub" id="op-tier-label"></div></div>
-          <div class="field" id="op-closer-wrap" style="display:none"><label>Assign to Closer</label><select id="op-closer"><option value="">Select closer…</option><option>David</option><option>Sabrina</option><option>Eddy</option><option>Willy</option><option>Nathan</option><option>Outsource</option></select></div>
+          <div class="field" id="op-closer-wrap" style="display:none"><label>Assign to Closer</label><select id="op-closer"><option value="">Select closer…</option><option>David</option><option>Sabrina</option><option>Eddy</option><option>Willy</option><option>Oscar</option><option>Outsource</option></select></div>
           <div class="field-row"><div class="field"><label>Transfer Date</label><input id="op-date" type="date"/></div><div class="field"><label>Client Phone</label><input id="op-phone" placeholder="+1 (000) 000-0000"/></div></div>
           <button class="btn-form" id="op-submit-btn" onclick="submitOpener()">Submit Transfer</button>
         </div>
@@ -2166,7 +2241,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
         <div class="form-card">
           <div class="form-card-title">Deal Details</div>
           <div class="field-row">
-            <div class="field"><label>Closer Name</label><select id="cl-name"><option value="">Select your name…</option><option>David</option><option>Sabrina</option><option>Eddy</option><option>Willy</option><option>Nathan</option></select></div>
+            <div class="field"><label>Closer Name</label><select id="cl-name"><option value="">Select your name…</option><option>David</option><option>Sabrina</option><option>Eddy</option><option>Willy</option></select></div>
             <div class="field"><label>Opener Name</label><select id="cl-opener"><option value="">Select opener…</option><option value="N/A">N/A</option><option>Sara</option><option>Kate</option><option>Mona</option><option>Sean</option><option>Emmanuel</option><option>Tom</option></select></div>
           </div>
           <div class="field"><label>Type of Deal</label><select id="cl-deal-type"><option value="">Select deal type…</option><option value="Debt Settlement">Debt Settlement</option><option value="Debt Validation">Debt Validation</option></select></div>
@@ -2211,7 +2286,6 @@ table.ref-table{width:100%;border-collapse:collapse;}
         <div class="form-card">
           <div class="form-card-title">Transfer Details</div>
           <div class="field"><label>Agent Name</label><select id="mtg-agent"><option value="">Select agent…</option><option>Paul</option><option>Liam</option><option>Hidie</option><option>Wells</option><option>Jacob</option></select></div>
-          <div class="field"><label>Client Number</label><input type="text" id="mtg-client" placeholder="e.g. 10042"/></div>
           <div class="field"><label>Client Phone</label><input type="text" id="mtg-phone" placeholder="e.g. (555) 123-4567"/></div>
           <div class="field"><label>Date</label><input type="date" id="mtg-date"/></div>
           <button class="btn-form btn-form-teal" id="mtg-submit-btn" onclick="submitMtgTransfer()">Submit Transfer</button>
