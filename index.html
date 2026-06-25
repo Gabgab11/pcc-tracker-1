@@ -63,7 +63,11 @@
   let xferUnsub   = null;
   let mtgUnsub    = null;
 
-  // ── GLOBAL DATE FILTER ──
+  // ── GLOBAL MASTER FILTER ──
+  // Single source of truth for the entire app: a date preset (today / thismonth / all / custom)
+  // crossed with a role scope (all / closer / opener / mortgage). EVERY dashboard card, stat,
+  // chart, leaderboard, ranking, and agent profile reads through gdfDeals()/gdfXfers()/gdfMtg()
+  // below, so changing this filter changes everything at once with no exceptions.
   window._gdf = { from:null, to:null, preset:'all', roleScope:'all' };
 
   function syncGlobals(){
@@ -84,13 +88,17 @@
       return true;
     });
   }
-  function gdfDeals()  { return gdfFilterArr(deals);      }
-  function gdfXfers()  { return gdfFilterArr(transfers);  }
-  function gdfMtg()    { return gdfFilterArr(mtgRecords); }
+  // Scope-aware getters: when roleScope is restricted to one team, the OTHER
+  // teams' arrays return empty so every consumer (stats, leaderboards, feeds,
+  // commission structure) automatically shows zero/blank for excluded teams —
+  // there is no separate "scope filter" to forget to apply somewhere.
+  function gdfDeals()  { const s=window._gdf.roleScope; if(s!=='all'&&s!=='closer')   return []; return gdfFilterArr(deals);      }
+  function gdfXfers()  { const s=window._gdf.roleScope; if(s!=='all'&&s!=='opener')   return []; return gdfFilterArr(transfers);  }
+  function gdfMtg()    { const s=window._gdf.roleScope; if(s!=='all'&&s!=='mortgage') return []; return gdfFilterArr(mtgRecords); }
 
   function updateGdfBadge(){
     const {preset,roleScope} = window._gdf;
-    const presetLbls = {today:'Today',yesterday:'Yesterday',last7:'Last 7 Days',last30:'Last 30 Days',thismonth:'This Month',lastmonth:'Last Month',thisyear:'This Year',all:'All Time',custom:'Custom'};
+    const presetLbls = {today:'Today',thismonth:'This Month',all:'All Time',custom:'Custom'};
     const scopeLbls  = {all:'All',closer:'Closers',opener:'Openers',mortgage:'Mortgage'};
     const lbl  = document.getElementById('gdf-label');
     const btn  = document.getElementById('gdf-btn');
@@ -128,12 +136,7 @@
     const todayStr=fmt(today);
     let from=null,to=null;
     if      (preset==='today')     { from=todayStr; to=todayStr; }
-    else if (preset==='yesterday') { const y=new Date(today); y.setDate(y.getDate()-1); from=fmt(y); to=fmt(y); }
-    else if (preset==='last7')     { const s=new Date(today); s.setDate(s.getDate()-6); from=fmt(s); to=todayStr; }
-    else if (preset==='last30')    { const s=new Date(today); s.setDate(s.getDate()-29); from=fmt(s); to=todayStr; }
     else if (preset==='thismonth') { from=fmt(new Date(today.getFullYear(),today.getMonth(),1)); to=todayStr; }
-    else if (preset==='lastmonth') { from=fmt(new Date(today.getFullYear(),today.getMonth()-1,1)); to=fmt(new Date(today.getFullYear(),today.getMonth(),0)); }
-    else if (preset==='thisyear')  { from=`${today.getFullYear()}-01-01`; to=todayStr; }
     else if (preset==='all')       { from=null; to=null; }
     else if (preset==='custom')    { document.getElementById('gdf-custom-wrap').style.display='flex'; return; }
     window._gdf={...window._gdf,from,to,preset};
@@ -450,44 +453,40 @@
   }
 
   // ── ADMIN OVERVIEW ──
+  // Every stat below reads through gdfDeals()/gdfXfers()/gdfMtg(), which already
+  // collapse to [] for any team excluded by the active roleScope — so this view
+  // needs no extra scope logic of its own; it just always shows the truth for
+  // whichever team(s) are currently selected in the master filter.
   function renderAdminOverview(){
     const d=gdfDeals(),t=gdfXfers(),m=gdfMtg();
-    document.getElementById('adm-stat-total').textContent    =d.length+t.length;
-    document.getElementById('adm-stat-approved').textContent =d.filter(x=>x.status==='Approved').length;
-    document.getElementById('adm-stat-pending').textContent  =d.filter(x=>x.status==='Pending').length+t.filter(x=>x.status==='Pending').length;
-    document.getElementById('adm-stat-declined').textContent =d.filter(x=>x.status==='Declined').length;
+    const allRecords=[...d,...t,...m];
+    document.getElementById('adm-stat-total').textContent    =d.length+t.length+m.length;
+    document.getElementById('adm-stat-approved').textContent =allRecords.filter(x=>x.status==='Approved').length;
+    document.getElementById('adm-stat-pending').textContent  =allRecords.filter(x=>x.status==='Pending').length;
+    document.getElementById('adm-stat-declined').textContent =allRecords.filter(x=>x.status==='Declined').length;
     document.getElementById('adm-stat-comm').textContent     ='$'+d.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
     document.getElementById('adm-stat-ocomm').textContent    ='$'+t.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
-    document.getElementById('adm-stat-mtg').textContent      =m.length;
+    document.getElementById('adm-stat-mtg').textContent      ='$'+m.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
+
+    // Recent activity feed — merges whichever team(s) are in scope, newest first.
     const feed=document.getElementById('adm-recent-feed');
-    const recent=d.slice(0,5);
-    feed.innerHTML=recent.length?recent.map(x=>`<div class="feed-row">
-      <div class="feed-dot ${x.status==='Approved'?'green':x.status==='Declined'?'red':'amber'}"></div>
-      <div class="feed-info"><div class="feed-name">${x.name} <span class="feed-sep">·</span> ${x.client||'—'}</div><div class="feed-sub">${x.dealType||'—'}</div></div>
-      <div class="feed-right"><div class="feed-comm">$${x.comm||0}</div><div class="status-badge ${x.status==='Approved'?'badge-green':x.status==='Declined'?'badge-red':'badge-amber'}">${x.status}</div></div>
-    </div>`).join(''):'<div class="empty-state">No deals in this range.</div>';
-
-    // Closer leaderboard
-    const lb=document.getElementById('adm-leaderboard');
-    const cc={};d.filter(x=>x.status==='Approved').forEach(x=>{cc[x.name]=(cc[x.name]||0)+(x.comm||0);});
-    const sorted=Object.entries(cc).sort((a,b)=>b[1]-a[1]);
-    const max=sorted[0]?sorted[0][1]:1;
-    lb.innerHTML=sorted.length?sorted.map(([n,c])=>`<div class="bar-row"><div class="bar-label-wrap"><span class="bar-name">${n}</span><span class="bar-val">$${c.toLocaleString()}</span></div><div class="bar-track"><div class="bar-fill" style="width:${Math.round((c/max)*100)}%"></div></div></div>`).join(''):'<div class="empty-state">No approved deals yet.</div>';
-
-    // Opener leaderboard — identical aggregation/render logic as the closer leaderboard above,
-    // just sourced from approved opener transfers (t) instead of approved closer deals (d).
-    const lbo=document.getElementById('adm-opener-leaderboard');
-    const oc={};t.filter(x=>x.status==='Approved').forEach(x=>{oc[x.name]=(oc[x.name]||0)+(x.comm||0);});
-    const osorted=Object.entries(oc).sort((a,b)=>b[1]-a[1]);
-    const omax=osorted[0]?osorted[0][1]:1;
-    if(lbo)lbo.innerHTML=osorted.length?osorted.map(([n,c])=>`<div class="bar-row"><div class="bar-label-wrap"><span class="bar-name">${n}</span><span class="bar-val">$${c.toLocaleString()}</span></div><div class="bar-track"><div class="bar-fill" style="width:${Math.round((c/omax)*100)}%"></div></div></div>`).join(''):'<div class="empty-state">No approved transfers yet.</div>';
-
-    // 8th stat card — Top Opener (leader of the leaderboard above)
-    const topOpenerEl=document.getElementById('adm-stat-top-opener'),topOpenerSubEl=document.getElementById('adm-stat-top-opener-sub');
-    if(topOpenerEl){
-      if(osorted.length){topOpenerEl.textContent=osorted[0][0];if(topOpenerSubEl)topOpenerSubEl.textContent='$'+osorted[0][1].toLocaleString()+' approved';}
-      else{topOpenerEl.textContent='—';if(topOpenerSubEl)topOpenerSubEl.textContent='No data yet';}
-    }
+    const tagged=[
+      ...d.map(x=>({...x,_kind:'deal'})),
+      ...t.map(x=>({...x,_kind:'transfer'})),
+      ...m.map(x=>({...x,_kind:'mortgage'})),
+    ].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+    const recent=tagged.slice(0,5);
+    feed.innerHTML=recent.length?recent.map(x=>{
+      const label = x._kind==='deal' ? `${x.name} <span class="feed-sep">·</span> ${x.client||'—'}`
+                  : x._kind==='transfer' ? `${x.name||'—'} <span class="feed-sep">·</span> ${x.type||'—'}`
+                  : `${x.agent||'—'} <span class="feed-sep">·</span> Client #${x.clientNumber||'—'}`;
+      const sub = x._kind==='deal' ? (x.dealType||'—') : x._kind==='transfer' ? (x.closer?'→ '+x.closer:'Opener transfer') : 'Mortgage transfer';
+      return `<div class="feed-row">
+        <div class="feed-dot ${x.status==='Approved'?'green':x.status==='Declined'?'red':'amber'}"></div>
+        <div class="feed-info"><div class="feed-name">${label}</div><div class="feed-sub">${sub}</div></div>
+        <div class="feed-right"><div class="feed-comm">$${x.comm||0}</div><div class="status-badge ${x.status==='Approved'?'badge-green':x.status==='Declined'?'badge-red':'badge-amber'}">${x.status||'Pending'}</div></div>
+      </div>`;
+    }).join(''):'<div class="empty-state">No activity in this range.</div>';
 
     refreshTaskCounts();
   }
@@ -503,18 +502,21 @@
   };
 
   function refreshTaskCounts(){
-    const d=gdfDeals(),t=gdfXfers();
+    const d=gdfDeals(),t=gdfXfers(),m=gdfMtg();
     const dealPend =d.filter(x=>x.status==='Pending').length;
     const xferPend =t.filter(x=>x.status==='Pending').length;
+    const mtgPend  =m.filter(x=>x.status==='Pending').length;
     const dealAppr =d.filter(x=>x.status==='Approved').length;
     const xferAppr =t.filter(x=>x.status==='Approved').length;
+    const mtgAppr  =m.filter(x=>x.status==='Approved').length;
     const dealDecl =d.filter(x=>x.status==='Declined').length;
     const xferDecl =t.filter(x=>x.status==='Declined').length;
+    const mtgDecl  =m.filter(x=>x.status==='Declined').length;
     const tc=document.getElementById('tasks-count-badge');
-    if(tc)tc.textContent=dealPend+xferPend;
-    const tt=document.querySelector('.tasks-tab[data-tab="pending"]  .tab-count'); if(tt)tt.textContent=dealPend+xferPend;
-    const ta=document.querySelector('.tasks-tab[data-tab="approved"] .tab-count'); if(ta)ta.textContent=dealAppr+xferAppr;
-    const td=document.querySelector('.tasks-tab[data-tab="declined"] .tab-count'); if(td)td.textContent=dealDecl+xferDecl;
+    if(tc)tc.textContent=dealPend+xferPend+mtgPend;
+    const tt=document.querySelector('.tasks-tab[data-tab="pending"]  .tab-count'); if(tt)tt.textContent=dealPend+xferPend+mtgPend;
+    const ta=document.querySelector('.tasks-tab[data-tab="approved"] .tab-count'); if(ta)ta.textContent=dealAppr+xferAppr+mtgAppr;
+    const td=document.querySelector('.tasks-tab[data-tab="declined"] .tab-count'); if(td)td.textContent=dealDecl+xferDecl+mtgDecl;
     const activeTab=document.querySelector('.tasks-tab.active')?.dataset.tab||'pending';
     renderTasksPane(activeTab);
   }
@@ -525,27 +527,33 @@
   };
 
   function renderTasksPane(tab){
-    const d=gdfDeals(),t=gdfXfers();
+    const d=gdfDeals(),t=gdfXfers(),m=gdfMtg();
     const wrap=document.getElementById('tasks-pane');if(!wrap)return;
     let html='';
     if(tab==='pending'){
       const dp=d.filter(x=>x.status==='Pending');
       const tp=t.filter(x=>x.status==='Pending');
-      if(!dp.length&&!tp.length){wrap.innerHTML='<div class="empty-state">All clear — no pending items ✅</div>';return;}
+      const mp=m.filter(x=>x.status==='Pending');
+      if(!dp.length&&!tp.length&&!mp.length){wrap.innerHTML='<div class="empty-state">All clear — no pending items ✅</div>';return;}
       if(dp.length){html+=`<div class="tasks-section-label">Closer Deals</div>`+dp.map(x=>buildDealTaskCard(x,'pending')).join('');}
       if(tp.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Opener Transfers</div>`+tp.map(x=>buildXferTaskCard(x,'pending')).join('');}
+      if(mp.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+mp.map(x=>buildMtgTaskCard(x,'pending')).join('');}
     } else if(tab==='approved'){
       const da=d.filter(x=>x.status==='Approved');
       const ta=t.filter(x=>x.status==='Approved');
-      if(!da.length&&!ta.length){wrap.innerHTML='<div class="empty-state">No approved items.</div>';return;}
+      const ma=m.filter(x=>x.status==='Approved');
+      if(!da.length&&!ta.length&&!ma.length){wrap.innerHTML='<div class="empty-state">No approved items.</div>';return;}
       if(da.length){html+=`<div class="tasks-section-label">Closer Deals</div>`+da.map(x=>buildDealTaskCard(x,'approved')).join('');}
       if(ta.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Opener Transfers</div>`+ta.map(x=>buildXferTaskCard(x,'approved')).join('');}
+      if(ma.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+ma.map(x=>buildMtgTaskCard(x,'approved')).join('');}
     } else {
       const dd=d.filter(x=>x.status==='Declined');
       const td=t.filter(x=>x.status==='Declined');
-      if(!dd.length&&!td.length){wrap.innerHTML='<div class="empty-state">No declined items.</div>';return;}
+      const md=m.filter(x=>x.status==='Declined');
+      if(!dd.length&&!td.length&&!md.length){wrap.innerHTML='<div class="empty-state">No declined items.</div>';return;}
       if(dd.length){html+=`<div class="tasks-section-label">Closer Deals</div>`+dd.map(x=>buildDealTaskCard(x,'declined')).join('');}
       if(td.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Opener Transfers</div>`+td.map(x=>buildXferTaskCard(x,'declined')).join('');}
+      if(md.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+md.map(x=>buildMtgTaskCard(x,'declined')).join('');}
     }
     wrap.innerHTML=html;
   }
@@ -587,6 +595,23 @@
     </div>`;
   }
 
+  function buildMtgTaskCard(r,tab){
+    const isPending=tab==='pending';
+    return`<div class="task-card ${tab}" style="border-left-color:var(--teal)">
+      <div class="task-card-header">
+        <div><span class="task-client">${r.agent||'—'}</span><span class="task-meta">Client #${r.clientNumber||'—'}</span></div>
+        <span class="task-date">${fmtDate(r.createdAt)}</span>
+      </div>
+      <div class="task-details">
+        <div class="task-detail-item"><span class="task-detail-label">Phone</span><span>${r.phone||'—'}</span></div>
+        <div class="task-detail-item"><span class="task-detail-label">Date</span><span>${fmtDate(r.date)}</span></div>
+        <div class="task-detail-item"><span class="task-detail-label">Commission</span><span class="task-comm">$${r.comm||0}</span></div>
+      </div>
+      ${isPending?`<div class="task-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`
+      :`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:${tab==='approved'?'var(--green)':'var(--red)'}">${tab==='approved'?'✅ Approved':'❌ Declined'}</b> · Commission: <b style="color:var(--green)">$${r.comm||0}</b></div>`}
+    </div>`;
+  }
+
   window.adminDealAction=async function(id,action){
     const d=deals.find(x=>x.id===id);if(!d){toast('Deal not found.','error');return;}
     const editEl=document.getElementById('comm-d-'+id);
@@ -609,12 +634,10 @@
     document.getElementById('adm-mtg-count').textContent=m.length;
     const wrap=document.getElementById('adm-mtg-list');
     if(!m.length){wrap.innerHTML='<div class="empty-state">No mortgage transfers in this date range.</div>';return;}
-    const isAdmin=currentUser?.role==='admin';
-    wrap.innerHTML=m.map(r=>`<div class="mtg-record-card">
-      <div class="mtg-record-top">
-        <div><span class="mtg-agent">${r.agent||'—'}</span><span class="mtg-client-num">Client #${r.clientNumber||'—'}</span></div>
-        <div class="ar-top-right"><span class="mtg-date">${fmtDate(r.date||r.createdAt)}</span>${isAdmin?buildDeleteBtn('mortgage',r.id,(r.agent?`${r.agent}'s record`:'this record')):''}</div>
-      </div>
+    wrap.innerHTML=m.map(r=>`<div class="admin-record ${r.status&&r.status!=='Pending'?'resolved':''}">
+      <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${r.status==='Approved'?'badge-green':r.status==='Declined'?'badge-red':'badge-amber'}">${r.status||'Pending'}</div><span class="ar-name">${r.agent||'—'} — Client #${r.clientNumber||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(r.date||r.createdAt)}</span>${buildDeleteBtn('mortgage',r.id,(r.agent?`${r.agent}'s record`:'this record'))}</div></div>
+      <div class="ar-grid"><div class="ar-field"><span class="ar-key">Agent</span><span class="ar-val">${r.agent||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${r.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Client #</span><span class="ar-val">${r.clientNumber||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${r.comm||0}</span></div></div>
+      ${r.status&&r.status!=='Pending'?`<div class="ar-comm-resolved">Commission: <strong>$${r.comm||0}</strong> <span class="ar-status-text">(${r.status})</span></div>`:`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`}
     </div>`).join('');
   }
 
@@ -676,15 +699,12 @@
     closeDeleteConfirm();
   };
 
-  // ── COMMISSION STRUCTURE (admin) ──────────────────────────────────
+  // ── COMMISSION STRUCTURE (admin) — single hub for rankings + agent profiles ──
   // Pay-period cycle: every period runs from the 28th of one month through
   // the 27th of the next ("cutoff day" = 27th). All totals here are derived
-  // fresh from the live `deals` / `transfers` arrays on every render, and
-  // only ever count items with status === 'Approved' (i.e. the admin's
-  // final approved/edited commission value) — never Pending or Declined —
-  // so there is no possibility of double-counting or stale accumulation.
-  window._ccExpanded = window._ccExpanded || {};
-  window._ccActiveTab = window._ccActiveTab || 'closer';
+  // fresh from the live `deals` / `transfers` / `mtgRecords` arrays on every
+  // render — nothing is cached or accumulated across renders.
+  window._ccCollapsed = window._ccCollapsed || { closer:false, opener:false, mortgage:false };
 
   function ccPad(n){return String(n).padStart(2,'0');}
   function ccFmt(d){return `${d.getFullYear()}-${ccPad(d.getMonth()+1)}-${ccPad(d.getDate())}`;}
@@ -707,34 +727,65 @@
     const mo=d=>d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
     return `${mo(start)} – ${mo(end)}, ${end.getFullYear()}`;
   }
+  function ccMonthKey(dateStr){ return (dateStr||'').slice(0,7); } // YYYY-MM
+  function ccMonthLabel(key){ const [y,m]=key.split('-').map(Number); return new Date(y,m-1,1).toLocaleDateString('en-US',{month:'long',year:'numeric'}); }
 
-  // Aggregate APPROVED-ONLY commission per person, bucketed by pay period.
-  // Reads straight from the source array every time — nothing is ever
-  // accumulated/cached across renders, so re-renders can't double count.
-  function ccAggregate(records, dateField, nameField){
-    const out={};
-    (records||[]).forEach(r=>{
-      if(r.status!=='Approved') return;          // only finalized/admin-approved commission
-      const name=r[nameField]; if(!name) return;
-      const dateStr=(r[dateField]||r.createdAt||'').slice(0,10);
-      if(!dateStr) return;
-      const periodKey=ccPeriodForDate(dateStr).key;
-      const comm=Number(r.comm)||0;
-      if(!out[name]) out[name]={allTime:0,count:0,periods:{}};
-      out[name].allTime+=comm;
-      out[name].count+=1;
-      if(!out[name].periods[periodKey]) out[name].periods[periodKey]={total:0,count:0};
-      out[name].periods[periodKey].total+=comm;
-      out[name].periods[periodKey].count+=1;
+  // ── Unified per-agent stat builder ──
+  // Works identically for closer / opener / mortgage by taking the records
+  // array, the field names that vary per role, and the kind label. Produces
+  // every figure the agent profile and the leaderboard need from raw records
+  // (not pre-aggregated), so it stays correct under ANY combination of the
+  // master filter's date range + role scope, with zero duplicate code paths.
+  function ccBuildAgentStats(name, kind, records, opts){
+    const nameField  = opts.nameField;
+    const dateField  = opts.dateField;
+    const debtField  = opts.debtField; // null if N/A for this role
+    const typeField  = opts.typeField; // null if N/A for this role
+    const mine = (records||[]).filter(r=>r[nameField]===name);
+    const approved = mine.filter(r=>r.status==='Approved');
+    const pending  = mine.filter(r=>r.status==='Pending');
+    const declined = mine.filter(r=>r.status==='Declined');
+    const totalComm = approved.reduce((s,r)=>s+(Number(r.comm)||0),0);
+    const avgComm   = approved.length ? totalComm/approved.length : 0;
+    const totalDebt = debtField ? mine.reduce((s,r)=>s+(Number(r[debtField])||0),0) : null;
+    // Most common type (deal type / lead source) among this agent's records
+    let mostCommonType='—';
+    if(typeField){
+      const tc={}; mine.forEach(r=>{const v=r[typeField]; if(v) tc[v]=(tc[v]||0)+1;});
+      const sortedTypes=Object.entries(tc).sort((a,b)=>b[1]-a[1]);
+      if(sortedTypes.length) mostCommonType=sortedTypes[0][0];
+    }
+    // Monthly breakdown (approved commission + count, by calendar month) and pay-period breakdown
+    const monthly={}, periods={};
+    approved.forEach(r=>{
+      const d=(r[dateField]||r.createdAt||'').slice(0,10); if(!d) return;
+      const mk=ccMonthKey(d);
+      if(!monthly[mk]) monthly[mk]={total:0,count:0};
+      monthly[mk].total+=(Number(r.comm)||0); monthly[mk].count+=1;
+      const pk=ccPeriodForDate(d).key;
+      if(!periods[pk]) periods[pk]={total:0,count:0};
+      periods[pk].total+=(Number(r.comm)||0); periods[pk].count+=1;
     });
-    return out;
+    return { name, kind, submissions:mine.length, approved:approved.length, pending:pending.length, declined:declined.length,
+             totalComm, avgComm, totalDebt, mostCommonType, monthly, periods, records:mine };
+  }
+
+  const CC_ROLE_CFG = {
+    closer:   { names:CLOSER_NAMES,  nameField:'name', dateField:'closingDate', debtField:'debt', typeField:'dealType', label:'deal'      },
+    opener:   { names:OPENER_NAMES,  nameField:'name', dateField:'date',        debtField:null,   typeField:'type',     label:'transfer'  },
+    mortgage: { names:MTG_AGENTS,    nameField:'agent',dateField:'date',        debtField:null,   typeField:null,       label:'transfer'  },
+  };
+  function ccRecordsFor(kind){ return kind==='closer'?gdfDeals():kind==='opener'?gdfXfers():gdfMtg(); }
+
+  function ccAllAgentStats(kind){
+    const cfg=CC_ROLE_CFG[kind];
+    const records=ccRecordsFor(kind);
+    // Every configured agent is included even with zero activity in range.
+    return cfg.names.map(n=>ccBuildAgentStats(n,kind,records,cfg)).sort((a,b)=>b.totalComm-a.totalComm);
   }
 
   function renderAdminCommission(){
-    const closerAgg=ccAggregate(deals,'closingDate','name');
-    const openerAgg=ccAggregate(transfers,'date','name');
     const period=ccCurrentPeriod();
-
     const lbl=document.getElementById('cc-period-label'); if(lbl)lbl.textContent=ccPeriodLabel(period.key);
     const today=getNowEgypt(); today.setHours(0,0,0,0);
     const endDate=new Date(period.end+'T00:00:00');
@@ -742,55 +793,135 @@
     const dl=document.getElementById('cc-days-left');
     if(dl)dl.textContent=daysLeft===0?'Cutoff is today — totals finalize tonight':`${daysLeft} day${daysLeft!==1?'s':''} until the ${period.end.slice(-2)}th cutoff`;
 
-    const closerTotal=CLOSER_NAMES.reduce((s,n)=>s+(closerAgg[n]?.periods[period.key]?.total||0),0);
-    const openerTotal=OPENER_NAMES.reduce((s,n)=>s+(openerAgg[n]?.periods[period.key]?.total||0),0);
-    const pt=document.getElementById('cc-period-total'); if(pt)pt.textContent='$'+(closerTotal+openerTotal).toLocaleString();
+    const closerStats  = ccAllAgentStats('closer');
+    const openerStats  = ccAllAgentStats('opener');
+    const mtgStats     = ccAllAgentStats('mortgage');
 
-    const cl=document.getElementById('cc-closer-list'); if(cl)cl.innerHTML=ccBuildRoster(CLOSER_NAMES,closerAgg,period.key,'closer');
-    const ol=document.getElementById('cc-opener-list'); if(ol)ol.innerHTML=ccBuildRoster(OPENER_NAMES,openerAgg,period.key,'opener');
+    const periodTotal = [...closerStats,...openerStats,...mtgStats]
+      .reduce((s,a)=>s+(a.periods[period.key]?.total||0),0);
+    const pt=document.getElementById('cc-period-total'); if(pt)pt.textContent='$'+periodTotal.toLocaleString();
+
+    // ── Category sections (collapsible) ──
+    document.getElementById('cc-closer-list').innerHTML   = ccBuildRoster(closerStats,'closer',period.key);
+    document.getElementById('cc-opener-list').innerHTML   = ccBuildRoster(openerStats,'opener',period.key);
+    document.getElementById('cc-mortgage-list').innerHTML = ccBuildRoster(mtgStats,'mortgage',period.key);
+    ['closer','opener','mortgage'].forEach(k=>{
+      const body=document.getElementById('cc-cat-body-'+k), icon=document.getElementById('cc-cat-icon-'+k);
+      if(body) body.style.display = window._ccCollapsed[k] ? 'none':'block';
+      if(icon) icon.textContent   = window._ccCollapsed[k] ? '▸':'▾';
+    });
+
+    // ── Dynamic leaderboard — driven entirely by the master filter's roleScope ──
+    renderDynamicLeaderboard(closerStats,openerStats,mtgStats);
   }
 
-  function ccBuildRoster(names,agg,periodKey,kind){
-    const rows=names.map(n=>{
-      const a=agg[n]||{allTime:0,count:0,periods:{}};
-      const cur=a.periods[periodKey]?.total||0;
-      return {name:n,allTime:a.allTime,cur,count:a.count,periods:a.periods};
-    }).sort((a,b)=>b.allTime-a.allTime);
-    const max=Math.max(1,...rows.map(r=>r.allTime));
-    if(!rows.length)return '<div class="empty-state">No team members configured.</div>';
-    return rows.map(r=>{
-      const expanded=!!window._ccExpanded[kind+':'+r.name];
-      return `<div class="cc-person">
-        <div class="cc-person-row" onclick="toggleCcPerson('${kind}','${r.name}')">
+  window.toggleCcCategory=function(kind){
+    window._ccCollapsed[kind]=!window._ccCollapsed[kind];
+    const body=document.getElementById('cc-cat-body-'+kind), icon=document.getElementById('cc-cat-icon-'+kind);
+    if(body) body.style.display = window._ccCollapsed[kind] ? 'none':'block';
+    if(icon) icon.textContent   = window._ccCollapsed[kind] ? '▸':'▾';
+  };
+
+  function ccBuildRoster(stats,kind,periodKey){
+    if(!stats.length)return '<div class="empty-state">No team members configured.</div>';
+    const max=Math.max(1,...stats.map(r=>r.totalComm));
+    return stats.map(r=>{
+      const cur=r.periods[periodKey]?.total||0;
+      return `<div class="cc-person" onclick="openAgentProfile('${kind}','${r.name.replace(/'/g,"\\'")}')">
+        <div class="cc-person-row">
           <div class="cc-person-left">
             <div class="cc-person-avatar">${r.name.slice(0,2).toUpperCase()}</div>
-            <div><div class="cc-person-name">${r.name}</div><div class="cc-person-sub">${r.count} approved ${kind==='closer'?'deal':'transfer'}${r.count!==1?'s':''}</div></div>
+            <div><div class="cc-person-name">${r.name}</div><div class="cc-person-sub">${r.approved} approved ${CC_ROLE_CFG[kind].label}${r.approved!==1?'s':''} · ${r.submissions} total</div></div>
           </div>
           <div class="cc-person-right">
-            <div class="cc-person-cur">$${r.cur.toLocaleString()}<span>This Period</span></div>
-            <div class="cc-person-total">$${r.allTime.toLocaleString()}<span>All-Time</span></div>
-            <div class="cc-chevron">${expanded?'▾':'▸'}</div>
+            <div class="cc-person-cur">$${cur.toLocaleString()}<span>This Period</span></div>
+            <div class="cc-person-total">$${r.totalComm.toLocaleString()}<span>All-Time</span></div>
+            <div class="cc-chevron">›</div>
           </div>
         </div>
-        <div class="cc-bar-track"><div class="cc-bar-fill" style="width:${Math.round((r.allTime/max)*100)}%"></div></div>
-        <div class="cc-person-detail" id="cc-detail-${kind}-${r.name}" style="display:${expanded?'block':'none'}">${ccBuildMonthlyTable(r.periods)}</div>
+        <div class="cc-bar-track"><div class="cc-bar-fill" style="width:${Math.round((r.totalComm/max)*100)}%"></div></div>
       </div>`;
     }).join('');
   }
 
-  function ccBuildMonthlyTable(periods){
-    const keys=Object.keys(periods||{}).sort((a,b)=>b.localeCompare(a));
-    if(!keys.length)return '<div class="empty-state">No approved commission yet.</div>';
-    return `<table class="ref-table cc-monthly-table"><thead><tr><th>Pay Period (28th → 27th)</th><th>Approved</th><th>Commission</th></tr></thead><tbody>
-      ${keys.map(k=>`<tr><td>${ccPeriodLabel(k)}</td><td>${periods[k].count}</td><td class="ref-amt">$${periods[k].total.toLocaleString()}</td></tr>`).join('')}
-    </tbody></table>`;
+  // ── Single dynamic leaderboard — automatically swaps based on roleScope ──
+  function renderDynamicLeaderboard(closerStats,openerStats,mtgStats){
+    const wrap=document.getElementById('cc-leaderboard'); if(!wrap)return;
+    const titleEl=document.getElementById('cc-leaderboard-title');
+    const scope=window._gdf.roleScope;
+    let rows=[], title='';
+    if(scope==='closer'){ rows=closerStats.map(r=>({...r,kind:'closer'})); title='Top Closers'; }
+    else if(scope==='opener'){ rows=openerStats.map(r=>({...r,kind:'opener'})); title='Top Openers'; }
+    else if(scope==='mortgage'){ rows=mtgStats.map(r=>({...r,kind:'mortgage'})); title='Top Mortgage Agents'; }
+    else { rows=[...closerStats,...openerStats,...mtgStats]; title='Company-wide Rankings'; }
+    rows=rows.sort((a,b)=>b.totalComm-a.totalComm);
+    if(titleEl) titleEl.textContent=title;
+    if(!rows.length){ wrap.innerHTML='<div class="empty-state">No team members configured.</div>'; return; }
+    const max=Math.max(1,...rows.map(r=>r.totalComm));
+    wrap.innerHTML=rows.map((r,i)=>`<div class="bar-row cc-lb-row" onclick="openAgentProfile('${r.kind}','${r.name.replace(/'/g,"\\'")}')">
+      <div class="bar-label-wrap"><span class="bar-name"><b class="cc-lb-rank">#${i+1}</b> ${r.name} <span class="badge-teal status-badge" style="margin-left:5px;text-transform:capitalize">${r.kind}</span></span><span class="bar-val">$${r.totalComm.toLocaleString()}</span></div>
+      <div class="bar-track"><div class="bar-fill" style="width:${Math.round((r.totalComm/max)*100)}%"></div></div>
+    </div>`).join('');
   }
 
-  window.toggleCcPerson=function(kind,name){
-    const k=kind+':'+name;
-    window._ccExpanded[k]=!window._ccExpanded[k];
-    renderAdminCommission();
+  // ── AGENT PROFILE MODAL ── (accessible ONLY from Commission Structure)
+  window.openAgentProfile=function(kind,name){
+    const cfg=CC_ROLE_CFG[kind]; if(!cfg) return;
+    const allStats=ccAllAgentStats(kind);
+    const rank=allStats.findIndex(r=>r.name===name);
+    const r=allStats[rank];
+    if(!r) return;
+    document.getElementById('ap-overlay').classList.add('open');
+    document.getElementById('ap-body').innerHTML=buildAgentProfileHTML(r,kind,rank+1,allStats.length);
   };
+  window.closeAgentProfile=function(){
+    document.getElementById('ap-overlay').classList.remove('open');
+  };
+
+  function buildAgentProfileHTML(r,kind,rank,totalAgents){
+    const cfg=CC_ROLE_CFG[kind];
+    const monthKeys=Object.keys(r.monthly).sort((a,b)=>b.localeCompare(a));
+    const recordsSorted=[...r.records].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+    const maxMonth=Math.max(1,...monthKeys.map(k=>r.monthly[k].total));
+
+    const chartRows = monthKeys.slice(0,6).reverse().map(k=>`
+      <div class="bar-row"><div class="bar-label-wrap"><span class="bar-name">${ccMonthLabel(k)}</span><span class="bar-val">$${r.monthly[k].total.toLocaleString()} · ${r.monthly[k].count}</span></div><div class="bar-track"><div class="bar-fill" style="width:${Math.round((r.monthly[k].total/maxMonth)*100)}%"></div></div></div>`
+    ).join('') || '<div class="empty-state">No approved months yet.</div>';
+
+    const recordRows = recordsSorted.slice(0,8).map(rec=>{
+      const label = kind==='closer' ? (rec.client||'—') : kind==='opener' ? (rec.name+' · '+(rec.type||'—')) : ('Client #'+(rec.clientNumber||'—'));
+      const phone = rec.phone||'—';
+      return `<tr><td>${fmtDate(rec.createdAt)}</td><td>${label}</td><td>${phone}</td><td><span class="status-badge ${rec.status==='Approved'?'badge-green':rec.status==='Declined'?'badge-red':'badge-amber'}">${rec.status||'Pending'}</span></td><td class="ref-amt">$${rec.comm||0}</td></tr>`;
+    }).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--text3)">No records yet.</td></tr>`;
+
+    return `
+      <div class="ap-header">
+        <div class="ap-avatar">${r.name.slice(0,2).toUpperCase()}</div>
+        <div>
+          <div class="ap-name">${r.name}</div>
+          <div class="ap-role">${kind.charAt(0).toUpperCase()+kind.slice(1)} · Rank <b>#${rank}</b> of ${totalAgents}</div>
+        </div>
+      </div>
+      <div class="ap-stats-grid">
+        <div class="ap-stat"><div class="ap-stat-val">${r.submissions}</div><div class="ap-stat-lbl">Total Submissions</div></div>
+        <div class="ap-stat green"><div class="ap-stat-val">${r.approved}</div><div class="ap-stat-lbl">Approved</div></div>
+        <div class="ap-stat amber"><div class="ap-stat-val">${r.pending}</div><div class="ap-stat-lbl">Pending</div></div>
+        <div class="ap-stat red"><div class="ap-stat-val">${r.declined}</div><div class="ap-stat-lbl">Declined</div></div>
+        <div class="ap-stat purple"><div class="ap-stat-val">$${r.totalComm.toLocaleString()}</div><div class="ap-stat-lbl">Total Commission</div></div>
+        <div class="ap-stat teal"><div class="ap-stat-val">$${r.avgComm.toFixed(2)}</div><div class="ap-stat-lbl">Avg Commission</div></div>
+        ${r.totalDebt!==null?`<div class="ap-stat indigo"><div class="ap-stat-val">$${r.totalDebt.toLocaleString()}</div><div class="ap-stat-lbl">Total Debt Enrolled</div></div>`:''}
+        <div class="ap-stat pink"><div class="ap-stat-val ap-stat-val-sm">${r.mostCommonType}</div><div class="ap-stat-lbl">Most Common ${kind==='closer'?'Deal':'Lead'} Type</div></div>
+      </div>
+      <div class="panel-card" style="margin-bottom:12px">
+        <div class="panel-card-title">Monthly performance (approved commission)</div>
+        ${chartRows}
+      </div>
+      <div class="panel-card">
+        <div class="panel-card-title">Recent ${cfg.label}s</div>
+        <table class="ref-table"><thead><tr><th>Date</th><th>${kind==='closer'?'Client':kind==='opener'?'Lead'  :'Client'}</th><th>Phone</th><th>Status</th><th>Commission</th></tr></thead>
+        <tbody>${recordRows}</tbody></table>
+      </div>`;
+  }
 
   // ── ADMIN RECORDS VIEW ──
   window.onRoleTypeChange=function(){
@@ -1019,22 +1150,35 @@
     document.getElementById('mtg-stat-alltime').textContent=mtgRecords.length;
     const feed=document.getElementById('mtg-recent-feed');
     const recent=m.slice(0,5);
-    feed.innerHTML=recent.length?recent.map(r=>`<div class="feed-row"><div class="feed-dot green"></div><div class="feed-info"><div class="feed-name">Client #${r.clientNumber||'—'}</div><div class="feed-sub">${r.agent||'—'} · ${fmtDate(r.date)}</div></div><div class="feed-right"><div class="status-badge badge-teal">Logged</div></div></div>`).join(''):'<div class="empty-state">No transfers yet.</div>';
+    feed.innerHTML=recent.length?recent.map(r=>`<div class="feed-row"><div class="feed-dot ${r.status==='Approved'?'green':r.status==='Declined'?'red':'amber'}"></div><div class="feed-info"><div class="feed-name">Client #${r.clientNumber||'—'}</div><div class="feed-sub">${r.agent||'—'} · ${fmtDate(r.date)}</div></div><div class="feed-right"><div class="feed-comm">$${r.comm||0}</div><div class="status-badge ${r.status==='Approved'?'badge-green':r.status==='Declined'?'badge-red':'badge-amber'}">${r.status||'Pending'}</div></div></div>`).join(''):'<div class="empty-state">No transfers yet.</div>';
   }
   function renderMtgRecords(){
     const m=gdfMtg();
     document.getElementById('mtg-records-count').textContent=m.length+' record'+(m.length!==1?'s':'');
     const wrap=document.getElementById('mtg-records-list');
     if(!m.length){wrap.innerHTML='<div class="empty-state">No transfers in this date range.</div>';return;}
-    wrap.innerHTML=m.map(r=>`<div class="mtg-record-card"><div class="mtg-record-top"><div><span class="mtg-agent">${r.agent||'—'}</span><span class="mtg-client-num">Client #${r.clientNumber||'—'}</span></div><span class="mtg-date">${fmtDate(r.date||r.createdAt)}</span></div></div>`).join('');
+    wrap.innerHTML=m.map(r=>`<div class="record-card">
+      <div class="record-top"><div class="record-type">Client #${r.clientNumber||'—'}</div><div class="status-badge ${r.status==='Approved'?'badge-green':r.status==='Declined'?'badge-red':'badge-amber'}">${r.status||'Pending'}</div></div>
+      <div class="record-row"><span>Phone</span><span>${r.phone||'—'}</span></div>
+      <div class="record-row"><span>Date</span><span>${fmtDate(r.date||r.createdAt)}</span></div>
+      <div class="record-row comm-row"><span>Commission</span><span class="comm-val">$${r.comm||0}</span></div>
+    </div>`).join('');
   }
   window.submitMtgTransfer=async function(){
-    const agent=document.getElementById('mtg-agent').value,client=document.getElementById('mtg-client').value.trim(),date=document.getElementById('mtg-date').value;
-    if(!agent||!client||!date){toast('Please complete all fields.','error');return;}
+    const agent=document.getElementById('mtg-agent').value,client=document.getElementById('mtg-client').value.trim(),phone=document.getElementById('mtg-phone').value.trim(),date=document.getElementById('mtg-date').value;
+    if(!agent||!client||!phone||!date){toast('Please complete all fields.','error');return;}
     const btn=document.getElementById('mtg-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
-    try{await addDoc(collection(db,'mortgage_transfers'),{agent,agentEmail:currentUser.email,clientNumber:client,date,createdAt:new Date().toISOString()});document.getElementById('mtg-client').value='';document.getElementById('mtg-date').value='';toast('Transfer logged!','success');}
+    try{await addDoc(collection(db,'mortgage_transfers'),{agent,agentEmail:currentUser.email,clientNumber:client,phone,date,comm:0,status:'Pending',createdAt:new Date().toISOString()});document.getElementById('mtg-client').value='';document.getElementById('mtg-phone').value='';document.getElementById('mtg-date').value='';toast('Transfer submitted! Pending admin approval.','success');}
     catch(e){toast('Failed to submit.','error');console.error(e);}
     btn.disabled=false;btn.textContent='Submit Transfer';
+  };
+
+  window.adminMtgAction=async function(id,action){
+    const r=mtgRecords.find(x=>x.id===id);if(!r){toast('Record not found.','error');return;}
+    const editEl=document.getElementById('comm-m-'+id);
+    const finalComm=editEl?(Number(editEl.value)||0):(r.comm||0);
+    try{await updateDoc(doc(db,'mortgage_transfers',id),{status:action,comm:finalComm,resolvedAt:new Date().toISOString()});toast(action==='Approved'?`Mortgage transfer approved — $${finalComm}`:'Mortgage transfer declined.',action==='Approved'?'success':'error');}
+    catch(e){toast('Failed to update.','error');console.error(e);}
   };
 
   // ── HELPERS ──
@@ -1413,8 +1557,9 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .cc-period-banner-days{font-size:11px;color:var(--accent2);margin-top:3px;}
 .cc-period-banner-total{text-align:right;}
 .cc-period-banner-amount{font-family:'Bebas Neue',sans-serif;font-size:30px;letter-spacing:1px;color:var(--accent2);}
-.cc-person{border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:8px;background:var(--surface2);}
-.cc-person-row{display:flex;align-items:center;justify-content:space-between;cursor:pointer;gap:10px;}
+.cc-person{border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:8px;background:var(--surface2);cursor:pointer;transition:border-color .15s,background .15s;}
+.cc-person:hover{border-color:rgba(79,126,255,.35);background:rgba(79,126,255,.05);}
+.cc-person-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
 .cc-person-left{display:flex;align-items:center;gap:9px;min-width:0;}
 .cc-person-avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0;}
 .cc-person-name{font-size:13px;font-weight:600;color:var(--text);}
@@ -1424,12 +1569,34 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .cc-person-cur span,.cc-person-total span{display:block;font-size:9px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--text3);}
 .cc-person-cur{color:var(--accent2);}
 .cc-person-total{color:var(--green);}
-.cc-chevron{font-size:11px;color:var(--text3);width:14px;text-align:center;}
+.cc-chevron{font-size:15px;color:var(--text3);width:14px;text-align:center;}
 .cc-bar-track{height:3px;background:rgba(255,255,255,.05);border-radius:2px;overflow:hidden;margin-top:9px;}
 .cc-bar-fill{height:100%;background:linear-gradient(90deg,var(--green),#22e89a);border-radius:2px;transition:width .5s;}
 .cc-person-detail{margin-top:11px;padding-top:11px;border-top:1px solid var(--border);}
 .cc-monthly-table{width:100%;}
 .cc-monthly-table th,.cc-monthly-table td{padding:6px 10px;}
+.cc-lb-row{cursor:pointer;border-radius:8px;padding:6px;transition:background .15s;}
+.cc-lb-row:hover{background:rgba(79,126,255,.06);}
+.cc-lb-rank{color:var(--accent2);margin-right:3px;}
+
+/* ── AGENT PROFILE MODAL ── */
+.ap-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9997;display:none;align-items:center;justify-content:center;padding:20px;}
+.ap-overlay.open{display:flex;}
+.ap-box{background:var(--surface);border:1px solid var(--border2);border-radius:18px;padding:26px;width:100%;max-width:640px;max-height:88vh;overflow-y:auto;box-shadow:0 16px 60px rgba(0,0,0,.55);position:relative;}
+.ap-close{position:absolute;top:16px;right:16px;width:30px;height:30px;border-radius:50%;border:1px solid var(--border2);background:var(--surface2);color:var(--text2);cursor:pointer;font-size:14px;transition:all .2s;}
+.ap-close:hover{color:var(--red);border-color:rgba(229,69,90,.4);}
+.ap-header{display:flex;align-items:center;gap:14px;margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--border);}
+.ap-avatar{width:54px;height:54px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;color:#fff;flex-shrink:0;}
+.ap-name{font-family:'Bebas Neue',sans-serif;font-size:24px;letter-spacing:1px;color:var(--text);}
+.ap-role{font-size:12px;color:var(--text2);margin-top:2px;}
+.ap-stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;}
+.ap-stat{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:11px;text-align:center;position:relative;overflow:hidden;}
+.ap-stat::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--accent2);}
+.ap-stat.green::before{background:var(--green);}.ap-stat.amber::before{background:var(--amber);}.ap-stat.red::before{background:var(--red);}
+.ap-stat.purple::before{background:var(--purple);}.ap-stat.teal::before{background:var(--teal);}.ap-stat.indigo::before{background:#6366f1;}.ap-stat.pink::before{background:#ec4899;}
+.ap-stat-val{font-family:'Bebas Neue',sans-serif;font-size:19px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ap-stat-val-sm{font-size:13px;font-family:'Inter',sans-serif;font-weight:600;}
+.ap-stat-lbl{font-size:8px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--text2);margin-top:3px;}
 
 /* EARNINGS BANNER */
 .earnings-banner{background:linear-gradient(135deg,rgba(79,126,255,.1),rgba(107,159,255,.06));border:1px solid rgba(79,126,255,.2);border-radius:12px;padding:15px 20px;display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
@@ -1597,6 +1764,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
   .task-details{grid-template-columns:repeat(2,1fr);}
   .tasks-tabs{flex-direction:column;}
   .gdf-dropdown{right:auto;left:0;}
+  .ap-stats-grid{grid-template-columns:repeat(2,1fr);}
 }
 </style>
 </head>
@@ -1711,17 +1879,9 @@ table.ref-table{width:100%;border-collapse:collapse;}
               </div>
             </div>
             <div class="gdf-divider" id="gdf-scope-divider" style="display:none"></div>
-            <div class="gdf-section-label">Quick Presets</div>
+            <div class="gdf-section-label">Date Range</div>
             <button class="gdf-preset" data-preset="today"     onclick="applyGdfPreset('today')">Today</button>
-            <button class="gdf-preset" data-preset="yesterday" onclick="applyGdfPreset('yesterday')">Yesterday</button>
-            <button class="gdf-preset" data-preset="last7"     onclick="applyGdfPreset('last7')">Last 7 Days</button>
-            <button class="gdf-preset" data-preset="last30"    onclick="applyGdfPreset('last30')">Last 30 Days</button>
-            <div class="gdf-divider"></div>
-            <div class="gdf-section-label">By Period</div>
             <button class="gdf-preset" data-preset="thismonth" onclick="applyGdfPreset('thismonth')">This Month</button>
-            <button class="gdf-preset" data-preset="lastmonth" onclick="applyGdfPreset('lastmonth')">Last Month</button>
-            <button class="gdf-preset" data-preset="thisyear"  onclick="applyGdfPreset('thisyear')">This Year</button>
-            <div class="gdf-divider"></div>
             <button class="gdf-preset active" data-preset="all"    onclick="applyGdfPreset('all')">All Time</button>
             <button class="gdf-preset"         data-preset="custom" onclick="applyGdfPreset('custom')">Custom Range…</button>
             <div class="gdf-custom-wrap" id="gdf-custom-wrap">
@@ -1786,37 +1946,26 @@ table.ref-table{width:100%;border-collapse:collapse;}
 
       <!-- ══ ADMIN OVERVIEW ══ -->
       <div class="view" id="view-admin-overview">
-        <div class="view-header"><div class="view-title" id="topbar-greeting">Overview</div><div class="view-sub">Full team performance · filtered by date range and scope.</div></div>
+        <div class="view-header"><div class="view-title" id="topbar-greeting">Overview</div><div class="view-sub">Full team performance · filtered by the master filter above.</div></div>
         <div class="stats-row-7">
-          <div class="stat-card blue"><div class="stat-label">Total Submissions</div><div class="stat-value" id="adm-stat-total">0</div><div class="stat-sub">Deals + Xfers</div></div>
-          <div class="stat-card green"><div class="stat-label">Deals Approved</div><div class="stat-value" id="adm-stat-approved">0</div></div>
+          <div class="stat-card blue"><div class="stat-label">Total Submissions</div><div class="stat-value" id="adm-stat-total">0</div><div class="stat-sub">Deals + Xfers + Mortgage</div></div>
+          <div class="stat-card green"><div class="stat-label">Approved (All)</div><div class="stat-value" id="adm-stat-approved">0</div></div>
           <div class="stat-card amber"><div class="stat-label">Pending (All)</div><div class="stat-value" id="adm-stat-pending">0</div></div>
-          <div class="stat-card red"><div class="stat-label">Deals Declined</div><div class="stat-value" id="adm-stat-declined">0</div></div>
+          <div class="stat-card red"><div class="stat-label">Declined (All)</div><div class="stat-value" id="adm-stat-declined">0</div></div>
           <div class="stat-card purple"><div class="stat-label">Closer Comm.</div><div class="stat-value" id="adm-stat-comm">$0</div></div>
           <div class="stat-card teal"><div class="stat-label">Opener Comm.</div><div class="stat-value" id="adm-stat-ocomm">$0</div></div>
-          <div class="stat-card indigo"><div class="stat-label">Mortgage Xfers</div><div class="stat-value" id="adm-stat-mtg">0</div></div>
-          <div class="stat-card pink"><div class="stat-label">Top Opener</div><div class="stat-value stat-value-sm" id="adm-stat-top-opener">—</div><div class="stat-sub" id="adm-stat-top-opener-sub">No data yet</div></div>
-        </div>
-        <div class="two-col">
-          <div class="panel-card">
-            <div class="panel-card-title">Recent closer deals <span class="panel-card-action" onclick="switchView('admin-deals')">View all →</span></div>
-            <div id="adm-recent-feed"><div class="empty-state">Loading…</div></div>
-          </div>
-          <div class="panel-card">
-            <div class="panel-card-title">Closer leaderboard</div>
-            <div id="adm-leaderboard"><div class="empty-state">No approved deals yet.</div></div>
-          </div>
+          <div class="stat-card indigo"><div class="stat-label">Mortgage Comm.</div><div class="stat-value" id="adm-stat-mtg">$0</div></div>
         </div>
         <div class="panel-card" style="margin-bottom:12px">
-          <div class="panel-card-title">Opener leaderboard</div>
-          <div id="adm-opener-leaderboard"><div class="empty-state">No approved transfers yet.</div></div>
+          <div class="panel-card-title">Recent activity <span class="panel-card-action" onclick="switchView('admin-commission')">View rankings →</span></div>
+          <div id="adm-recent-feed"><div class="empty-state">Loading…</div></div>
         </div>
         <div class="tasks-collapsible">
           <div class="tasks-collapsible-header" onclick="toggleTasks()">
             <div class="tasks-ch-left">
               <div>
                 <div class="tasks-ch-title">Tasks — Pending Review</div>
-                <div class="tasks-ch-sub">Closer deals + Opener transfers awaiting approval</div>
+                <div class="tasks-ch-sub">Closer deals + Opener transfers + Mortgage transfers awaiting approval</div>
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:8px">
@@ -1862,14 +2011,14 @@ table.ref-table{width:100%;border-collapse:collapse;}
 
       <!-- ══ ADMIN MORTGAGE ══ -->
       <div class="view" id="view-admin-mortgage">
-        <div class="view-header"><div class="view-title">Mortgage Records</div><div class="view-sub">Isolated from all opener and closer data.</div></div>
+        <div class="view-header"><div class="view-title">Mortgage Records</div><div class="view-sub">Full detail, approve/decline, and commission — same as Deals &amp; Transfers.</div></div>
         <div class="mtg-stat-banner"><div class="mtg-stat-item"><div class="mtg-stat-val" id="adm-mtg-count">0</div><div class="mtg-stat-lbl">Transfers (filtered)</div></div></div>
         <div id="adm-mtg-list"><div class="empty-state">No mortgage transfers in this date range.</div></div>
       </div>
 
       <!-- ══ ADMIN COMMISSION STRUCTURE ══ -->
       <div class="view" id="view-admin-commission">
-        <div class="view-header"><div class="view-title">Commission Structure</div><div class="view-sub">Approved commission only · pay periods run the 28th → 27th of every month.</div></div>
+        <div class="view-header"><div class="view-title">Commission Structure</div><div class="view-sub">Single hub for rankings and agent profiles · use the master filter above to change scope and range.</div></div>
         <div class="cc-period-banner">
           <div>
             <div class="cc-period-banner-label">Current Pay Period</div>
@@ -1881,15 +2030,52 @@ table.ref-table{width:100%;border-collapse:collapse;}
             <div class="cc-period-banner-amount" id="cc-period-total">$0</div>
           </div>
         </div>
-        <div class="cc-grid">
-          <div class="panel-card">
-            <div class="panel-card-title">Closers</div>
+
+        <!-- Single dynamic leaderboard — swaps automatically with the master filter's scope -->
+        <div class="panel-card" style="margin-bottom:12px">
+          <div class="panel-card-title" id="cc-leaderboard-title">Company-wide Rankings</div>
+          <div id="cc-leaderboard"><div class="empty-state">Loading…</div></div>
+        </div>
+
+        <!-- Closers -->
+        <div class="tasks-collapsible" style="margin-bottom:10px">
+          <div class="tasks-collapsible-header" onclick="toggleCcCategory('closer')">
+            <div class="tasks-ch-left"><div class="tasks-ch-title">Closers</div></div>
+            <div class="tasks-toggle-icon" id="cc-cat-icon-closer">▾</div>
+          </div>
+          <div class="tasks-collapsible-body" id="cc-cat-body-closer">
             <div id="cc-closer-list"><div class="empty-state">Loading…</div></div>
           </div>
-          <div class="panel-card">
-            <div class="panel-card-title">Openers</div>
+        </div>
+
+        <!-- Openers -->
+        <div class="tasks-collapsible" style="margin-bottom:10px">
+          <div class="tasks-collapsible-header" onclick="toggleCcCategory('opener')">
+            <div class="tasks-ch-left"><div class="tasks-ch-title">Openers</div></div>
+            <div class="tasks-toggle-icon" id="cc-cat-icon-opener">▾</div>
+          </div>
+          <div class="tasks-collapsible-body" id="cc-cat-body-opener">
             <div id="cc-opener-list"><div class="empty-state">Loading…</div></div>
           </div>
+        </div>
+
+        <!-- Mortgage -->
+        <div class="tasks-collapsible">
+          <div class="tasks-collapsible-header" onclick="toggleCcCategory('mortgage')">
+            <div class="tasks-ch-left"><div class="tasks-ch-title">Mortgage</div></div>
+            <div class="tasks-toggle-icon" id="cc-cat-icon-mortgage">▾</div>
+          </div>
+          <div class="tasks-collapsible-body" id="cc-cat-body-mortgage">
+            <div id="cc-mortgage-list"><div class="empty-state">Loading…</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ AGENT PROFILE MODAL ── only ever opened from Commission Structure ══ -->
+      <div id="ap-overlay" class="ap-overlay">
+        <div class="ap-box">
+          <button class="ap-close" onclick="closeAgentProfile()">✕</button>
+          <div id="ap-body"></div>
         </div>
       </div>
 
@@ -2005,7 +2191,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
 
       <!-- ══ MORTGAGE DASHBOARD ══ -->
       <div class="view" id="view-mtg-dashboard">
-        <div class="view-header"><div class="view-title">Mortgage Dashboard</div><div class="view-sub">Your transfer records — completely separate from other teams.</div></div>
+        <div class="view-header"><div class="view-title">Mortgage Dashboard</div><div class="view-sub">Your transfer records and commission, pending admin approval.</div></div>
         <div class="stats-row-3">
           <div class="stat-card teal"><div class="stat-label">Filtered Transfers</div><div class="stat-value" id="mtg-stat-total">0</div></div>
           <div class="stat-card blue"><div class="stat-label">Today's Transfers</div><div class="stat-value" id="mtg-stat-today">0</div></div>
@@ -2021,11 +2207,12 @@ table.ref-table{width:100%;border-collapse:collapse;}
 
       <!-- ══ MORTGAGE SUBMIT ══ -->
       <div class="view" id="view-mtg-submit">
-        <div class="view-header"><div class="view-title">Submit Transfer</div><div class="view-sub">Logged instantly — no approval workflow.</div></div>
+        <div class="view-header"><div class="view-title">Submit Transfer</div><div class="view-sub">Submitted for admin review — just like opener and closer submissions.</div></div>
         <div class="form-card">
           <div class="form-card-title">Transfer Details</div>
           <div class="field"><label>Agent Name</label><select id="mtg-agent"><option value="">Select agent…</option><option>Paul</option><option>Liam</option><option>Hidie</option><option>Wells</option><option>Jacob</option></select></div>
           <div class="field"><label>Client Number</label><input type="text" id="mtg-client" placeholder="e.g. 10042"/></div>
+          <div class="field"><label>Client Phone</label><input type="text" id="mtg-phone" placeholder="e.g. (555) 123-4567"/></div>
           <div class="field"><label>Date</label><input type="date" id="mtg-date"/></div>
           <button class="btn-form btn-form-teal" id="mtg-submit-btn" onclick="submitMtgTransfer()">Submit Transfer</button>
         </div>
