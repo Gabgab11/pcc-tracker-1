@@ -666,20 +666,65 @@
   }
 
   // ── ADMIN OVERVIEW ──
-  // Every stat below reads through gdfDeals()/gdfXfers()/gdfMtg(), which already
-  // collapse to [] for any team excluded by the active roleScope — so this view
-  // needs no extra scope logic of its own; it just always shows the truth for
-  // whichever team(s) are currently selected in the master filter.
+  // gdfDeals()/gdfXfers()/gdfMtg() already collapse to [] for any team
+  // excluded by the active roleScope. That alone fixed the NUMBERS, but the
+  // CARD WRAPPERS still always rendered — so e.g. picking "Mortgage" used to
+  // correctly zero out Closer Comm. while still showing a "$0" card for it.
+  // This now also hides every card that doesn't belong to the active scope,
+  // and computes each visible number from ONLY that scope's own records
+  // (no more blending all three departments into one "Approved (All)").
   function renderAdminOverview(){
     const d=gdfDeals(),t=gdfXfers(),m=gdfMtg();
-    const allRecords=[...d,...t,...m];
-    document.getElementById('adm-stat-total').textContent    =d.length+t.length+m.length;
-    document.getElementById('adm-stat-approved').textContent =allRecords.filter(x=>x.status==='Approved').length;
-    document.getElementById('adm-stat-pending').textContent  =allRecords.filter(x=>x.status==='Pending').length;
-    document.getElementById('adm-stat-declined').textContent =allRecords.filter(x=>x.status==='Declined').length;
-    document.getElementById('adm-stat-comm').textContent     ='$'+d.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
-    document.getElementById('adm-stat-ocomm').textContent    ='$'+t.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
-    document.getElementById('adm-stat-mtg').textContent      ='$'+m.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
+    const scope=window._gdf.roleScope; // 'all' | 'closer' | 'opener' | 'mortgage'
+
+    // Show/hide each card per its declared scope list.
+    document.querySelectorAll('#adm-stats-row .stat-card[data-scope]').forEach(card=>{
+      const scopes=card.dataset.scope.split(',');
+      card.style.display = scopes.includes(scope) ? '' : 'none';
+    });
+
+    if(scope==='mortgage'){
+      // Mortgage-only: no Pending/Declined concept (every submission counts
+      // immediately), so only Total Submissions + Mortgage Comm. are shown
+      // — Approved/Pending/Declined cards are hidden above, not zeroed.
+      document.getElementById('adm-stat-total').textContent=m.length;
+      document.getElementById('adm-stat-total-sub').textContent='Mortgage transfers';
+      document.getElementById('adm-stat-mtg').textContent='$'+m.reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
+    } else if(scope==='closer'){
+      document.getElementById('adm-stat-total').textContent=d.length;
+      document.getElementById('adm-stat-total-sub').textContent='Closer deals';
+      document.getElementById('adm-stat-approved-lbl').textContent='Approved';
+      document.getElementById('adm-stat-pending-lbl').textContent='Pending';
+      document.getElementById('adm-stat-declined-lbl').textContent='Declined';
+      document.getElementById('adm-stat-approved').textContent=d.filter(x=>x.status==='Approved').length;
+      document.getElementById('adm-stat-pending').textContent =d.filter(x=>x.status==='Pending').length;
+      document.getElementById('adm-stat-declined').textContent=d.filter(x=>x.status==='Declined').length;
+      document.getElementById('adm-stat-comm').textContent='$'+d.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
+    } else if(scope==='opener'){
+      document.getElementById('adm-stat-total').textContent=t.length;
+      document.getElementById('adm-stat-total-sub').textContent='Opener transfers';
+      document.getElementById('adm-stat-approved-lbl').textContent='Approved';
+      document.getElementById('adm-stat-pending-lbl').textContent='Pending';
+      document.getElementById('adm-stat-declined-lbl').textContent='Declined';
+      document.getElementById('adm-stat-approved').textContent=t.filter(x=>x.status==='Approved').length;
+      document.getElementById('adm-stat-pending').textContent =t.filter(x=>x.status==='Pending').length;
+      document.getElementById('adm-stat-declined').textContent=t.filter(x=>x.status==='Declined').length;
+      document.getElementById('adm-stat-ocomm').textContent='$'+t.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
+    } else {
+      // 'all' — every department blended together, same as before.
+      const allRecords=[...d,...t,...m];
+      document.getElementById('adm-stat-total').textContent=d.length+t.length+m.length;
+      document.getElementById('adm-stat-total-sub').textContent='Deals + Xfers + Mortgage';
+      document.getElementById('adm-stat-approved-lbl').textContent='Approved (All)';
+      document.getElementById('adm-stat-pending-lbl').textContent='Pending (All)';
+      document.getElementById('adm-stat-declined-lbl').textContent='Declined (All)';
+      document.getElementById('adm-stat-approved').textContent=allRecords.filter(x=>x.status==='Approved').length;
+      document.getElementById('adm-stat-pending').textContent =allRecords.filter(x=>x.status==='Pending').length;
+      document.getElementById('adm-stat-declined').textContent=allRecords.filter(x=>x.status==='Declined').length;
+      document.getElementById('adm-stat-comm').textContent ='$'+d.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
+      document.getElementById('adm-stat-ocomm').textContent='$'+t.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
+      document.getElementById('adm-stat-mtg').textContent  ='$'+m.reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
+    }
 
     // Recent activity feed — merges whichever team(s) are in scope, newest first.
     const feed=document.getElementById('adm-recent-feed');
@@ -1060,18 +1105,31 @@
     const dl=document.getElementById('cc-days-left');
     if(dl)dl.textContent=daysLeft===0?'Cutoff is today — totals finalize tonight':`${daysLeft} day${daysLeft!==1?'s':''} until the ${period.end.slice(-2)}th cutoff`;
 
-    const closerStats  = ccAllAgentStats('closer');
-    const openerStats  = ccAllAgentStats('opener');
-    const mtgStats     = ccAllAgentStats('mortgage');
+    const scope=window._gdf.roleScope; // 'all' | 'closer' | 'opener' | 'mortgage'
+
+    // Show only the category section(s) that match the active department
+    // scope — out-of-scope sections are fully hidden (header + body), not
+    // just emptied, so there's no collapsed-but-present $0 section sitting
+    // on screen for a department that isn't selected.
+    document.querySelectorAll('#view-admin-commission [data-scope]').forEach(el=>{
+      const scopes=el.dataset.scope.split(',');
+      el.style.display = scopes.includes(scope) ? '' : 'none';
+    });
+
+    const closerStats  = (scope==='all'||scope==='closer')   ? ccAllAgentStats('closer')   : [];
+    const openerStats  = (scope==='all'||scope==='opener')   ? ccAllAgentStats('opener')   : [];
+    const mtgStats     = (scope==='all'||scope==='mortgage') ? ccAllAgentStats('mortgage') : [];
 
     const periodTotal = [...closerStats,...openerStats,...mtgStats]
       .reduce((s,a)=>s+(a.periods[period.key]?.total||0),0);
     const pt=document.getElementById('cc-period-total'); if(pt)pt.textContent='$'+periodTotal.toLocaleString();
 
-    // ── Category sections (collapsible) ──
-    document.getElementById('cc-closer-list').innerHTML   = ccBuildRoster(closerStats,'closer',period.key);
-    document.getElementById('cc-opener-list').innerHTML   = ccBuildRoster(openerStats,'opener',period.key);
-    document.getElementById('cc-mortgage-list').innerHTML = ccBuildRoster(mtgStats,'mortgage',period.key);
+    // ── Category sections (collapsible) — only the in-scope one(s) get
+    // their roster rebuilt; out-of-scope lists are left untouched since
+    // their whole section is hidden anyway.
+    if(closerStats.length || scope==='all' || scope==='closer') document.getElementById('cc-closer-list').innerHTML   = ccBuildRoster(closerStats,'closer',period.key);
+    if(openerStats.length || scope==='all' || scope==='opener') document.getElementById('cc-opener-list').innerHTML   = ccBuildRoster(openerStats,'opener',period.key);
+    if(mtgStats.length    || scope==='all' || scope==='mortgage') document.getElementById('cc-mortgage-list').innerHTML = ccBuildRoster(mtgStats,'mortgage',period.key);
     ['closer','opener','mortgage'].forEach(k=>{
       const body=document.getElementById('cc-cat-body-'+k), icon=document.getElementById('cc-cat-icon-'+k);
       if(body) body.style.display = window._ccCollapsed[k] ? 'none':'block';
@@ -2500,14 +2558,14 @@ table.ref-table{width:100%;border-collapse:collapse;}
       <!-- ══ ADMIN OVERVIEW ══ -->
       <div class="view" id="view-admin-overview">
         <div class="view-header"><div class="view-title" id="topbar-greeting">Overview</div><div class="view-sub">Full team performance · filtered by the master filter above.</div></div>
-        <div class="stats-row-7">
-          <div class="stat-card blue"><div class="stat-label">Total Submissions</div><div class="stat-value" id="adm-stat-total">0</div><div class="stat-sub">Deals + Xfers + Mortgage</div></div>
-          <div class="stat-card green"><div class="stat-label">Approved (All)</div><div class="stat-value" id="adm-stat-approved">0</div></div>
-          <div class="stat-card amber"><div class="stat-label">Pending (All)</div><div class="stat-value" id="adm-stat-pending">0</div></div>
-          <div class="stat-card red"><div class="stat-label">Declined (All)</div><div class="stat-value" id="adm-stat-declined">0</div></div>
-          <div class="stat-card purple"><div class="stat-label">Closer Comm.</div><div class="stat-value" id="adm-stat-comm">$0</div></div>
-          <div class="stat-card teal"><div class="stat-label">Opener Comm.</div><div class="stat-value" id="adm-stat-ocomm">$0</div></div>
-          <div class="stat-card indigo"><div class="stat-label">Mortgage Comm.</div><div class="stat-value" id="adm-stat-mtg">$0</div></div>
+        <div class="stats-row-7" id="adm-stats-row">
+          <div class="stat-card blue" data-scope="all" id="adm-card-total"><div class="stat-label">Total Submissions</div><div class="stat-value" id="adm-stat-total">0</div><div class="stat-sub" id="adm-stat-total-sub">Deals + Xfers + Mortgage</div></div>
+          <div class="stat-card green" data-scope="all,closer,opener" id="adm-card-approved"><div class="stat-label" id="adm-stat-approved-lbl">Approved</div><div class="stat-value" id="adm-stat-approved">0</div></div>
+          <div class="stat-card amber" data-scope="all,closer,opener" id="adm-card-pending"><div class="stat-label" id="adm-stat-pending-lbl">Pending</div><div class="stat-value" id="adm-stat-pending">0</div></div>
+          <div class="stat-card red" data-scope="all,closer,opener" id="adm-card-declined"><div class="stat-label" id="adm-stat-declined-lbl">Declined</div><div class="stat-value" id="adm-stat-declined">0</div></div>
+          <div class="stat-card purple" data-scope="all,closer" id="adm-card-comm"><div class="stat-label">Closer Comm.</div><div class="stat-value" id="adm-stat-comm">$0</div></div>
+          <div class="stat-card teal" data-scope="all,opener" id="adm-card-ocomm"><div class="stat-label">Opener Comm.</div><div class="stat-value" id="adm-stat-ocomm">$0</div></div>
+          <div class="stat-card indigo" data-scope="all,mortgage" id="adm-card-mtg"><div class="stat-label">Mortgage Comm.</div><div class="stat-value" id="adm-stat-mtg">$0</div></div>
         </div>
         <div class="panel-card" style="margin-bottom:12px">
           <div class="panel-card-title">Recent activity <span class="panel-card-action" onclick="switchView('admin-commission')">View rankings →</span></div>
@@ -2591,7 +2649,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
         </div>
 
         <!-- Closers -->
-        <div class="tasks-collapsible" style="margin-bottom:10px">
+        <div class="tasks-collapsible" style="margin-bottom:10px" id="cc-section-closer" data-scope="all,closer">
           <div class="tasks-collapsible-header" onclick="toggleCcCategory('closer')">
             <div class="tasks-ch-left"><div class="tasks-ch-title">Closers</div></div>
             <div class="tasks-toggle-icon" id="cc-cat-icon-closer">▾</div>
@@ -2602,7 +2660,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
         </div>
 
         <!-- Openers -->
-        <div class="tasks-collapsible" style="margin-bottom:10px">
+        <div class="tasks-collapsible" style="margin-bottom:10px" id="cc-section-opener" data-scope="all,opener">
           <div class="tasks-collapsible-header" onclick="toggleCcCategory('opener')">
             <div class="tasks-ch-left"><div class="tasks-ch-title">Openers</div></div>
             <div class="tasks-toggle-icon" id="cc-cat-icon-opener">▾</div>
@@ -2613,7 +2671,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
         </div>
 
         <!-- Mortgage -->
-        <div class="tasks-collapsible">
+        <div class="tasks-collapsible" id="cc-section-mortgage" data-scope="all,mortgage">
           <div class="tasks-collapsible-header" onclick="toggleCcCategory('mortgage')">
             <div class="tasks-ch-left"><div class="tasks-ch-title">Mortgage</div></div>
             <div class="tasks-toggle-icon" id="cc-cat-icon-mortgage">▾</div>
@@ -2922,4 +2980,5 @@ function updateStrength(val){
 })();
 </script>
 </body>
+</html>
 </html>
