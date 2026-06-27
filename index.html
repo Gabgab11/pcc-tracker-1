@@ -542,7 +542,22 @@
       const q=role==='admin'
         ?query(collection(db,'mortgage_transfers'),orderBy('createdAt','desc'))
         :query(collection(db,'mortgage_transfers'),where('agentEmail','==',currentUser.email),orderBy('createdAt','desc'));
-      mtgUnsub=onSnapshot(q,snap=>{mtgRecords=[];snap.forEach(t=>mtgRecords.push({id:t.id,...t.data()}));syncGlobals();renderCurrentView();},err=>console.error(err));
+      mtgUnsub=onSnapshot(q,snap=>{
+        mtgRecords=[];
+        snap.forEach(t=>{
+          const data=t.data();
+          // Some older records were saved with `clientNumber` instead of
+          // `phone` (pre-dates the current submit form). Every render
+          // function in the app reads `r.phone` — rather than touch the
+          // database or chase down every read site, normalize it once
+          // right here: if `phone` is missing, fall back to
+          // `clientNumber` so old records display correctly too. New
+          // records already save as `phone` and are unaffected.
+          if(!data.phone && data.clientNumber) data.phone=data.clientNumber;
+          mtgRecords.push({id:t.id,...data});
+        });
+        syncGlobals();renderCurrentView();
+      },err=>console.error(err));
     }
   }
 
