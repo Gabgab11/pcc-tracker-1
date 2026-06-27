@@ -106,29 +106,42 @@
 
   function onAgentRegistryReady(fn){ if(agentRegistryReady) fn(); else agentRegistryWaiters.push(fn); }
 
-  async function seedLegacyAgentsIfEmpty(){
+  // Fills in any LEGACY_SEED_AGENTS whose email is missing from the agents
+  // collection — rather than only seeding when the collection is totally
+  // empty. This makes recovery automatic if an earlier seed attempt was
+  // interrupted (e.g. by a permissions error) and only partially wrote
+  // documents: whatever's missing gets added on the next load, and nothing
+  // already present is touched or duplicated.
+  async function seedMissingLegacyAgents(existingDocs){
+    const existingEmails=new Set(existingDocs.map(d=>(d.email||'').toLowerCase()));
+    const missing=LEGACY_SEED_AGENTS.filter(a=>!existingEmails.has(a.email.toLowerCase()));
+    if(!missing.length) return false;
     try{
-      const snap=await getDocs(collection(db,'agents'));
-      if(!snap.empty) return;
-      for(const a of LEGACY_SEED_AGENTS){
+      for(const a of missing){
         await setDoc(doc(collection(db,'agents')), {
           name:a.name, email:a.email.toLowerCase(), department:a.department,
           role:a.role, commissionStructure:a.commissionStructure,
           alias:a.alias||'', active:true, createdAt:new Date().toISOString(),
         });
       }
-    }catch(e){ console.error('Agent seed failed',e); }
+      return true;
+    }catch(e){ console.error('Agent seed failed',e); return false; }
   }
 
   function setupAgentRegistryListener(){
     if(agentsUnsub) return;
     const q=query(collection(db,'agents'),orderBy('name'));
+    let seedAttempted=false;
     agentsUnsub=onSnapshot(q,async snap=>{
-      if(snap.empty){
-        await seedLegacyAgentsIfEmpty();
-        return; // the seed write triggers this listener again with real docs
-      }
       const docs=[]; snap.forEach(d=>docs.push({id:d.id,...d.data()}));
+      // Check for and fill in any missing legacy agents at most once per
+      // listener lifetime — avoids a write loop, but still self-heals a
+      // partial seed (e.g. only Admin present) on the very first load.
+      if(!seedAttempted){
+        seedAttempted=true;
+        const wroteSomething=await seedMissingLegacyAgents(docs);
+        if(wroteSomething) return; // the writes above re-trigger this listener with the complete set
+      }
       rebuildAgentRegistry(docs);
     },err=>console.error('Agent registry listener failed',err));
   }
