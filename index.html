@@ -703,18 +703,19 @@
     const d=gdfDeals(),t=gdfXfers(),m=gdfMtg();
     const dealPend =d.filter(x=>x.status==='Pending').length;
     const xferPend =t.filter(x=>x.status==='Pending').length;
-    const mtgPend  =m.filter(x=>x.status==='Pending').length;
+    // Mortgage no longer has a pending/decline state — every submission
+    // counts immediately. Mortgage transfers are excluded from the
+    // pending/declined tabs and counts entirely, and included in approved.
     const dealAppr =d.filter(x=>x.status==='Approved').length;
     const xferAppr =t.filter(x=>x.status==='Approved').length;
-    const mtgAppr  =m.filter(x=>x.status==='Approved').length;
+    const mtgAppr  =m.length;
     const dealDecl =d.filter(x=>x.status==='Declined').length;
     const xferDecl =t.filter(x=>x.status==='Declined').length;
-    const mtgDecl  =m.filter(x=>x.status==='Declined').length;
     const tc=document.getElementById('tasks-count-badge');
-    if(tc)tc.textContent=dealPend+xferPend+mtgPend;
-    const tt=document.querySelector('.tasks-tab[data-tab="pending"]  .tab-count'); if(tt)tt.textContent=dealPend+xferPend+mtgPend;
+    if(tc)tc.textContent=dealPend+xferPend;
+    const tt=document.querySelector('.tasks-tab[data-tab="pending"]  .tab-count'); if(tt)tt.textContent=dealPend+xferPend;
     const ta=document.querySelector('.tasks-tab[data-tab="approved"] .tab-count'); if(ta)ta.textContent=dealAppr+xferAppr+mtgAppr;
-    const td=document.querySelector('.tasks-tab[data-tab="declined"] .tab-count'); if(td)td.textContent=dealDecl+xferDecl+mtgDecl;
+    const td=document.querySelector('.tasks-tab[data-tab="declined"] .tab-count'); if(td)td.textContent=dealDecl+xferDecl;
     const activeTab=document.querySelector('.tasks-tab.active')?.dataset.tab||'pending';
     renderTasksPane(activeTab);
   }
@@ -731,27 +732,26 @@
     if(tab==='pending'){
       const dp=d.filter(x=>x.status==='Pending');
       const tp=t.filter(x=>x.status==='Pending');
-      const mp=m.filter(x=>x.status==='Pending');
-      if(!dp.length&&!tp.length&&!mp.length){wrap.innerHTML='<div class="empty-state">All clear — no pending items ✅</div>';return;}
+      // No mortgage section here — mortgage transfers count immediately at
+      // submission and never sit in a pending state.
+      if(!dp.length&&!tp.length){wrap.innerHTML='<div class="empty-state">All clear — no pending items ✅</div>';return;}
       if(dp.length){html+=`<div class="tasks-section-label">Closer Deals</div>`+dp.map(x=>buildDealTaskCard(x,'pending')).join('');}
       if(tp.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Opener Transfers</div>`+tp.map(x=>buildXferTaskCard(x,'pending')).join('');}
-      if(mp.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+mp.map(x=>buildMtgTaskCard(x,'pending')).join('');}
     } else if(tab==='approved'){
       const da=d.filter(x=>x.status==='Approved');
       const ta=t.filter(x=>x.status==='Approved');
-      const ma=m.filter(x=>x.status==='Approved');
+      const ma=m; // every mortgage record is, in effect, approved on submission
       if(!da.length&&!ta.length&&!ma.length){wrap.innerHTML='<div class="empty-state">No approved items.</div>';return;}
       if(da.length){html+=`<div class="tasks-section-label">Closer Deals</div>`+da.map(x=>buildDealTaskCard(x,'approved')).join('');}
       if(ta.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Opener Transfers</div>`+ta.map(x=>buildXferTaskCard(x,'approved')).join('');}
-      if(ma.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+ma.map(x=>buildMtgTaskCard(x,'approved')).join('');}
+      if(ma.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+ma.map(x=>buildMtgTaskCard(x)).join('');}
     } else {
       const dd=d.filter(x=>x.status==='Declined');
       const td=t.filter(x=>x.status==='Declined');
-      const md=m.filter(x=>x.status==='Declined');
-      if(!dd.length&&!td.length&&!md.length){wrap.innerHTML='<div class="empty-state">No declined items.</div>';return;}
+      // No mortgage section here — mortgage has no decline state anymore.
+      if(!dd.length&&!td.length){wrap.innerHTML='<div class="empty-state">No declined items.</div>';return;}
       if(dd.length){html+=`<div class="tasks-section-label">Closer Deals</div>`+dd.map(x=>buildDealTaskCard(x,'declined')).join('');}
       if(td.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Opener Transfers</div>`+td.map(x=>buildXferTaskCard(x,'declined')).join('');}
-      if(md.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+md.map(x=>buildMtgTaskCard(x,'declined')).join('');}
     }
     wrap.innerHTML=html;
   }
@@ -793,21 +793,8 @@
     </div>`;
   }
 
-  // For a PENDING mortgage record, projects the commission it would earn if
-  // approved right now — i.e. as if it were appended to the agent's current
-  // approved sequence as the next one. Purely informational for the admin's
-  // edit field; the real, authoritative calculation happens in
-  // adminMtgAction() at the moment of approval (since other pending records
-  // for the same agent might be approved first and shift the sequence).
-  function mtgProjectedCommForPending(r){
-    const approvedCount=mtgRecords.filter(x=>x.agent===r.agent && x.status==='Approved').length;
-    return mtgRateForSeq(approvedCount+1, approvedCount+1);
-  }
-
-  function buildMtgTaskCard(r,tab){
-    const isPending=tab==='pending';
-    const projected=isPending?mtgProjectedCommForPending(r):0;
-    return`<div class="task-card ${tab}" style="border-left-color:var(--teal)">
+  function buildMtgTaskCard(r){
+    return`<div class="task-card approved" style="border-left-color:var(--teal)">
       <div class="task-card-header">
         <div><span class="task-client">${displayName(r.agent)||'—'}</span><span class="task-meta">${r.phone||'—'}</span></div>
         <span class="task-date">${fmtDate(r.createdAt)}</span>
@@ -815,10 +802,8 @@
       <div class="task-details">
         <div class="task-detail-item"><span class="task-detail-label">Phone</span><span>${r.phone||'—'}</span></div>
         <div class="task-detail-item"><span class="task-detail-label">Date</span><span>${fmtDate(r.date)}</span></div>
-        <div class="task-detail-item"><span class="task-detail-label">Commission</span><span class="task-comm">$${isPending?projected:(r.comm||0)}</span></div>
+        <div class="task-detail-item"><span class="task-detail-label">Commission</span><span class="task-comm">$${r.comm||0}</span></div>
       </div>
-      ${isPending?`<div class="task-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($) — tier-projected</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${projected}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`
-      :`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:${tab==='approved'?'var(--green)':'var(--red)'}">${tab==='approved'?'✅ Approved':'❌ Declined'}</b> · Commission: <b style="color:var(--green)">$${r.comm||0}</b></div>`}
     </div>`;
   }
 
@@ -839,20 +824,21 @@
   };
 
   // ── ADMIN MORTGAGE VIEW ──
+  // Mortgage agents are trained to only submit qualified, confirmed
+  // transfers — there is no review step and no decline state. Every record
+  // here counted immediately at submission, with its commission already
+  // correctly computed by the tiered engine. This is now a flat, read-only
+  // ledger: admin can still permanently delete a record (e.g. a genuine
+  // data-entry mistake), but there's nothing to approve or decline.
   function renderAdminMortgage(){
     const m=gdfMtg();
     document.getElementById('adm-mtg-count').textContent=m.length;
     const wrap=document.getElementById('adm-mtg-list');
     if(!m.length){wrap.innerHTML='<div class="empty-state">No mortgage transfers in this date range.</div>';return;}
-    wrap.innerHTML=m.map(r=>{
-      const isPending=(r.status||'Pending')==='Pending';
-      const projected=isPending?mtgProjectedCommForPending(r):0;
-      return `<div class="admin-record ${r.status&&r.status!=='Pending'?'resolved':''}">
-      <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${r.status==='Approved'?'badge-green':r.status==='Declined'?'badge-red':'badge-amber'}">${r.status||'Pending'}</div><span class="ar-name">${displayName(r.agent)||'—'} — ${r.phone||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(r.date||r.createdAt)}</span>${buildDeleteBtn('mortgage',r.id,(r.agent?`${displayName(r.agent)}'s record`:'this record'))}</div></div>
-      <div class="ar-grid"><div class="ar-field"><span class="ar-key">Agent</span><span class="ar-val">${displayName(r.agent)||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${r.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${isPending?projected:(r.comm||0)}</span></div></div>
-      ${!isPending?`<div class="ar-comm-resolved">Commission: <strong>$${r.comm||0}</strong> <span class="ar-status-text">(${r.status})</span></div>`:`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($) — tier-projected</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${projected}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`}
-    </div>`;
-    }).join('');
+    wrap.innerHTML=m.map(r=>`<div class="admin-record resolved">
+      <div class="admin-record-top"><div class="ar-left"><div class="status-badge badge-green">Counted</div><span class="ar-name">${displayName(r.agent)||'—'} — ${r.phone||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(r.date||r.createdAt)}</span>${buildDeleteBtn('mortgage',r.id,(r.agent?`${displayName(r.agent)}'s record`:'this record'))}</div></div>
+      <div class="ar-grid"><div class="ar-field"><span class="ar-key">Agent</span><span class="ar-val">${displayName(r.agent)||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${r.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${r.comm||0}</span></div></div>
+    </div>`).join('');
   }
 
   // ── ADMIN-ONLY DELETE (deals, transfers, mortgage_transfers) ──
@@ -1396,9 +1382,9 @@
       </div>
       <div class="ap-stats-grid">
         <div class="ap-stat"><div class="ap-stat-val">${r.submissions}</div><div class="ap-stat-lbl">Total Submissions</div></div>
-        <div class="ap-stat green"><div class="ap-stat-val">${r.approved}</div><div class="ap-stat-lbl">Approved</div></div>
-        <div class="ap-stat amber"><div class="ap-stat-val">${r.pending}</div><div class="ap-stat-lbl">Pending</div></div>
-        <div class="ap-stat red"><div class="ap-stat-val">${r.declined}</div><div class="ap-stat-lbl">Declined</div></div>
+        <div class="ap-stat green"><div class="ap-stat-val">${r.approved}</div><div class="ap-stat-lbl">${kind==='mortgage'?'Counted':'Approved'}</div></div>
+        ${kind!=='mortgage'?`<div class="ap-stat amber"><div class="ap-stat-val">${r.pending}</div><div class="ap-stat-lbl">Pending</div></div>
+        <div class="ap-stat red"><div class="ap-stat-val">${r.declined}</div><div class="ap-stat-lbl">Declined</div></div>`:''}
         <div class="ap-stat purple"><div class="ap-stat-val">$${r.totalComm.toLocaleString()}</div><div class="ap-stat-lbl">Total Commission</div></div>
         <div class="ap-stat teal"><div class="ap-stat-val">$${r.avgComm.toFixed(2)}</div><div class="ap-stat-lbl">Avg Commission</div></div>
         ${r.totalDebt!==null?`<div class="ap-stat indigo"><div class="ap-stat-val">$${r.totalDebt.toLocaleString()}</div><div class="ap-stat-lbl">Total Debt Enrolled</div></div>`:''}
@@ -1649,33 +1635,14 @@
     document.getElementById('mtg-records-count').textContent=m.length+' record'+(m.length!==1?'s':'');
     const wrap=document.getElementById('mtg-records-list');
     if(!m.length){wrap.innerHTML='<div class="empty-state">No transfers in this date range.</div>';return;}
-    const groups={Pending:[],Approved:[],Declined:[]};
-    m.forEach(r=>{const s=r.status||'Pending';(groups[s]||(groups.Pending)).push(r);});
-    const order=['Pending','Approved','Declined'];
-    const icons={Pending:'⏳',Approved:'✅',Declined:'🔄'};
-    wrap.innerHTML=order.map(status=>{
-      const list=groups[status];if(!list.length)return'';
-      const gid='mtg-grp-'+status;
-      const cards=list.map(r=>{
-        const isDeclined=r.status==='Declined';
-        const ph=(r.phone||'').replace(/'/g,"\'");
-        const dt=r.date||'';
-        const resubBtn=isDeclined?`<button class="btn-mtg-resubmit" onclick="mtgResubmit('${ph}','${dt}')">↩ Resubmit</button>`:'';
-        return `<div class="mtg-rec-card mtg-status-${status.toLowerCase()}">
+    // Every transfer counts immediately on submission — no review states,
+    // no grouping by status. Newest first.
+    const sorted=[...m].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+    wrap.innerHTML=sorted.map(r=>`<div class="mtg-rec-card mtg-status-approved">
           <div class="mtg-rec-row"><span class="mtg-rec-label">Phone</span><span>${r.phone||'—'}</span></div>
           <div class="mtg-rec-row"><span class="mtg-rec-label">Date</span><span>${fmtDate(r.date||r.createdAt)}</span></div>
-          ${r.comm?`<div class="mtg-rec-row"><span class="mtg-rec-label">Commission</span><span class="comm-val">$${r.comm}</span></div>`:''}
-          ${resubBtn}
-        </div>`;
-      }).join('');
-      return `<div class="mtg-group">
-        <div class="mtg-group-header" onclick="toggleMtgGroup('${gid}')">
-          <span>${icons[status]} ${status} <span class="mtg-group-count">${list.length}</span></span>
-          <span class="mtg-group-chevron" id="${gid}-icon">▾</span>
-        </div>
-        <div class="mtg-group-body" id="${gid}">${cards}</div>
-      </div>`;
-    }).join('');
+          <div class="mtg-rec-row"><span class="mtg-rec-label">Commission</span><span class="comm-val">$${r.comm||0}</span></div>
+        </div>`).join('');
   }
   window.toggleMtgGroup=function(id){
     const el=document.getElementById(id),ic=document.getElementById(id+'-icon');
@@ -1684,79 +1651,45 @@
     el.style.display=open?'none':'block';
     if(ic)ic.textContent=open?'▸':'▾';
   };
-  window.mtgResubmit=function(phone,date){
-    switchView('mtg-submit');
-    setTimeout(()=>{
-      const ph=document.getElementById('mtg-phone'),dt=document.getElementById('mtg-date');
-      if(ph)ph.value=phone;
-      if(dt)dt.value=date;
-    },80);
-  };
   window.submitMtgTransfer=async function(){
     const agent=document.getElementById('mtg-agent').value,phone=document.getElementById('mtg-phone').value.trim(),date=document.getElementById('mtg-date').value;
     if(!agent||!phone||!date){toast('Please complete all fields.','error');return;}
     const btn=document.getElementById('mtg-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
-    // comm stays 0 until admin approval — the tiered engine in
-    // adminMtgAction() computes the real rate at approval time, based on
-    // this agent's full approved sequence, so it's never wrong or stale.
-    try{await addDoc(collection(db,'mortgage_transfers'),{agent,agentEmail:currentUser.email,phone,date,comm:0,status:'Pending',createdAt:new Date().toISOString()});document.getElementById('mtg-phone').value='';document.getElementById('mtg-date').value='';toast('Transfer submitted! Pending admin approval.','success');}
+    // Mortgage agents submit only qualified transfers — no admin review
+    // step. The transfer counts the instant it's submitted: it's written
+    // as Approved immediately, and the tiered engine computes this agent's
+    // correct commission right away from their full approved history
+    // (including this new one) — same exact tier math as before, just
+    // applied at submission instead of at a separate approval click.
+    try{
+      const priorApproved=mtgRecords.filter(x=>x.agent===agent && x.status==='Approved');
+      const nowIso=new Date().toISOString();
+      // Compute the full, correct sequence as if this new transfer already
+      // existed alongside the agent's prior approved ones — this is what
+      // lets a submission that crosses a tier threshold (e.g. their 36th)
+      // retroactively correct their earlier records, with no double count.
+      const recompute=mtgComputeApprovedCommissions([...priorApproved,{id:'__new__',date,createdAt:nowIso}]);
+      const newTier=recompute.get('__new__');
+      await addDoc(collection(db,'mortgage_transfers'),{agent,agentEmail:currentUser.email,phone,date,comm:newTier.comm,seq:newTier.seq,status:'Approved',createdAt:nowIso});
+      const fixups=[];
+      priorApproved.forEach(rec=>{
+        const t=recompute.get(rec.id);
+        if(t && ((rec.comm||0)!==t.comm || rec.seq!==t.seq)){
+          fixups.push(updateDoc(doc(db,'mortgage_transfers',rec.id),{comm:t.comm,seq:t.seq}));
+        }
+      });
+      if(fixups.length) await Promise.all(fixups);
+      document.getElementById('mtg-phone').value='';document.getElementById('mtg-date').value='';
+      toast(`Transfer submitted — $${newTier.comm} earned!`,'success');
+    }
     catch(e){toast('Failed to submit.','error');console.error(e);}
     btn.disabled=false;btn.textContent='Submit Transfer';
   };
 
-  // Admin approves/declines a mortgage transfer. On approval, the tiered
-  // engine recomputes commission for the AGENT'S ENTIRE approved history
-  // (including this newly-approved record) and writes back any records
-  // whose rate changed — e.g. approving someone's 36th transfer bumps
-  // transfers #1–35 from $3 to $5 too. The admin's manual override (if they
-  // edited the $ field) is respected ONLY for this one record; it does not
-  // distort the sequence math for the rest of the agent's history.
-  window.adminMtgAction=async function(id,action){
-    const r=mtgRecords.find(x=>x.id===id);if(!r){toast('Record not found.','error');return;}
-    const editEl=document.getElementById('comm-m-'+id);
-    const manualOverride=editEl?Number(editEl.value):null;
-
-    if(action==='Declined'){
-      try{
-        await updateDoc(doc(db,'mortgage_transfers',id),{status:'Declined',comm:0,resolvedAt:new Date().toISOString()});
-        toast('Mortgage transfer declined.','error');
-      }catch(e){toast('Failed to update.','error');console.error(e);}
-      return;
-    }
-
-    // Approving: gather every OTHER already-approved record for this agent,
-    // add this one in as approved, and recompute the whole sequence.
-    try{
-      const agentName=r.agent;
-      const othersApproved=mtgRecords.filter(x=>x.agent===agentName && x.status==='Approved' && x.id!==id);
-      const thisRecordApproved={...r,status:'Approved'};
-      const fullSet=[...othersApproved,thisRecordApproved];
-      const tierMap=mtgComputeApprovedCommissions(fullSet);
-
-      const batchUpdates=[];
-      for(const rec of fullSet){
-        const tier=tierMap.get(rec.id);
-        if(!tier) continue;
-        let finalComm=tier.comm;
-        // Manual override only ever applies to the record the admin is
-        // approving right now, and only if they actually changed the value.
-        if(rec.id===id && manualOverride!==null && !Number.isNaN(manualOverride) && manualOverride!==tier.comm){
-          finalComm=manualOverride;
-        }
-        if(rec.id===id){
-          batchUpdates.push(updateDoc(doc(db,'mortgage_transfers',rec.id),{status:'Approved',comm:finalComm,seq:tier.seq,resolvedAt:new Date().toISOString()}));
-        } else if((rec.comm||0)!==finalComm || rec.seq!==tier.seq){
-          // Retroactive tier-correction for older records of the same agent —
-          // no double counting: each record is written exactly once with its
-          // current correct rate, derived fresh from the full sequence above.
-          batchUpdates.push(updateDoc(doc(db,'mortgage_transfers',rec.id),{comm:finalComm,seq:tier.seq}));
-        }
-      }
-      await Promise.all(batchUpdates);
-      const approvedComm=tierMap.get(id)?.comm ?? 0;
-      toast(`Mortgage transfer approved — $${manualOverride!==null && manualOverride!==approvedComm ? manualOverride : approvedComm}`,'success');
-    }catch(e){toast('Failed to update.','error');console.error(e);}
-  };
+  // NOTE: there is no adminMtgAction anymore. Mortgage agents are trained
+  // to only submit qualified, confirmed transfers, so every submission
+  // counts immediately (see submitMtgTransfer) — there's no admin
+  // approve/decline step for mortgage, by design.
 
   // ── HELPERS ──
   function fmtDate(s){if(!s)return'—';const d=new Date(s);return isNaN(d)?s:d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}
@@ -2570,7 +2503,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
             <div class="tasks-ch-left">
               <div>
                 <div class="tasks-ch-title">Tasks — Pending Review</div>
-                <div class="tasks-ch-sub">Closer deals + Opener transfers + Mortgage transfers awaiting approval</div>
+                <div class="tasks-ch-sub">Closer deals + Opener transfers awaiting approval</div>
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:8px">
@@ -2616,7 +2549,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
 
       <!-- ══ ADMIN MORTGAGE ══ -->
       <div class="view" id="view-admin-mortgage">
-        <div class="view-header"><div class="view-title">Mortgage Records</div><div class="view-sub">Full detail, approve/decline, and commission — same as Deals &amp; Transfers.</div></div>
+        <div class="view-header"><div class="view-title">Mortgage Records</div><div class="view-sub">Full detail and commission for every submitted transfer.</div></div>
         <div class="mtg-stat-banner"><div class="mtg-stat-item"><div class="mtg-stat-val" id="adm-mtg-count">0</div><div class="mtg-stat-lbl">Transfers (filtered)</div></div></div>
         <div id="adm-mtg-list"><div class="empty-state">No mortgage transfers in this date range.</div></div>
       </div>
@@ -2838,7 +2771,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
 
       <!-- ══ MORTGAGE DASHBOARD ══ -->
       <div class="view" id="view-mtg-dashboard">
-        <div class="view-header"><div class="view-title">Mortgage Dashboard</div><div class="view-sub">Your transfer records and commission, pending admin approval.</div></div>
+        <div class="view-header"><div class="view-title">Mortgage Dashboard</div><div class="view-sub">Your transfer records and commission.</div></div>
         <div class="stats-row-3">
           <div class="stat-card teal"><div class="stat-label">Filtered Transfers</div><div class="stat-value" id="mtg-stat-total">0</div></div>
           <div class="stat-card blue"><div class="stat-label">Today's Transfers</div><div class="stat-value" id="mtg-stat-today">0</div></div>
