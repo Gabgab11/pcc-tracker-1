@@ -181,11 +181,28 @@
   // Drops any record dated before the active baseline. Used at the point
   // raw arrays are populated from Firestore, so it's the one place that
   // protects every downstream consumer at once.
+  // Converts any stored timestamp (always UTC, from new Date().toISOString())
+  // into its Egypt-LOCAL calendar date (YYYY-MM-DD), the same timezone the
+  // rest of the app already uses for "today" (shift countdown, daily
+  // tiers, etc.). Comparing raw UTC date strings against the baseline was
+  // the actual bug: Cairo is UTC+2/+3, so anything submitted in the first
+  // few hours of an Egypt calendar day still carries YESTERDAY's date in
+  // UTC — which made it look earlier than the baseline and get silently
+  // excluded, even moments after being submitted.
+  function toEgyptDateStr(isoOrDateStr){
+    if(!isoOrDateStr) return '';
+    const d=new Date(isoOrDateStr);
+    if(isNaN(d)) return String(isoOrDateStr).slice(0,10); // already a plain YYYY-MM-DD, e.g. a form date field
+    const egypt=new Date(d.toLocaleString('en-US',{timeZone:'Africa/Cairo'}));
+    const pad=n=>String(n).padStart(2,'0');
+    return `${egypt.getFullYear()}-${pad(egypt.getMonth()+1)}-${pad(egypt.getDate())}`;
+  }
+
   function applyBaseline(arr){
     if(!window._systemBaseline.active || !window._systemBaseline.date) return arr;
     const baseline=window._systemBaseline.date;
     return arr.filter(r=>{
-      const d=(r.createdAt||r.date||'').slice(0,10);
+      const d=toEgyptDateStr(r.createdAt||r.date);
       return d >= baseline;
     });
   }
