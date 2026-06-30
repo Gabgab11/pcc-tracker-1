@@ -561,6 +561,9 @@
     const hour=getNowEgypt().getHours();
     document.getElementById('topbar-greeting').textContent=(hour<12?'Good morning':hour<17?'Good afternoon':'Good evening')+', '+displayName(currentUser.name);
     buildSidebarNav(role);
+    // Floating "+" submit button is admin-only
+    const fab=document.getElementById('adm-fab-wrap');
+    if(fab) fab.style.display=role==='admin'?'flex':'none';
     window._gdf={from:null,to:null,preset:'all',roleScope:'all'};
     updateGdfBadge();
     if(role==='admin')    switchView('admin-overview');
@@ -940,11 +943,20 @@
     </div>`;
   }
 
+  // ── DECLINE CONFIRMATION + REASON ──
+  // A pending decline ID/kind is stored here; the two-step modal reads it.
+  window._pendingDecline = null; // { id, kind, finalComm }
+
   window.adminDealAction=async function(id,action){
     const d=deals.find(x=>x.id===id);if(!d){toast('Deal not found.','error');return;}
     const editEl=document.getElementById('comm-d-'+id);
     const finalComm=editEl?(Number(editEl.value)||0):(d.comm||0);
-    try{await updateDoc(doc(db,'deals',id),{status:action,comm:finalComm,resolvedAt:new Date().toISOString()});toast(action==='Approved'?`Deal approved — $${finalComm}`:'Deal declined.',action==='Approved'?'success':'error');}
+    if(action==='Declined'){
+      window._pendingDecline={id,kind:'deal',finalComm};
+      openDeclineConfirm();
+      return;
+    }
+    try{await updateDoc(doc(db,'deals',id),{status:'Approved',comm:finalComm,resolvedAt:new Date().toISOString()});toast(`Deal approved — $${finalComm}`,'success');}
     catch(e){toast('Failed to update.','error');console.error(e);}
   };
 
@@ -952,8 +964,154 @@
     const t=transfers.find(x=>x.id===id);if(!t){toast('Transfer not found.','error');return;}
     const editEl=document.getElementById('comm-t-'+id);
     const finalComm=editEl?(Number(editEl.value)||0):(t.comm||0);
-    try{await updateDoc(doc(db,'transfers',id),{status:action,comm:finalComm,resolvedAt:new Date().toISOString()});toast(action==='Approved'?`Transfer approved — $${finalComm}`:'Transfer declined.',action==='Approved'?'success':'error');}
+    if(action==='Declined'){
+      window._pendingDecline={id,kind:'transfer',finalComm};
+      openDeclineConfirm();
+      return;
+    }
+    try{await updateDoc(doc(db,'transfers',id),{status:'Approved',comm:finalComm,resolvedAt:new Date().toISOString()});toast(`Transfer approved — $${finalComm}`,'success');}
     catch(e){toast('Failed to update.','error');console.error(e);}
+  };
+
+  function openDeclineConfirm(){
+    // Step 1: show confirmation
+    document.getElementById('decline-step-1').style.display='';
+    document.getElementById('decline-step-2').style.display='none';
+    document.getElementById('decline-reason-input').value='';
+    document.getElementById('decline-reason-error').style.display='none';
+    document.getElementById('decline-confirm-overlay').classList.add('open');
+  }
+  window.closeDeclineConfirm=function(){
+    document.getElementById('decline-confirm-overlay').classList.remove('open');
+    window._pendingDecline=null;
+  };
+  window.proceedToDeclineReason=function(){
+    // Step 2: show reason box
+    document.getElementById('decline-step-1').style.display='none';
+    document.getElementById('decline-step-2').style.display='';
+    setTimeout(()=>document.getElementById('decline-reason-input').focus(),80);
+  };
+  window.submitDeclineWithReason=async function(){
+    const reason=document.getElementById('decline-reason-input').value.trim();
+    const errEl=document.getElementById('decline-reason-error');
+    if(!reason){errEl.textContent='Please enter a reason before declining.';errEl.style.display='block';return;}
+    const p=window._pendingDecline; if(!p){closeDeclineConfirm();return;}
+    const btn=document.getElementById('decline-submit-btn');btn.disabled=true;btn.textContent='Declining…';
+    const coll=p.kind==='deal'?'deals':'transfers';
+    try{
+      await updateDoc(doc(db,coll,p.id),{status:'Declined',comm:0,declineReason:reason,resolvedAt:new Date().toISOString()});
+      toast('Declined — reason saved and visible to the agent.','error');
+      closeDeclineConfirm();
+    }catch(e){toast('Failed to decline.','error');console.error(e);}
+    btn.disabled=false;btn.textContent='Confirm Decline';
+  };
+
+  // ── ADMIN DEAL SUBMISSION (floating + button) ──
+  window.toggleAdminSubmitMenu=function(e){
+    e.stopPropagation();
+    const menu=document.getElementById('adm-submit-menu');
+    menu.classList.toggle('open');
+  };
+  document.addEventListener('click',()=>document.getElementById('adm-submit-menu')?.classList.remove('open'));
+
+  window.openAdminSubmit=function(kind){
+    document.getElementById('adm-submit-menu').classList.remove('open');
+    document.getElementById('adm-submit-overlay').classList.add('open');
+    document.getElementById('adm-submit-op-form').style.display = kind==='opener'?'':'none';
+    document.getElementById('adm-submit-cl-form').style.display = kind==='closer'?'':'none';
+    document.getElementById('adm-submit-title').textContent = kind==='opener'?'Submit Transfer (on behalf of Opener)':'Submit Deal (on behalf of Closer)';
+    // Repopulate dropdowns from live agent registry
+    if(kind==='opener'){
+      const nameEl=document.getElementById('adm-op-name');
+      nameEl.innerHTML='<option value="">Select opener…</option>'+OPENER_NAMES.map(n=>`<option value="${n}">${displayName(n)}</option>`).join('');
+      const closerEl=document.getElementById('adm-op-closer');
+      closerEl.innerHTML='<option value="">Select closer…</option><option value="Outsource">Outsource</option>'+CLOSER_NAMES.map(n=>`<option value="${n}">${displayName(n)}</option>`).join('');
+      document.getElementById('adm-op-type').value='';
+      document.getElementById('adm-op-date').value='';
+      document.getElementById('adm-op-phone').value='';
+      document.getElementById('adm-op-closer-wrap').style.display='none';
+      document.getElementById('adm-op-comm-preview').textContent='—';
+    } else {
+      const nameEl=document.getElementById('adm-cl-name');
+      nameEl.innerHTML='<option value="">Select closer…</option>'+CLOSER_NAMES.map(n=>`<option value="${n}">${displayName(n)}</option>`).join('');
+      const opEl=document.getElementById('adm-cl-opener');
+      opEl.innerHTML='<option value="">Select opener…</option><option value="N/A">N/A</option>'+OPENER_NAMES.map(n=>`<option value="${n}">${displayName(n)}</option>`).join('');
+      ['adm-cl-deal-type','adm-cl-client','adm-cl-phone','adm-cl-debt','adm-cl-monthly','adm-cl-firstpay','adm-cl-closing'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+      document.getElementById('adm-cl-commission').value='';
+      document.getElementById('adm-cl-tier-info').textContent='';
+    }
+  };
+  window.closeAdminSubmit=function(){
+    document.getElementById('adm-submit-overlay').classList.remove('open');
+  };
+
+  window.handleAdmTransferType=function(){
+    const type=document.getElementById('adm-op-type').value;
+    document.getElementById('adm-op-closer-wrap').style.display=CLOSED_TYPES.includes(type)?'block':'none';
+    // Reuse the same commission preview logic as the opener form
+    const comm=openerCommForNext(type);
+    document.getElementById('adm-op-comm-preview').textContent=type?`$${comm}`:'—';
+  };
+  window.admAutoCommission=async function(){
+    const monthly=document.getElementById('adm-cl-monthly').value;
+    const closing=document.getElementById('adm-cl-closing').value;
+    if(!monthly){document.getElementById('adm-cl-commission').value='';document.getElementById('adm-cl-tier-info').textContent='';return;}
+    const base=closerBaseComm(monthly);
+    const dateStr=closing?closing.split('T')[0]:new Date().toISOString().split('T')[0];
+    const existing=await countCloserDealsOnDate(dateStr),mult=existing>=1?2:1;
+    document.getElementById('adm-cl-commission').value='$'+(base*mult);
+    const ti=document.getElementById('adm-cl-tier-info');
+    ti.textContent=mult===2?`⚡ Tier ×2 active — ${existing} deal(s) already closed today!`:'Tier 1 — First deal of the day';
+    ti.style.color=mult===2?'var(--purple)':'var(--text2)';
+  };
+
+  // Admin submits on behalf of an opener — identical to submitOpener but
+  // uses the selected agent's name/email from the admin form, not currentUser.
+  window.adminSubmitOpener=async function(){
+    const name=document.getElementById('adm-op-name').value;
+    const type=document.getElementById('adm-op-type').value;
+    const date=document.getElementById('adm-op-date').value;
+    const phone=document.getElementById('adm-op-phone').value.trim();
+    const closer=document.getElementById('adm-op-closer').value;
+    if(!name||!type||!date||!phone){toast('Please complete all required fields.','error');return;}
+    if(CLOSED_TYPES.includes(type)&&!closer){toast('Please select a closer for this transfer type.','error');return;}
+    const agentDoc=ALL_AGENTS.find(a=>a.name===name && a.role==='opener');
+    const openerEmail=agentDoc?.email||name.toLowerCase()+'@pcc.com';
+    const comm=openerCommForNext(type);
+    const btn=document.getElementById('adm-op-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
+    try{
+      await addDoc(collection(db,'transfers'),{name,type,date,phone,closer:closer||null,comm,status:'Pending',openerEmail,submittedByAdmin:true,createdAt:new Date().toISOString()});
+      toast(`Transfer submitted for ${displayName(name)}!`,'success');
+      closeAdminSubmit();
+    }catch(e){toast('Failed to submit.','error');console.error(e);}
+    btn.disabled=false;btn.textContent='Submit Transfer';
+  };
+
+  // Admin submits on behalf of a closer — identical to submitCloser but
+  // uses the selected closer's name/email, not currentUser.
+  window.adminSubmitCloser=async function(){
+    const name=document.getElementById('adm-cl-name').value;
+    const opener=document.getElementById('adm-cl-opener').value;
+    const dealType=document.getElementById('adm-cl-deal-type').value;
+    const client=document.getElementById('adm-cl-client').value.trim();
+    const phone=document.getElementById('adm-cl-phone').value.trim();
+    const debt=document.getElementById('adm-cl-debt').value;
+    const monthly=document.getElementById('adm-cl-monthly').value;
+    const firstpay=document.getElementById('adm-cl-firstpay').value;
+    const closing=document.getElementById('adm-cl-closing').value;
+    if(!name||!opener||!dealType||!client||!phone||!debt||!monthly){toast('Please complete all required fields.','error');return;}
+    const base=closerBaseComm(monthly);
+    const dateStr=closing?closing.split('T')[0]:new Date().toISOString().split('T')[0];
+    const existing=await countCloserDealsOnDate(dateStr),mult=existing>=1?2:1,comm=base*mult;
+    const agentDoc=ALL_AGENTS.find(a=>a.name===name && a.role==='closer');
+    const closerEmail=agentDoc?.email||name.toLowerCase()+'@pcc.com';
+    const btn=document.getElementById('adm-cl-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
+    try{
+      await addDoc(collection(db,'deals'),{name,opener,dealType,client,phone,debt,monthly,firstpay,closing,closingDate:dateStr,comm,status:'Pending',closerEmail,submittedByAdmin:true,createdAt:new Date().toISOString()});
+      toast(`Deal submitted for ${displayName(name)}!`,'success');
+      closeAdminSubmit();
+    }catch(e){toast('Failed to submit.','error');console.error(e);}
+    btn.disabled=false;btn.textContent='Submit Deal';
   };
 
   // ── ADMIN MORTGAGE VIEW ──
@@ -1725,6 +1883,7 @@
         <div class="record-row"><span>Date</span><span>${fmtDate(x.date)}</span></div>
         ${x.closer?`<div class="record-row"><span>Closer</span><span>${displayName(x.closer)}</span></div>`:''}
         <div class="record-row comm-row"><span>Commission</span><span class="comm-val">$${x.comm}</span></div>
+        ${x.status==='Declined'&&x.declineReason?`<div class="decline-reason-banner"><span class="decline-reason-icon">⚠</span><div><div class="decline-reason-label">Reason for decline</div><div class="decline-reason-text">${x.declineReason}</div></div></div>`:''}
         ${isPending?`<div class="opener-edit-section" id="edit-section-${x.id}" style="display:none">
           <div class="opener-edit-fields">
             <div class="field-mini"><label>Lead Type</label><select id="edit-type-${x.id}" onchange="handleEditType('${x.id}')">
@@ -2450,6 +2609,22 @@ table.ref-table{width:100%;border-collapse:collapse;}
 #del-confirm-overlay.open{display:flex;}
 #reset-confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998;display:none;align-items:center;justify-content:center;padding:20px;}
 #reset-confirm-overlay.open{display:flex;}
+/* ── Floating admin submit button ── */
+#adm-fab-wrap{position:fixed;bottom:28px;right:28px;z-index:900;display:flex;flex-direction:column;align-items:flex-end;gap:8px;}
+.adm-fab-btn{width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-size:26px;line-height:1;border:none;cursor:pointer;box-shadow:0 4px 20px rgba(79,126,255,.45);transition:transform .15s,box-shadow .15s;display:flex;align-items:center;justify-content:center;}
+.adm-fab-btn:hover{transform:scale(1.08);box-shadow:0 6px 28px rgba(79,126,255,.6);}
+.adm-fab-dropdown{background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:6px;box-shadow:0 8px 32px rgba(0,0,0,.4);display:none;flex-direction:column;gap:2px;min-width:200px;}
+.adm-fab-dropdown.open{display:flex;}
+.adm-fab-option{display:flex;align-items:center;gap:8px;padding:10px 14px;border:none;background:transparent;color:var(--text);font-family:'Inter',sans-serif;font-size:13px;font-weight:500;cursor:pointer;border-radius:7px;text-align:left;transition:background .15s;}
+.adm-fab-option:hover{background:var(--surface2);}
+/* ── Decline confirmation overlay ── */
+#decline-confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998;display:none;align-items:center;justify-content:center;padding:20px;}
+#decline-confirm-overlay.open{display:flex;}
+/* ── Decline reason banner on opener's history card ── */
+.decline-reason-banner{display:flex;align-items:flex-start;gap:9px;background:rgba(229,69,90,.07);border:1px solid rgba(229,69,90,.2);border-radius:8px;padding:10px 12px;margin:8px 0 4px;}
+.decline-reason-icon{font-size:14px;margin-top:1px;flex-shrink:0;}
+.decline-reason-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--red);margin-bottom:3px;}
+.decline-reason-text{font-size:12px;color:var(--text2);line-height:1.5;}
 .del-confirm-box{background:var(--surface);border:1px solid var(--border2);border-radius:16px;padding:26px;width:100%;max-width:380px;box-shadow:0 12px 50px rgba(0,0,0,.5);text-align:center;}
 .del-confirm-icon{width:46px;height:46px;border-radius:50%;background:rgba(229,69,90,.12);border:1px solid rgba(229,69,90,.3);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;color:var(--red);}
 .del-confirm-title{font-family:'Bebas Neue',sans-serif;font-size:19px;letter-spacing:1px;color:var(--text);margin-bottom:8px;}
@@ -2551,6 +2726,93 @@ table.ref-table{width:100%;border-collapse:collapse;}
     <div class="del-confirm-btns">
       <button class="btn-del-cancel" onclick="closeSystemResetConfirm()">Cancel</button>
       <button class="btn-del-confirm" id="reset-confirm-btn" onclick="confirmSystemReset()">Reset System</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ FLOATING ADMIN SUBMIT BUTTON ══ -->
+<!-- Only shown when admin is logged in; hidden for all other roles via JS -->
+<div id="adm-fab-wrap" style="display:none">
+  <div class="adm-fab-dropdown" id="adm-submit-menu">
+    <button class="adm-fab-option" onclick="openAdminSubmit('opener')">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13.1 19.79 19.79 0 0 1 1.62 4.57 2 2 0 0 1 3.59 2.37h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 9.91a16 16 0 0 0 6.08 6.08l.91-.91a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 21.73 17z"/></svg>
+      Submit for Opener
+    </button>
+    <button class="adm-fab-option" onclick="openAdminSubmit('closer')">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+      Submit for Closer
+    </button>
+  </div>
+  <button class="adm-fab-btn" onclick="toggleAdminSubmitMenu(event)" title="Submit deal or transfer">+</button>
+</div>
+
+<!-- ══ ADMIN SUBMIT MODAL ══ -->
+<div id="adm-submit-overlay" class="ap-overlay">
+  <div class="ap-box" style="max-width:520px">
+    <button class="ap-close" onclick="closeAdminSubmit()">✕</button>
+    <div class="form-card-title" id="adm-submit-title">Submit</div>
+
+    <!-- OPENER FORM -->
+    <div id="adm-submit-op-form">
+      <div class="field"><label>Opener Name</label><select id="adm-op-name"><option value="">Select opener…</option></select></div>
+      <div class="field"><label>Lead Source / Transfer Type</label>
+        <select id="adm-op-type" onchange="handleAdmTransferType()">
+          <option value="">Select lead source…</option>
+          <optgroup label="Closed Deals (Tiered)"><option value="1st Close">1st Close — $5</option><option value="2nd Close">2nd Close — $7.50</option><option value="3rd Close">3rd+ Close — $10</option></optgroup>
+          <optgroup label="Flat Rate"><option value="PccSub10">PCC Sub 10K — $1</option><option value="PccAbove10">PCC Above 10K — $2</option><option value="TaxAbove10">Tax Above 10K — $5</option><option value="TaxBelow10">Tax Below 10K — $1</option><option value="Student Loan">Student Loan — $2</option></optgroup>
+        </select>
+      </div>
+      <div class="comm-preview-card"><div class="comm-preview-label">Commission for this transfer</div><div class="comm-preview-amount" id="adm-op-comm-preview">—</div></div>
+      <div class="field" id="adm-op-closer-wrap" style="display:none"><label>Assign to Closer</label><select id="adm-op-closer"><option value="">Select closer…</option><option value="Outsource">Outsource</option></select></div>
+      <div class="field-row"><div class="field"><label>Transfer Date</label><input id="adm-op-date" type="date"/></div><div class="field"><label>Client Phone</label><input id="adm-op-phone" placeholder="+1 (000) 000-0000"/></div></div>
+      <button class="btn-form" id="adm-op-submit-btn" onclick="adminSubmitOpener()">Submit Transfer</button>
+    </div>
+
+    <!-- CLOSER FORM -->
+    <div id="adm-submit-cl-form" style="display:none">
+      <div class="field-row">
+        <div class="field"><label>Closer Name</label><select id="adm-cl-name"><option value="">Select closer…</option></select></div>
+        <div class="field"><label>Opener Name</label><select id="adm-cl-opener"><option value="">Select opener…</option><option value="N/A">N/A</option></select></div>
+      </div>
+      <div class="field"><label>Type of Deal</label><select id="adm-cl-deal-type"><option value="">Select deal type…</option><option value="Debt Settlement">Debt Settlement</option><option value="Debt Validation">Debt Validation</option></select></div>
+      <div class="field-row"><div class="field"><label>Client Name</label><input id="adm-cl-client" placeholder="Full name"/></div><div class="field"><label>Client Phone</label><input id="adm-cl-phone" placeholder="Phone number"/></div></div>
+      <div class="field-row"><div class="field"><label>Amount of Debt ($)</label><input id="adm-cl-debt" type="number" placeholder="0.00"/></div><div class="field"><label>Monthly Payment ($)</label><input id="adm-cl-monthly" type="number" placeholder="0.00" oninput="admAutoCommission()"/></div></div>
+      <div class="field-row"><div class="field"><label>First Payment Date</label><input id="adm-cl-firstpay" type="date"/></div><div class="field"><label>Closing Date &amp; Time</label><input id="adm-cl-closing" type="datetime-local" onchange="admAutoCommission()"/></div></div>
+      <div class="field"><label>Estimated Commission</label><input id="adm-cl-commission" readonly placeholder="Fill in monthly payment to calculate"/></div>
+      <div class="tier-info-text" id="adm-cl-tier-info"></div>
+      <button class="btn-form" id="adm-cl-submit-btn" onclick="adminSubmitCloser()">Submit Deal</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ DECLINE CONFIRMATION + REASON MODAL ══ -->
+<div id="decline-confirm-overlay">
+  <div class="del-confirm-box" style="max-width:420px">
+    <!-- Step 1: Confirm -->
+    <div id="decline-step-1">
+      <div class="del-confirm-icon" style="background:rgba(229,69,90,.12);border-color:rgba(229,69,90,.3);color:var(--red)">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+      </div>
+      <div class="del-confirm-title">Decline this transfer?</div>
+      <div class="del-confirm-msg">Are you sure you want to decline this transfer? You'll be asked to provide a reason that the agent will see on their dashboard.</div>
+      <div class="del-confirm-btns">
+        <button class="btn-del-cancel" onclick="closeDeclineConfirm()">Cancel</button>
+        <button class="btn-del-confirm" onclick="proceedToDeclineReason()">Yes, Decline</button>
+      </div>
+    </div>
+    <!-- Step 2: Reason -->
+    <div id="decline-step-2" style="display:none">
+      <div class="del-confirm-icon" style="background:rgba(229,69,90,.12);border-color:rgba(229,69,90,.3);color:var(--red)">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </div>
+      <div class="del-confirm-title">Reason for Decline</div>
+      <div class="del-confirm-msg">This reason will be shown directly to the opener on their dashboard so they understand exactly why it was rejected.</div>
+      <textarea id="decline-reason-input" placeholder="e.g. Duplicate entry, wrong phone number, unqualified lead…" style="width:100%;margin:10px 0;padding:10px;background:var(--input-bg);border:1px solid var(--border2);border-radius:9px;color:var(--text);font-family:'Inter',sans-serif;font-size:13px;resize:vertical;min-height:80px;outline:none;box-sizing:border-box"></textarea>
+      <div class="login-error" id="decline-reason-error" style="display:none;text-align:left"></div>
+      <div class="del-confirm-btns">
+        <button class="btn-del-cancel" onclick="closeDeclineConfirm()">Cancel</button>
+        <button class="btn-del-confirm" id="decline-submit-btn" onclick="submitDeclineWithReason()">Confirm Decline</button>
+      </div>
     </div>
   </div>
 </div>
