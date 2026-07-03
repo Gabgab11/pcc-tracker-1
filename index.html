@@ -2383,16 +2383,21 @@
     if(badge) badge.textContent=queueEntries.filter(e=>e.status!=='done'&&e.status!=='declined').length||'0';
     const wrap=document.getElementById('admin-queue-wrap');
     if(!wrap) return;
-    if(!queueEntries.length){
+    // Only 'active' and 'waiting' are shown here — the instant a request is
+    // Accepted or Declined it drops off the admin's list (real-time, no
+    // refresh needed). The underlying doc still lives briefly in Firestore
+    // behind the scenes so the agent's own dashboard can show its
+    // countdown/cooldown, then auto-deletes itself after that window closes.
+    const active =queueEntries.filter(e=>e.status==='active');
+    const waiting=queueEntries.filter(e=>e.status==='waiting');
+    if(!active.length && !waiting.length){
       wrap.innerHTML=`<div class="empty-state">No one in the queue right now.</div>`;
       return;
     }
-    const active =queueEntries.filter(e=>e.status==='active'||e.status==='done');
-    const waiting=queueEntries.filter(e=>e.status==='waiting');
     let html='';
     if(active.length){
       html+=`<div class="tasks-section-label">Now Active (${active.length}/2)</div>`;
-      html+=active.map(e=>`<div class="queue-admin-card ${e.status==='done'?'queue-done':''}">
+      html+=active.map(e=>`<div class="queue-admin-card">
         <div class="queue-admin-left">
           <div class="queue-admin-avatar">${displayName(e.agentName).slice(0,2).toUpperCase()}</div>
           <div>
@@ -2400,12 +2405,10 @@
             <div class="queue-admin-meta">${e.role} · Requested ${fmtTime(e.requestedAt)}</div>
           </div>
         </div>
-        ${e.status==='done'
-          ? `<button class="btn-queue-done" onclick="adminQueueDone('${e.id}')">Dismiss</button>`
-          : `<div class="queue-admin-actions">
-               <button class="btn-queue-done" onclick="adminQueueDone('${e.id}')">✓ Accept</button>
-               <button class="btn-queue-remove" onclick="adminQueueDecline('${e.id}')">✕ Decline</button>
-             </div>`}
+        <div class="queue-admin-actions">
+          <button class="btn-queue-done" onclick="adminQueueDone('${e.id}')">✓ Accept</button>
+          <button class="btn-queue-remove" onclick="adminQueueDecline('${e.id}')">✕ Decline</button>
+        </div>
       </div>`).join('');
     }
     if(waiting.length){
