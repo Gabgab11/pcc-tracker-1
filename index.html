@@ -2176,6 +2176,7 @@
   let queueCountdownInterval = null;
   let knownQueueIds = new Set(); // tracks ids we've already seen, to detect NEW requests
   let queueRequestInFlight = false; // guards against double-click creating 2 requests
+  let myQueueEntryId = null; // the current agent's own open request id, set instantly on success (not snapshot-dependent)
 
   // Ping 3 — Rising alert, louder — plays on the admin dashboard whenever
   // a new "Request to See Manager" comes in.
@@ -2259,6 +2260,7 @@
     const wrap=agentQueueWrap();
     if(!wrap) return;
     const myEntry=queueEntries.find(e=>e.agentEmail===currentUser.email && e.status!=='done' && !declineCooldownExpired(e));
+    myQueueEntryId=myEntry?myEntry.id:null; // keep the local lock in sync with confirmed server state
     const activeCount=queueEntries.filter(e=>e.status==='active').length;
     const waitingCount=queueEntries.filter(e=>e.status==='waiting').length;
 
@@ -2343,7 +2345,7 @@
 
   window.requestManager=async function(){
     if(!currentUser) return;
-    if(queueRequestInFlight) return; // blocks a 2nd click firing before Firestore echoes back
+    if(queueRequestInFlight || myQueueEntryId) return; // blocks a 2nd click both during the write AND after success but before Firestore echoes back
     const already=queueEntries.find(e=>e.agentEmail===currentUser.email && e.status!=='done' && !declineCooldownExpired(e));
     if(already){
       const msg=already.status==='declined' ? 'Your request was declined — please wait for the cooldown to finish.' : "You're already in the queue.";
@@ -2356,10 +2358,14 @@
     const activeCount=queueEntries.filter(e=>e.status==='active').length;
     const status=activeCount<2?'active':'waiting';
     try{
-      await addDoc(collection(db,'manager_queue'),{
+      const ref=await addDoc(collection(db,'manager_queue'),{
         agentName:currentUser.name,agentEmail:currentUser.email,role:currentUser.role,
         requestedAt:new Date().toISOString(),status
       });
+      // Lock immediately — don't wait for the onSnapshot round-trip, which
+      // can lag long enough for a fast/repeated click to slip through and
+      // create duplicate requests for the same agent.
+      myQueueEntryId=ref.id;
       toast(status==='active'?"You're up! Head to the manager's office.":'Added to the waiting list.','success');
     }catch(e){
       toast('Failed to join queue.','error');console.error(e);
