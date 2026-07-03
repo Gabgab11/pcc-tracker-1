@@ -578,7 +578,6 @@
     syncGlobals();startPresence();
     setupSystemResetListener();
     setupRealtimeListeners();
-    setupQueueListener();
   }
 
   function teardownListeners(){
@@ -634,6 +633,13 @@
         syncGlobals();renderCurrentView();
       },err=>console.error(err));
     }
+
+    // teardownListeners() above also kills the manager-queue listener, so
+    // it must be rebuilt here every time — otherwise anything that calls
+    // setupRealtimeListeners() after initial login (e.g. the system-reset
+    // listener, which fires immediately on every subscribe) silently kills
+    // real-time queue updates until the page is reloaded.
+    setupQueueListener();
   }
 
   // ── SIDEBAR ──
@@ -2244,10 +2250,15 @@
     return document.getElementById(id);
   }
 
+  function declineCooldownExpired(e){
+    if(!e || e.status!=='declined' || !e.declinedAt) return true;
+    return (Date.now()-new Date(e.declinedAt).getTime())>=120000; // 2-minute cooldown
+  }
+
   function renderAgentQueue(){
     const wrap=agentQueueWrap();
     if(!wrap) return;
-    const myEntry=queueEntries.find(e=>e.agentEmail===currentUser.email && e.status!=='done');
+    const myEntry=queueEntries.find(e=>e.agentEmail===currentUser.email && e.status!=='done' && !declineCooldownExpired(e));
     const activeCount=queueEntries.filter(e=>e.status==='active').length;
     const waitingCount=queueEntries.filter(e=>e.status==='waiting').length;
 
@@ -2260,6 +2271,8 @@
       clearQueueCountdown();
     } else if(myEntry.status==='done'){
       startQueueCountdown(wrap, myEntry.id);
+    } else if(myEntry.status==='declined'){
+      startDeclineCooldown(wrap, myEntry);
     } else if(myEntry.status==='active'){
       wrap.innerHTML=`<div class="queue-card queue-card-active">
         <div class="queue-card-title">✅ You're up — Head to the manager's office!</div>
@@ -2277,6 +2290,27 @@
       </div>`;
       clearQueueCountdown();
     }
+  }
+
+  // Shows the 2-minute "you were declined, try again in mm:ss" countdown.
+  // Once it hits zero, re-renders — declineCooldownExpired() will then
+  // treat the (possibly still-undeleted) doc as expired, so the agent
+  // immediately sees a fresh "Request to See Manager" button again.
+  function startDeclineCooldown(wrap, entry){
+    clearQueueCountdown();
+    const render=()=>{
+      if(!wrap) return;
+      const remaining=Math.max(0,120-Math.floor((Date.now()-new Date(entry.declinedAt).getTime())/1000));
+      const mm=String(Math.floor(remaining/60)).padStart(2,'0');
+      const ss=String(remaining%60).padStart(2,'0');
+      wrap.innerHTML=`<div class="queue-card queue-card-declined">
+        <div class="queue-card-title">🚫 Request declined</div>
+        <div class="queue-card-sub">You can request the manager again in <b>${mm}:${ss}</b>.</div>
+      </div>`;
+      if(remaining<=0){ clearQueueCountdown(); renderQueueForCurrentUser(); }
+    };
+    render();
+    queueCountdownInterval=setInterval(render,1000);
   }
 
   function startQueueCountdown(wrap, docId){
@@ -2310,8 +2344,11 @@
   window.requestManager=async function(){
     if(!currentUser) return;
     if(queueRequestInFlight) return; // blocks a 2nd click firing before Firestore echoes back
-    const already=queueEntries.find(e=>e.agentEmail===currentUser.email && e.status!=='done');
-    if(already){ toast("You're already in the queue.",'error'); return; }
+    const already=queueEntries.find(e=>e.agentEmail===currentUser.email && e.status!=='done' && !declineCooldownExpired(e));
+    if(already){
+      const msg=already.status==='declined' ? 'Your request was declined — please wait for the cooldown to finish.' : "You're already in the queue.";
+      toast(msg,'error'); return;
+    }
     queueRequestInFlight=true;
     const wrap=agentQueueWrap();
     const btn=wrap?.querySelector('.btn-queue-request');
@@ -2343,7 +2380,7 @@
   // ── ADMIN QUEUE UI ──
   function renderAdminQueue(){
     const badge=document.getElementById('queue-count-badge');
-    if(badge) badge.textContent=queueEntries.filter(e=>e.status!=='done').length||'0';
+    if(badge) badge.textContent=queueEntries.filter(e=>e.status!=='done'&&e.status!=='declined').length||'0';
     const wrap=document.getElementById('admin-queue-wrap');
     if(!wrap) return;
     if(!queueEntries.length){
@@ -2363,7 +2400,12 @@
             <div class="queue-admin-meta">${e.role} · Requested ${fmtTime(e.requestedAt)}</div>
           </div>
         </div>
-        <button class="btn-queue-done" onclick="adminQueueDone('${e.id}')">${e.status==='done'?'Dismiss':'✓ Done'}</button>
+        ${e.status==='done'
+          ? `<button class="btn-queue-done" onclick="adminQueueDone('${e.id}')">Dismiss</button>`
+          : `<div class="queue-admin-actions">
+               <button class="btn-queue-done" onclick="adminQueueDone('${e.id}')">✓ Accept</button>
+               <button class="btn-queue-remove" onclick="adminQueueDecline('${e.id}')">✕ Decline</button>
+             </div>`}
       </div>`).join('');
     }
     if(waiting.length){
@@ -2376,7 +2418,7 @@
             <div class="queue-admin-meta">${e.role} · Waiting since ${fmtTime(e.requestedAt)}</div>
           </div>
         </div>
-        <button class="btn-queue-remove" onclick="cancelQueueRequest('${e.id}')">✕ Remove</button>
+        <button class="btn-queue-remove" onclick="adminQueueDecline('${e.id}')">✕ Decline</button>
       </div>`).join('');
     }
     wrap.innerHTML=html;
@@ -2405,6 +2447,29 @@
       },65000);
       toast(`Done with ${displayName(entry.agentName)} — next person promoted.`,'success');
     }catch(e){toast('Failed to update queue.','error');console.error(e);}
+  };
+
+  // Decline a request (whether active or still waiting). The agent sees a
+  // 2-minute cooldown before requestManager() will let them join again.
+  window.adminQueueDecline=async function(id){
+    const entry=queueEntries.find(e=>e.id===id);
+    if(!entry) return;
+    const wasActive=entry.status==='active';
+    try{
+      await updateDoc(doc(db,'manager_queue',id),{status:'declined',declinedAt:new Date().toISOString()});
+      // If the declined person held an active slot, promote the next waiting agent
+      if(wasActive){
+        const waiting=queueEntries.filter(e=>e.status==='waiting').sort((a,b)=>a.requestedAt.localeCompare(b.requestedAt));
+        if(waiting.length){
+          await updateDoc(doc(db,'manager_queue',waiting[0].id),{status:'active'});
+        }
+      }
+      // Clean up the declined doc once the 2-minute cooldown window has closed
+      setTimeout(async()=>{
+        try{ await deleteDoc(doc(db,'manager_queue',id)); }catch(e){}
+      },120000);
+      toast(`Declined ${displayName(entry.agentName)}'s request — 2 min cooldown applied.`,'success');
+    }catch(e){toast('Failed to decline.','error');console.error(e);}
   };
 
   window.toggleAdminQueue=function(){
@@ -3057,6 +3122,8 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .queue-card-waiting .queue-card-title{color:var(--amber);}
 .queue-card-go{border-color:rgba(229,69,90,.5);background:rgba(229,69,90,.06);animation:queuePulse 1.2s ease-in-out infinite alternate;}
 .queue-card-go .queue-card-title{color:var(--red);}
+.queue-card-declined{border-color:rgba(229,69,90,.35);background:rgba(229,69,90,.04);}
+.queue-card-declined .queue-card-title{color:var(--red);}
 @keyframes queuePulse{from{border-color:rgba(229,69,90,.4);}to{border-color:rgba(229,69,90,.9);}}
 .queue-countdown{font-family:'Bebas Neue',sans-serif;font-size:52px;letter-spacing:3px;color:var(--red);text-align:center;margin:8px 0;font-variant-numeric:tabular-nums;}
 .btn-queue-request{width:100%;padding:11px;border:none;border-radius:9px;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .2s;}
@@ -3076,6 +3143,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .btn-queue-done:hover{opacity:.85;}
 .btn-queue-remove{padding:7px 12px;border:1px solid rgba(229,69,90,.3);border-radius:8px;background:rgba(229,69,90,.06);color:var(--red);font-family:'Inter',sans-serif;font-size:12px;cursor:pointer;transition:all .2s;flex-shrink:0;}
 .btn-queue-remove:hover{background:rgba(229,69,90,.14);}
+.queue-admin-actions{display:flex;gap:6px;flex-shrink:0;}
 </style>
 </head>
 <body>
