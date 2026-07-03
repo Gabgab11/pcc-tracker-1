@@ -222,14 +222,19 @@
   //            touched again once the agent passes 50.
   //   #81+    → ONLY transfers from #81 onward earn $7 each. #1–80 are never
   //            recalculated again.
+  // ── MORTGAGE COMMISSION TIERS (updated) ──
+  // #1–40   → $3 each (unless total ≥ 41, which bumps #1-40 retroactively to $5, etc.)
+  // #41–60  → $5 each
+  // #61–89  → $6 each
+  // #90+    → $6 each (same rate; top tier is $6 — no higher tier above this)
   // This is a pure function of (seq, totalApprovedCount) — fully dynamic,
   // re-derived from scratch on every read, so there is never any stored
   // "stale" rate and never any double-counting.
   function mtgRateForSeq(seq, totalApprovedCount){
-    if(seq<=35)              return totalApprovedCount>=36 ? 5 : 3;
-    if(seq>=36 && seq<=50)   return 5;
-    if(seq>=51 && seq<=80)   return 6;
-    return 7; // seq >= 81
+    if(seq<=40)              return totalApprovedCount>=41 ? 5 : 3;
+    if(seq>=41 && seq<=60)  return 5;
+    if(seq>=61 && seq<=89)  return 6;
+    return 6; // seq >= 90
   }
   // Given an agent's APPROVED mortgage records (any order), returns a Map
   // of recordId → { seq, comm } reflecting the fully-recalculated, current
@@ -571,22 +576,17 @@
     if(role==='opener')   switchView('opener-dashboard');
     if(role==='mortgage') switchView('mtg-dashboard');
     syncGlobals();startPresence();
-    // config/systemReset requires isAuth() per the Firestore rules, so this
-    // can only start once login has actually succeeded — unlike the agent
-    // registry, nothing about login itself depends on knowing the
-    // baseline, so there's no ordering requirement to satisfy beyond "the
-    // user is now authenticated." The listener re-triggers
-    // setupRealtimeListeners() itself the moment it resolves, so even if
-    // data loads a moment earlier under the wrong (default) baseline
-    // assumption, it self-corrects within moments.
     setupSystemResetListener();
     setupRealtimeListeners();
+    setupQueueListener();
   }
 
   function teardownListeners(){
     if(dealsUnsub){dealsUnsub();dealsUnsub=null;}
     if(xferUnsub) {xferUnsub(); xferUnsub=null; }
     if(mtgUnsub)  {mtgUnsub();  mtgUnsub=null;  }
+    if(queueUnsub){queueUnsub();queueUnsub=null;}
+    clearQueueCountdown();
   }
 
   // FIX 6: Mortgage role ONLY gets mortgage_transfers — zero access to deals or transfers collections
@@ -719,9 +719,11 @@
     if(viewName==='admin-mortgage')renderAdminMortgage();
     if(viewName==='admin-commission')renderAdminCommission();
     if(viewName==='admin-agents')renderAdminAgents();
-    if(viewName==='mtg-dashboard')renderMtgDashboard();
+    if(viewName==='mtg-dashboard'){renderMtgDashboard();renderQueueForCurrentUser();}
     if(viewName==='mtg-records')renderMtgRecords();
     if(viewName==='mtg-submit')autoFillMtgAgent();
+    if(viewName==='opener-dashboard')renderQueueForCurrentUser();
+    if(viewName==='closer-dashboard')renderQueueForCurrentUser();
   };
 
   function renderCurrentView(){
@@ -735,9 +737,9 @@
       const ac=document.getElementById('view-admin-commission');
       if(ac&&ac.style.display!=='none')renderAdminCommission();
     }
-    if(role==='closer'){renderCloserDashboard();renderCloserHistory();}
-    if(role==='opener'){renderOpenerDashboard();renderOpenerHistory();}
-    if(role==='mortgage'){renderMtgDashboard();renderMtgRecords();}
+    if(role==='closer'){renderCloserDashboard();renderCloserHistory();renderQueueForCurrentUser();}
+    if(role==='opener'){renderOpenerDashboard();renderOpenerHistory();renderQueueForCurrentUser();}
+    if(role==='mortgage'){renderMtgDashboard();renderMtgRecords();renderQueueForCurrentUser();}
   }
 
   // ── ADMIN OVERVIEW ──
@@ -839,19 +841,18 @@
     const d=gdfDeals(),t=gdfXfers(),m=gdfMtg();
     const dealPend =d.filter(x=>x.status==='Pending').length;
     const xferPend =t.filter(x=>x.status==='Pending').length;
-    // Mortgage no longer has a pending/decline state — every submission
-    // counts immediately. Mortgage transfers are excluded from the
-    // pending/declined tabs and counts entirely, and included in approved.
+    const mtgPend  =m.filter(x=>!x.status||x.status==='Pending').length;
     const dealAppr =d.filter(x=>x.status==='Approved').length;
     const xferAppr =t.filter(x=>x.status==='Approved').length;
-    const mtgAppr  =m.length;
+    const mtgAppr  =m.filter(x=>x.status==='Approved').length;
     const dealDecl =d.filter(x=>x.status==='Declined').length;
     const xferDecl =t.filter(x=>x.status==='Declined').length;
+    const mtgDecl  =m.filter(x=>x.status==='Declined').length;
     const tc=document.getElementById('tasks-count-badge');
-    if(tc)tc.textContent=dealPend+xferPend;
-    const tt=document.querySelector('.tasks-tab[data-tab="pending"]  .tab-count'); if(tt)tt.textContent=dealPend+xferPend;
+    if(tc)tc.textContent=dealPend+xferPend+mtgPend;
+    const tt=document.querySelector('.tasks-tab[data-tab="pending"]  .tab-count'); if(tt)tt.textContent=dealPend+xferPend+mtgPend;
     const ta=document.querySelector('.tasks-tab[data-tab="approved"] .tab-count'); if(ta)ta.textContent=dealAppr+xferAppr+mtgAppr;
-    const td=document.querySelector('.tasks-tab[data-tab="declined"] .tab-count'); if(td)td.textContent=dealDecl+xferDecl;
+    const td=document.querySelector('.tasks-tab[data-tab="declined"] .tab-count'); if(td)td.textContent=dealDecl+xferDecl+mtgDecl;
     const activeTab=document.querySelector('.tasks-tab.active')?.dataset.tab||'pending';
     renderTasksPane(activeTab);
   }
@@ -868,26 +869,27 @@
     if(tab==='pending'){
       const dp=d.filter(x=>x.status==='Pending');
       const tp=t.filter(x=>x.status==='Pending');
-      // No mortgage section here — mortgage transfers count immediately at
-      // submission and never sit in a pending state.
-      if(!dp.length&&!tp.length){wrap.innerHTML='<div class="empty-state">All clear — no pending items ✅</div>';return;}
+      const mp=m.filter(x=>!x.status||x.status==='Pending');
+      if(!dp.length&&!tp.length&&!mp.length){wrap.innerHTML='<div class="empty-state">All clear — no pending items ✅</div>';return;}
       if(dp.length){html+=`<div class="tasks-section-label">Closer Deals</div>`+dp.map(x=>buildDealTaskCard(x,'pending')).join('');}
       if(tp.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Opener Transfers</div>`+tp.map(x=>buildXferTaskCard(x,'pending')).join('');}
+      if(mp.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+mp.map(x=>buildMtgTaskCard(x,'pending')).join('');}
     } else if(tab==='approved'){
       const da=d.filter(x=>x.status==='Approved');
       const ta=t.filter(x=>x.status==='Approved');
-      const ma=m; // every mortgage record is, in effect, approved on submission
+      const ma=m.filter(x=>x.status==='Approved');
       if(!da.length&&!ta.length&&!ma.length){wrap.innerHTML='<div class="empty-state">No approved items.</div>';return;}
       if(da.length){html+=`<div class="tasks-section-label">Closer Deals</div>`+da.map(x=>buildDealTaskCard(x,'approved')).join('');}
       if(ta.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Opener Transfers</div>`+ta.map(x=>buildXferTaskCard(x,'approved')).join('');}
-      if(ma.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+ma.map(x=>buildMtgTaskCard(x)).join('');}
+      if(ma.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+ma.map(x=>buildMtgTaskCard(x,'approved')).join('');}
     } else {
       const dd=d.filter(x=>x.status==='Declined');
       const td=t.filter(x=>x.status==='Declined');
-      // No mortgage section here — mortgage has no decline state anymore.
-      if(!dd.length&&!td.length){wrap.innerHTML='<div class="empty-state">No declined items.</div>';return;}
+      const md=m.filter(x=>x.status==='Declined');
+      if(!dd.length&&!td.length&&!md.length){wrap.innerHTML='<div class="empty-state">No declined items.</div>';return;}
       if(dd.length){html+=`<div class="tasks-section-label">Closer Deals</div>`+dd.map(x=>buildDealTaskCard(x,'declined')).join('');}
       if(td.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Opener Transfers</div>`+td.map(x=>buildXferTaskCard(x,'declined')).join('');}
+      if(md.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+md.map(x=>buildMtgTaskCard(x,'declined')).join('');}
     }
     wrap.innerHTML=html;
   }
@@ -929,8 +931,9 @@
     </div>`;
   }
 
-  function buildMtgTaskCard(r){
-    return`<div class="task-card approved" style="border-left-color:var(--teal)">
+  function buildMtgTaskCard(r,tab){
+    const isPending=tab==='pending';
+    return`<div class="task-card ${tab||'approved'}" style="border-left-color:var(--teal)">
       <div class="task-card-header">
         <div><span class="task-client">${displayName(r.agent)||'—'}</span><span class="task-meta">${r.phone||'—'}</span></div>
         <span class="task-date">${fmtDate(r.createdAt)}</span>
@@ -940,6 +943,10 @@
         <div class="task-detail-item"><span class="task-detail-label">Date</span><span>${fmtDate(r.date)}</span></div>
         <div class="task-detail-item"><span class="task-detail-label">Commission</span><span class="task-comm">$${r.comm||0}</span></div>
       </div>
+      ${isPending
+        ?`<div class="task-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`
+        :`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:${tab==='approved'?'var(--green)':'var(--red)'}">${tab==='approved'?'✅ Approved':'❌ Declined'}</b> · Commission: <b style="color:var(--green)">$${r.comm||0}</b></div>`
+      }
     </div>`;
   }
 
@@ -997,7 +1004,7 @@
     if(!reason){errEl.textContent='Please enter a reason before declining.';errEl.style.display='block';return;}
     const p=window._pendingDecline; if(!p){closeDeclineConfirm();return;}
     const btn=document.getElementById('decline-submit-btn');btn.disabled=true;btn.textContent='Declining…';
-    const coll=p.kind==='deal'?'deals':'transfers';
+    const coll=p.kind==='deal'?'deals':p.kind==='mortgage'?'mortgage_transfers':'transfers';
     try{
       await updateDoc(doc(db,coll,p.id),{status:'Declined',comm:0,declineReason:reason,resolvedAt:new Date().toISOString()});
       toast('Declined — reason saved and visible to the agent.','error');
@@ -1017,10 +1024,13 @@
   window.openAdminSubmit=function(kind){
     document.getElementById('adm-submit-menu').classList.remove('open');
     document.getElementById('adm-submit-overlay').classList.add('open');
-    document.getElementById('adm-submit-op-form').style.display = kind==='opener'?'':'none';
-    document.getElementById('adm-submit-cl-form').style.display = kind==='closer'?'':'none';
-    document.getElementById('adm-submit-title').textContent = kind==='opener'?'Submit Transfer (on behalf of Opener)':'Submit Deal (on behalf of Closer)';
-    // Repopulate dropdowns from live agent registry
+    document.getElementById('adm-submit-op-form').style.display  = kind==='opener'  ?'':'none';
+    document.getElementById('adm-submit-cl-form').style.display  = kind==='closer'  ?'':'none';
+    document.getElementById('adm-submit-mtg-form').style.display = kind==='mortgage'?'':'none';
+    document.getElementById('adm-submit-title').textContent =
+      kind==='opener'  ?'Submit Transfer (on behalf of Opener)':
+      kind==='mortgage'?'Submit Mortgage Transfer (on behalf of Agent)':
+                        'Submit Deal (on behalf of Closer)';
     if(kind==='opener'){
       const nameEl=document.getElementById('adm-op-name');
       nameEl.innerHTML='<option value="">Select opener…</option>'+OPENER_NAMES.map(n=>`<option value="${n}">${displayName(n)}</option>`).join('');
@@ -1031,6 +1041,10 @@
       document.getElementById('adm-op-phone').value='';
       document.getElementById('adm-op-closer-wrap').style.display='none';
       document.getElementById('adm-op-comm-preview').textContent='—';
+    } else if(kind==='mortgage'){
+      const nameEl=document.getElementById('adm-mtg-name');
+      nameEl.innerHTML='<option value="">Select agent…</option>'+MTG_AGENTS.map(n=>`<option value="${n}">${displayName(n)}</option>`).join('');
+      ['adm-mtg-sub-phone','adm-mtg-sub-date'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
     } else {
       const nameEl=document.getElementById('adm-cl-name');
       nameEl.innerHTML='<option value="">Select closer…</option>'+CLOSER_NAMES.map(n=>`<option value="${n}">${displayName(n)}</option>`).join('');
@@ -1043,6 +1057,24 @@
   };
   window.closeAdminSubmit=function(){
     document.getElementById('adm-submit-overlay').classList.remove('open');
+  };
+
+  // Admin submits on behalf of a mortgage agent — lands as Pending for review,
+  // same as deals/transfers submitted by admin. Commission computed at approval.
+  window.adminSubmitMortgage=async function(){
+    const agent=document.getElementById('adm-mtg-name').value;
+    const phone=document.getElementById('adm-mtg-sub-phone').value.trim();
+    const date =document.getElementById('adm-mtg-sub-date').value;
+    if(!agent||!phone||!date){toast('Please complete all required fields.','error');return;}
+    const agentDoc=ALL_AGENTS.find(a=>a.name===agent && a.role==='mortgage');
+    const agentEmail=agentDoc?.email||agent.toLowerCase()+'@ucc.com';
+    const btn=document.getElementById('adm-mtg-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
+    try{
+      await addDoc(collection(db,'mortgage_transfers'),{agent,agentEmail,phone,date,comm:0,seq:0,status:'Pending',submittedByAdmin:true,createdAt:new Date().toISOString()});
+      toast(`Mortgage transfer submitted for ${displayName(agent)}!`,'success');
+      closeAdminSubmit();
+    }catch(e){toast('Failed to submit.','error');console.error(e);}
+    btn.disabled=false;btn.textContent='Submit Transfer';
   };
 
   window.handleAdmTransferType=function(){
@@ -1115,21 +1147,38 @@
   };
 
   // ── ADMIN MORTGAGE VIEW ──
-  // Mortgage agents are trained to only submit qualified, confirmed
-  // transfers — there is no review step and no decline state. Every record
-  // here counted immediately at submission, with its commission already
-  // correctly computed by the tiered engine. This is now a flat, read-only
-  // ledger: admin can still permanently delete a record (e.g. a genuine
-  // data-entry mistake), but there's nothing to approve or decline.
+  // Mortgage agents can self-submit (auto-Approved with tier commission), OR
+  // admin can submit on their behalf (lands as Pending for admin to approve).
+  // This view handles both cases: pending records show approve/decline;
+  // approved records are read-only; declined records are dimmed.
   function renderAdminMortgage(){
     const m=gdfMtg();
     document.getElementById('adm-mtg-count').textContent=m.length;
     const wrap=document.getElementById('adm-mtg-list');
     if(!m.length){wrap.innerHTML='<div class="empty-state">No mortgage transfers in this date range.</div>';return;}
-    wrap.innerHTML=m.map(r=>`<div class="admin-record resolved">
-      <div class="admin-record-top"><div class="ar-left"><div class="status-badge badge-green">Counted</div><span class="ar-name">${displayName(r.agent)||'—'} — ${r.phone||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(r.date||r.createdAt)}</span>${buildDeleteBtn('mortgage',r.id,(r.agent?`${displayName(r.agent)}'s record`:'this record'))}</div></div>
-      <div class="ar-grid"><div class="ar-field"><span class="ar-key">Agent</span><span class="ar-val">${displayName(r.agent)||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${r.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${r.comm||0}</span></div></div>
-    </div>`).join('');
+    wrap.innerHTML=m.map(r=>{
+      const isPending=!r.status||r.status==='Pending';
+      const isDeclined=r.status==='Declined';
+      return `<div class="admin-record ${isPending?'':'resolved'}">
+        <div class="admin-record-top">
+          <div class="ar-left">
+            <div class="status-badge ${r.status==='Approved'?'badge-green':isDeclined?'badge-red':'badge-amber'}">${r.status||'Pending'}</div>
+            <span class="ar-name">${displayName(r.agent)||'—'} — ${r.phone||'—'}</span>
+          </div>
+          <div class="ar-top-right"><span class="ar-date">${fmtDate(r.date||r.createdAt)}</span>${buildDeleteBtn('mortgage',r.id,(r.agent?`${displayName(r.agent)}'s record`:'this record'))}</div>
+        </div>
+        <div class="ar-grid">
+          <div class="ar-field"><span class="ar-key">Agent</span><span class="ar-val">${displayName(r.agent)||'—'}</span></div>
+          <div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${r.phone||'—'}</span></div>
+          <div class="ar-field"><span class="ar-key">Date</span><span class="ar-val">${fmtDate(r.date||r.createdAt)}</span></div>
+          <div class="ar-field"><span class="ar-key">Seq #</span><span class="ar-val">${r.seq||'—'}</span></div>
+        </div>
+        ${isPending
+          ? `<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`
+          : `<div class="ar-comm-resolved">Commission: <strong>$${r.comm||0}</strong> <span class="ar-status-text">(${r.status}${r.seq?` · #${r.seq}`:''})</span></div>`
+        }
+      </div>`;
+    }).join('');
   }
 
   // ── ADMIN-ONLY DELETE (deals, transfers, mortgage_transfers) ──
@@ -1757,9 +1806,18 @@
   window.onRoleTypeChange=function(){
     const role=document.getElementById('f-role-type').value,dw=document.getElementById('f-deal-type-wrap'),ds=document.getElementById('f-deal-type'),sw=document.getElementById('f-status-wrap');
     ds.innerHTML='<option value="All">All Types</option>';
-    if(role==='Opener'){dw.style.display='block';sw.style.display='none';[['PccSub10','PCC Sub 10K'],['PccAbove10','PCC Above 10K'],['TaxAbove10','Tax Above 10K'],['TaxBelow10','Tax Below 10K'],['Student Loan','Student Loan']].forEach(([v,l])=>{const o=document.createElement('option');o.value=v;o.textContent=l;ds.appendChild(o);});}
-    else if(role==='Closer'){dw.style.display='block';sw.style.display='block';['Debt Settlement','Debt Validation'].forEach(v=>{const o=document.createElement('option');o.value=v;o.textContent=v;ds.appendChild(o);});}
-    else{dw.style.display='none';sw.style.display='block';}
+    if(role==='Opener'){
+      dw.style.display='block';
+      sw.style.display='block'; // transfers also have status — keep filter visible
+      [['PccSub10','PCC Sub 10K'],['PccAbove10','PCC Above 10K'],['TaxAbove10','Tax Above 10K'],['TaxBelow10','Tax Below 10K'],['Student Loan','Student Loan']].forEach(([v,l])=>{const o=document.createElement('option');o.value=v;o.textContent=l;ds.appendChild(o);});
+    } else if(role==='Closer'){
+      dw.style.display='block';
+      sw.style.display='block';
+      ['Debt Settlement','Debt Validation'].forEach(v=>{const o=document.createElement('option');o.value=v;o.textContent=v;ds.appendChild(o);});
+    } else {
+      dw.style.display='none';
+      sw.style.display='block';
+    }
     applyFilters();
   };
 
@@ -1770,8 +1828,18 @@
     const dWrap=document.getElementById('adm-deals'),tWrap=document.getElementById('adm-transfers');
     const dSec=document.getElementById('deals-section'),tSec=document.getElementById('transfers-section');
     const countEl=document.getElementById('f-count');
-    const baseDeal=gdfDeals().filter(d=>{if(f.status!=='All'&&d.status!==f.status)return false;if(f.dealType!=='All'&&d.dealType!==f.dealType)return false;return true;});
-    const baseXfer=gdfXfers().filter(t=>{if(f.dealType!=='All'&&t.type!==f.dealType)return false;return true;});
+    // Status filter applies to BOTH deals and transfers.
+    // Deal-type filter applies differently per role (dealType field for deals, type field for transfers).
+    const baseDeal=gdfDeals().filter(d=>{
+      if(f.status!=='All'&&d.status!==f.status)return false;
+      if(f.dealType!=='All'&&d.dealType!==f.dealType)return false;
+      return true;
+    });
+    const baseXfer=gdfXfers().filter(t=>{
+      if(f.status!=='All'&&t.status!==f.status)return false;
+      if(f.dealType!=='All'&&t.type!==f.dealType)return false;
+      return true;
+    });
     if(role==='Opener'){dSec.style.display='none';tSec.style.display='block';}
     else if(role==='Closer'){dSec.style.display='block';tSec.style.display='none';}
     else{dSec.style.display='block';tSec.style.display='block';}
@@ -1806,7 +1874,7 @@
   window.exportCSV=function(){
     const f=getFilters(),role=f.roleType;let rows=[];
     const baseDeal=gdfDeals().filter(d=>{if(f.status!=='All'&&d.status!==f.status)return false;if(f.dealType!=='All'&&d.dealType!==f.dealType)return false;return true;});
-    const baseXfer=gdfXfers().filter(t=>{if(f.dealType!=='All'&&t.type!==f.dealType)return false;return true;});
+    const baseXfer=gdfXfers().filter(t=>{if(f.status!=='All'&&t.status!==f.status)return false;if(f.dealType!=='All'&&t.type!==f.dealType)return false;return true;});
     if(role==='Opener'||role==='All'){if(baseXfer.length){rows.push(['--- OPENER TRANSFERS ---']);rows.push(['Opener','Lead Source','Closer','Phone','Date','Commission','Status']);baseXfer.forEach(t=>rows.push([displayName(t.name)||'',t.type||'',t.closer?displayName(t.closer):'',t.phone||'',(t.date||t.createdAt||'').slice(0,10),t.comm||0,t.status||'Pending']));rows.push([]);}}
     if(role==='Closer'||role==='All'){if(baseDeal.length){rows.push(['--- CLOSER DEALS ---']);rows.push(['Closer','Client','Phone','Opener','Deal Type','First Pay','Monthly','Closing','Commission','Status']);baseDeal.forEach(d=>rows.push([displayName(d.name)||'',d.client||'',d.phone||'',d.opener?displayName(d.opener):'',d.dealType||'',fmtDate(d.firstpay),d.monthly||'',fmtDate(d.closing),d.comm||0,d.status||'Pending']));}}
     if(!rows.length){toast('No records to export.','error');return;}
@@ -1816,7 +1884,26 @@
     toast('CSV exported!','success');
   };
 
-  // ── OPENER DASHBOARD ──
+  window.exportMtgCSV=function(){
+    const m=gdfMtg();
+    if(!m.length){toast('No mortgage records to export.','error');return;}
+    const rows=[
+      ['Agent','Phone','Date','Seq #','Commission','Status','Submitted'],
+      ...m.map(r=>[
+        displayName(r.agent)||'',
+        r.phone||'',
+        (r.date||r.createdAt||'').slice(0,10),
+        r.seq||'',
+        r.comm||0,
+        r.status||'Approved',
+        (r.createdAt||'').slice(0,10)
+      ])
+    ];
+    const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob=new Blob([csv],{type:'text/csv'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download=`ucc-mortgage-${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url);
+    toast('Mortgage CSV exported!','success');
+  };
   function renderOpenerDashboard(){
     const t=gdfXfers();
     document.getElementById('op-stat-total').textContent='$'+t.reduce((s,x)=>s+(x.comm||0),0);
@@ -2039,12 +2126,270 @@
     btn.disabled=false;btn.textContent='Submit Transfer';
   };
 
-  // NOTE: there is no adminMtgAction anymore. Mortgage agents are trained
-  // to only submit qualified, confirmed transfers, so every submission
-  // counts immediately (see submitMtgTransfer) — there's no admin
-  // approve/decline step for mortgage, by design.
+  window.adminMtgAction=async function(id,action){
+    const r=mtgRecords.find(x=>x.id===id);if(!r){toast('Record not found.','error');return;}
+    const editEl=document.getElementById('comm-m-'+id);
+    const finalComm=editEl?(Number(editEl.value)||0):(r.comm||0);
+    if(action==='Declined'){
+      window._pendingDecline={id,kind:'mortgage',finalComm};
+      openDeclineConfirm();
+      return;
+    }
+    // On admin approval: recompute full sequence so this record gets the
+    // correct tier commission in context of the agent's other approved records.
+    try{
+      const agentApproved=mtgRecords.filter(x=>x.agent===r.agent && x.status==='Approved');
+      const recompute=mtgComputeApprovedCommissions([...agentApproved,{...r,id,status:'Approved'}]);
+      const tier=recompute.get(id);
+      const commToSave=editEl && editEl.value!=='' ? finalComm : (tier?.comm ?? r.comm ?? 0);
+      await updateDoc(doc(db,'mortgage_transfers',id),{status:'Approved',comm:commToSave,seq:tier?.seq??r.seq??1,resolvedAt:new Date().toISOString()});
+      const fixups=[];
+      agentApproved.forEach(rec=>{
+        const t=recompute.get(rec.id);
+        if(t && ((rec.comm||0)!==t.comm || rec.seq!==t.seq))
+          fixups.push(updateDoc(doc(db,'mortgage_transfers',rec.id),{comm:t.comm,seq:t.seq}));
+      });
+      if(fixups.length) await Promise.all(fixups);
+      toast(`Mortgage transfer approved — $${commToSave}`,'success');
+    }catch(e){toast('Failed to update.','error');console.error(e);}
+  };
 
-  // ── HELPERS ──
+  // Mortgage records submitted by agents auto-approve with tier commission.
+  // Records submitted by admin on behalf of agents land as Pending and go
+  // through the adminMtgAction approve/decline flow above.
+
+  // ── MANAGER QUEUE ──
+  // Firestore collection: `manager_queue`
+  // Each document: { agentName, agentEmail, role, requestedAt (ISO), status: 'active'|'waiting'|'done' }
+  // Max 2 simultaneous ACTIVE slots. Unlimited waiting behind them.
+  // When admin clicks Done: status → 'done', agent sees a live countdown
+  // ("Head to the office now!") then doc is deleted after 60 seconds.
+  // Uses onSnapshot for real-time sync across all dashboards.
+  let queueUnsub   = null;
+  let queueEntries = []; // live state, updated by onSnapshot
+  let queueCountdownInterval = null;
+  let knownQueueIds = new Set(); // tracks ids we've already seen, to detect NEW requests
+
+  // Ping 3 — Rising alert, louder — plays on the admin dashboard whenever
+  // a new "Request to See Manager" comes in.
+  function playManagerQueuePing(){
+    try{
+      const ctx=new (window.AudioContext||window.webkitAudioContext)();
+      [0, 0.12, 0.24].forEach((delay,i)=>{
+        const osc=ctx.createOscillator();
+        const gain=ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.type='sine';
+        osc.frequency.value=[523,659,784][i];
+        gain.gain.setValueAtTime(0,ctx.currentTime+delay);
+        gain.gain.linearRampToValueAtTime(0.65,ctx.currentTime+delay+0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+delay+0.28);
+        osc.start(ctx.currentTime+delay);
+        osc.stop(ctx.currentTime+delay+0.3);
+      });
+    }catch(e){console.error('Ping playback failed:',e);}
+  }
+
+  function setupQueueListener(){
+    if(queueUnsub){ queueUnsub(); queueUnsub=null; }
+    // No orderBy here — that would require a composite index and silently
+    // fail if the manager_queue collection doesn't exist yet. Sort client-side.
+    const q=collection(db,'manager_queue');
+    queueUnsub=onSnapshot(q,snap=>{
+      queueEntries=[];
+      snap.forEach(d=>queueEntries.push({id:d.id,...d.data()}));
+      queueEntries.sort((a,b)=>(a.requestedAt||'').localeCompare(b.requestedAt||''));
+
+      // Detect brand-new requests (ids we haven't seen before) and ping
+      // the admin — agents don't need to hear other agents' pings.
+      const currentIds=new Set(queueEntries.map(e=>e.id));
+      if(currentUser?.role==='admin'){
+        const hasNewRequest=queueEntries.some(e=>e.status!=='done' && !knownQueueIds.has(e.id));
+        if(hasNewRequest && knownQueueIds.size>0){ // skip ping on very first load
+          playManagerQueuePing();
+        }
+      }
+      knownQueueIds=currentIds;
+
+      renderQueueForCurrentUser();
+    },err=>console.error('Queue listener error:',err));
+  }
+
+  function renderQueueForCurrentUser(){
+    if(!currentUser) return;
+    if(currentUser.role==='admin') renderAdminQueue();
+    else renderAgentQueue();
+  }
+
+  // ── AGENT QUEUE UI ──
+  function agentQueueWrap(){
+    const role=currentUser?.role;
+    const id=role==='closer'?'agent-queue-wrap-closer':role==='mortgage'?'agent-queue-wrap-mtg':'agent-queue-wrap-opener';
+    return document.getElementById(id);
+  }
+
+  function renderAgentQueue(){
+    const wrap=agentQueueWrap();
+    if(!wrap) return;
+    const myEntry=queueEntries.find(e=>e.agentEmail===currentUser.email && e.status!=='done');
+    const activeCount=queueEntries.filter(e=>e.status==='active').length;
+    const waitingCount=queueEntries.filter(e=>e.status==='waiting').length;
+
+    if(!myEntry){
+      wrap.innerHTML=`<div class="queue-card">
+        <div class="queue-card-title">🧑‍💼 Manager Queue</div>
+        <div class="queue-card-sub">${activeCount} of 2 active slots in use${waitingCount?' · '+waitingCount+' waiting':''}</div>
+        <button class="btn-queue-request" onclick="requestManager()">Request to See Manager</button>
+      </div>`;
+      clearQueueCountdown();
+    } else if(myEntry.status==='done'){
+      startQueueCountdown(wrap, myEntry.id);
+    } else if(myEntry.status==='active'){
+      wrap.innerHTML=`<div class="queue-card queue-card-active">
+        <div class="queue-card-title">✅ You're up — Head to the manager's office!</div>
+        <div class="queue-card-sub">The manager is ready for you now.</div>
+        <button class="btn-queue-cancel" onclick="cancelQueueRequest('${myEntry.id}')">I'm Done / Cancel</button>
+      </div>`;
+      clearQueueCountdown();
+    } else {
+      const waitingList=queueEntries.filter(e=>e.status==='waiting');
+      const myPos=waitingList.findIndex(e=>e.agentEmail===currentUser.email)+1;
+      wrap.innerHTML=`<div class="queue-card queue-card-waiting">
+        <div class="queue-card-title">⏳ You're in the queue</div>
+        <div class="queue-card-sub">Position #${myPos} in waiting list · You'll be notified when it's your turn.</div>
+        <button class="btn-queue-cancel" onclick="cancelQueueRequest('${myEntry.id}')">Cancel Request</button>
+      </div>`;
+      clearQueueCountdown();
+    }
+  }
+
+  function startQueueCountdown(wrap, docId){
+    clearQueueCountdown();
+    let secs=60;
+    const render=()=>{
+      if(!wrap) return;
+      wrap.innerHTML=`<div class="queue-card queue-card-go">
+        <div class="queue-card-title">🚨 Head to the office NOW!</div>
+        <div class="queue-card-sub">The manager is ready. You have <b>${secs}</b> second${secs!==1?'s':''} to get there.</div>
+        <div class="queue-countdown">${String(Math.floor(secs/60)).padStart(2,'0')}:${String(secs%60).padStart(2,'0')}</div>
+        <button class="btn-queue-cancel" onclick="cancelQueueRequest('${docId}')">I'm on my way / Done</button>
+      </div>`;
+    };
+    render();
+    queueCountdownInterval=setInterval(async()=>{
+      secs--;
+      if(secs<=0){
+        clearQueueCountdown();
+        try{ await deleteDoc(doc(db,'manager_queue',docId)); }catch(e){}
+        const w=agentQueueWrap();
+        if(w) w.innerHTML=`<div class="queue-card"><div class="queue-card-title">🧑‍💼 Manager Queue</div><button class="btn-queue-request" onclick="requestManager()">Request to See Manager</button></div>`;
+      } else { render(); }
+    },1000);
+  }
+
+  function clearQueueCountdown(){
+    if(queueCountdownInterval){ clearInterval(queueCountdownInterval); queueCountdownInterval=null; }
+  }
+
+  window.requestManager=async function(){
+    if(!currentUser) return;
+    const already=queueEntries.find(e=>e.agentEmail===currentUser.email && e.status!=='done');
+    if(already){ toast("You're already in the queue.",'error'); return; }
+    const activeCount=queueEntries.filter(e=>e.status==='active').length;
+    const status=activeCount<2?'active':'waiting';
+    try{
+      await addDoc(collection(db,'manager_queue'),{
+        agentName:currentUser.name,agentEmail:currentUser.email,role:currentUser.role,
+        requestedAt:new Date().toISOString(),status
+      });
+      toast(status==='active'?"You're up! Head to the manager's office.":'Added to the waiting list.','success');
+    }catch(e){toast('Failed to join queue.','error');console.error(e);}
+  };
+
+  window.cancelQueueRequest=async function(id){
+    try{
+      await deleteDoc(doc(db,'manager_queue',id));
+      clearQueueCountdown();
+      toast('Queue request cancelled.','success');
+    }catch(e){toast('Failed to cancel.','error');console.error(e);}
+  };
+
+  // ── ADMIN QUEUE UI ──
+  function renderAdminQueue(){
+    const badge=document.getElementById('queue-count-badge');
+    if(badge) badge.textContent=queueEntries.filter(e=>e.status!=='done').length||'0';
+    const wrap=document.getElementById('admin-queue-wrap');
+    if(!wrap) return;
+    if(!queueEntries.length){
+      wrap.innerHTML=`<div class="empty-state">No one in the queue right now.</div>`;
+      return;
+    }
+    const active =queueEntries.filter(e=>e.status==='active'||e.status==='done');
+    const waiting=queueEntries.filter(e=>e.status==='waiting');
+    let html='';
+    if(active.length){
+      html+=`<div class="tasks-section-label">Now Active (${active.length}/2)</div>`;
+      html+=active.map(e=>`<div class="queue-admin-card ${e.status==='done'?'queue-done':''}">
+        <div class="queue-admin-left">
+          <div class="queue-admin-avatar">${displayName(e.agentName).slice(0,2).toUpperCase()}</div>
+          <div>
+            <div class="queue-admin-name">${displayName(e.agentName)}</div>
+            <div class="queue-admin-meta">${e.role} · Requested ${fmtTime(e.requestedAt)}</div>
+          </div>
+        </div>
+        <button class="btn-queue-done" onclick="adminQueueDone('${e.id}')">${e.status==='done'?'Dismiss':'✓ Done'}</button>
+      </div>`).join('');
+    }
+    if(waiting.length){
+      html+=`<div class="tasks-section-label" style="margin-top:12px">Waiting (${waiting.length})</div>`;
+      html+=waiting.map((e,i)=>`<div class="queue-admin-card queue-waiting-card">
+        <div class="queue-admin-left">
+          <div class="queue-admin-pos">#${i+1}</div>
+          <div>
+            <div class="queue-admin-name">${displayName(e.agentName)}</div>
+            <div class="queue-admin-meta">${e.role} · Waiting since ${fmtTime(e.requestedAt)}</div>
+          </div>
+        </div>
+        <button class="btn-queue-remove" onclick="cancelQueueRequest('${e.id}')">✕ Remove</button>
+      </div>`).join('');
+    }
+    wrap.innerHTML=html;
+  }
+
+  function fmtTime(iso){
+    if(!iso) return '—';
+    const d=new Date(iso);
+    return isNaN(d)?'—':d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true});
+  }
+
+  window.adminQueueDone=async function(id){
+    const entry=queueEntries.find(e=>e.id===id);
+    if(!entry) return;
+    try{
+      // Mark as done — agent's screen starts countdown
+      await updateDoc(doc(db,'manager_queue',id),{status:'done',dismissedAt:new Date().toISOString()});
+      // Auto-promote first waiting agent to active if slot now free
+      const waiting=queueEntries.filter(e=>e.status==='waiting').sort((a,b)=>a.requestedAt.localeCompare(b.requestedAt));
+      if(waiting.length){
+        await updateDoc(doc(db,'manager_queue',waiting[0].id),{status:'active'});
+      }
+      // Auto-delete the done entry after 65 seconds
+      setTimeout(async()=>{
+        try{ await deleteDoc(doc(db,'manager_queue',id)); }catch(e){}
+      },65000);
+      toast(`Done with ${displayName(entry.agentName)} — next person promoted.`,'success');
+    }catch(e){toast('Failed to update queue.','error');console.error(e);}
+  };
+
+  window.toggleAdminQueue=function(){
+    const body=document.getElementById('queue-admin-body');
+    const icon=document.getElementById('queue-toggle-icon');
+    if(!body)return;
+    const open=body.style.display!=='none';
+    body.style.display=open?'none':'block';
+    if(icon)icon.textContent=open?'▸':'▾';
+  };
+
   function fmtDate(s){if(!s)return'—';const d=new Date(s);return isNaN(d)?s:d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}
   function showError(el,msg){if(el){el.textContent=msg;el.style.display='block';}}
   window.toast=function(msg,type='error'){
@@ -2675,6 +3020,36 @@ table.ref-table{width:100%;border-collapse:collapse;}
   .gdf-dropdown{right:auto;left:0;}
   .ap-stats-grid{grid-template-columns:repeat(2,1fr);}
 }
+
+/* ── MANAGER QUEUE ── */
+.queue-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px;}
+.queue-card-title{font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px;}
+.queue-card-sub{font-size:12px;color:var(--text2);margin-bottom:12px;}
+.queue-card-active{border-color:rgba(29,179,122,.4);background:rgba(29,179,122,.05);}
+.queue-card-active .queue-card-title{color:var(--green);}
+.queue-card-waiting{border-color:rgba(229,160,32,.35);background:rgba(229,160,32,.04);}
+.queue-card-waiting .queue-card-title{color:var(--amber);}
+.queue-card-go{border-color:rgba(229,69,90,.5);background:rgba(229,69,90,.06);animation:queuePulse 1.2s ease-in-out infinite alternate;}
+.queue-card-go .queue-card-title{color:var(--red);}
+@keyframes queuePulse{from{border-color:rgba(229,69,90,.4);}to{border-color:rgba(229,69,90,.9);}}
+.queue-countdown{font-family:'Bebas Neue',sans-serif;font-size:52px;letter-spacing:3px;color:var(--red);text-align:center;margin:8px 0;font-variant-numeric:tabular-nums;}
+.btn-queue-request{width:100%;padding:11px;border:none;border-radius:9px;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .2s;}
+.btn-queue-request:hover{opacity:.88;}
+.btn-queue-cancel{width:100%;padding:9px;border:1px solid var(--border2);border-radius:9px;background:transparent;color:var(--text2);font-family:'Inter',sans-serif;font-size:12px;cursor:pointer;transition:all .2s;margin-top:8px;}
+.btn-queue-cancel:hover{border-color:var(--red);color:var(--red);}
+/* Admin queue cards */
+.queue-admin-card{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;}
+.queue-admin-card.queue-done{opacity:.5;}
+.queue-waiting-card{border-color:rgba(229,160,32,.25);}
+.queue-admin-left{display:flex;align-items:center;gap:10px;min-width:0;}
+.queue-admin-avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--green),#22e89a);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0;}
+.queue-admin-pos{width:34px;height:34px;border-radius:50%;background:rgba(229,160,32,.15);border:1px solid rgba(229,160,32,.3);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--amber);flex-shrink:0;}
+.queue-admin-name{font-size:13px;font-weight:600;color:var(--text);}
+.queue-admin-meta{font-size:11px;color:var(--text2);margin-top:2px;}
+.btn-queue-done{padding:7px 14px;border:none;border-radius:8px;background:linear-gradient(135deg,var(--green),#22e89a);color:#fff;font-family:'Inter',sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:opacity .2s;flex-shrink:0;}
+.btn-queue-done:hover{opacity:.85;}
+.btn-queue-remove{padding:7px 12px;border:1px solid rgba(229,69,90,.3);border-radius:8px;background:rgba(229,69,90,.06);color:var(--red);font-family:'Inter',sans-serif;font-size:12px;cursor:pointer;transition:all .2s;flex-shrink:0;}
+.btn-queue-remove:hover{background:rgba(229,69,90,.14);}
 </style>
 </head>
 <body>
@@ -2742,6 +3117,10 @@ table.ref-table{width:100%;border-collapse:collapse;}
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
       Submit for Closer
     </button>
+    <button class="adm-fab-option" onclick="openAdminSubmit('mortgage')">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      Submit for Mortgage
+    </button>
   </div>
   <button class="adm-fab-btn" onclick="toggleAdminSubmitMenu(event)" title="Submit deal or transfer">+</button>
 </div>
@@ -2781,6 +3160,15 @@ table.ref-table{width:100%;border-collapse:collapse;}
       <div class="field"><label>Estimated Commission</label><input id="adm-cl-commission" readonly placeholder="Fill in monthly payment to calculate"/></div>
       <div class="tier-info-text" id="adm-cl-tier-info"></div>
       <button class="btn-form" id="adm-cl-submit-btn" onclick="adminSubmitCloser()">Submit Deal</button>
+    </div>
+
+    <!-- MORTGAGE FORM -->
+    <div id="adm-submit-mtg-form" style="display:none">
+      <div class="field"><label>Agent Name</label><select id="adm-mtg-name"><option value="">Select agent…</option></select></div>
+      <div class="field"><label>Client Phone</label><input type="text" id="adm-mtg-sub-phone" placeholder="e.g. (555) 123-4567"/></div>
+      <div class="field"><label>Date</label><input type="date" id="adm-mtg-sub-date"/></div>
+      <div class="fp-note" style="margin-top:8px;margin-bottom:12px"><strong>Pending Review</strong>This submission will land as Pending for admin approval. Commission will be calculated at time of approval based on the agent's sequence number.</div>
+      <button class="btn-form btn-form-teal" id="adm-mtg-submit-btn" onclick="adminSubmitMortgage()">Submit Transfer</button>
     </div>
   </div>
 </div>
@@ -2974,12 +3362,30 @@ table.ref-table{width:100%;border-collapse:collapse;}
           <div class="panel-card-title">Recent activity <span class="panel-card-action" onclick="switchView('admin-commission')">View rankings →</span></div>
           <div id="adm-recent-feed"><div class="empty-state">Loading…</div></div>
         </div>
+        <!-- Manager Queue — live Firestore sync -->
+        <div class="tasks-collapsible" style="margin-bottom:12px">
+          <div class="tasks-collapsible-header" onclick="toggleAdminQueue()">
+            <div class="tasks-ch-left">
+              <div>
+                <div class="tasks-ch-title">🧑‍💼 Manager Queue</div>
+                <div class="tasks-ch-sub">Live · max 2 active · unlimited waiting</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div class="tasks-pending-badge" id="queue-count-badge">0</div>
+              <div class="tasks-toggle-icon" id="queue-toggle-icon">▸</div>
+            </div>
+          </div>
+          <div class="tasks-collapsible-body" id="queue-admin-body" style="display:none">
+            <div id="admin-queue-wrap"><div class="empty-state">No one in the queue right now.</div></div>
+          </div>
+        </div>
         <div class="tasks-collapsible">
           <div class="tasks-collapsible-header" onclick="toggleTasks()">
             <div class="tasks-ch-left">
               <div>
                 <div class="tasks-ch-title">Tasks — Pending Review</div>
-                <div class="tasks-ch-sub">Closer deals + Opener transfers awaiting approval</div>
+                <div class="tasks-ch-sub">Closer deals + Opener transfers + Mortgage transfers awaiting approval</div>
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:8px">
@@ -3027,6 +3433,12 @@ table.ref-table{width:100%;border-collapse:collapse;}
       <div class="view" id="view-admin-mortgage">
         <div class="view-header"><div class="view-title">Mortgage Records</div><div class="view-sub">Full detail and commission for every submitted transfer.</div></div>
         <div class="mtg-stat-banner"><div class="mtg-stat-item"><div class="mtg-stat-val" id="adm-mtg-count">0</div><div class="mtg-stat-lbl">Transfers (filtered)</div></div></div>
+        <div class="action-bar">
+          <button class="btn-csv" onclick="exportMtgCSV()">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export CSV
+          </button>
+        </div>
         <div id="adm-mtg-list"><div class="empty-state">No mortgage transfers in this date range.</div></div>
       </div>
 
@@ -3150,6 +3562,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
         </div>
         <div class="eod-card" id="eod-opener" style="display:none"></div>
         <div class="tier-card"><div id="op-tier-tracker"></div></div>
+        <div id="agent-queue-wrap-opener"></div>
         <div class="panel-card"><div class="panel-card-title">Recent transfers <span class="panel-card-action" onclick="switchView('opener-history')">View all →</span></div><div id="op-recent-feed"><div class="empty-state">No transfers yet.</div></div></div>
       </div>
 
@@ -3213,6 +3626,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
           <div class="shift-tag-text" id="shift-tag-closer">Egypt: 5PM – 2AM · Mon–Fri</div>
         </div>
         <div class="eod-card" id="eod-closer" style="display:none"></div>
+        <div id="agent-queue-wrap-closer"></div>
         <div class="panel-card"><div class="panel-card-title">Recent deals <span class="panel-card-action" onclick="switchView('closer-history')">View all →</span></div><div id="cl-recent-feed"><div class="empty-state">No deals yet.</div></div></div>
       </div>
 
@@ -3258,6 +3672,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
           <div class="shift-progress"><div class="shift-progress-bar" id="shift-progress-mtg"></div></div>
           <div class="shift-tag-text" id="shift-tag-mtg">Egypt: 4PM – 1AM · Mon–Fri</div>
         </div>
+        <div id="agent-queue-wrap-mtg"></div>
         <div class="panel-card"><div class="panel-card-title">Recent transfers <span class="panel-card-action" onclick="switchView('mtg-records')">View all →</span></div><div id="mtg-recent-feed"><div class="empty-state">No transfers yet.</div></div></div>
       </div>
 
