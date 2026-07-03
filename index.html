@@ -2169,12 +2169,28 @@
   let queueEntries = []; // live state, updated by onSnapshot
   let queueCountdownInterval = null;
   let knownQueueIds = new Set(); // tracks ids we've already seen, to detect NEW requests
+  let queueRequestInFlight = false; // guards against double-click creating 2 requests
 
   // Ping 3 — Rising alert, louder — plays on the admin dashboard whenever
   // a new "Request to See Manager" comes in.
+  // NOTE: browsers block audio that isn't tied to a real user gesture, so a
+  // fresh AudioContext created inside the onSnapshot callback starts
+  // "suspended" and plays nothing. We keep ONE persistent context and
+  // unlock/resume it on any click in the app, then just reuse it here.
+  let queuePingCtx=null;
+  function getQueuePingCtx(){
+    if(!queuePingCtx) queuePingCtx=new (window.AudioContext||window.webkitAudioContext)();
+    return queuePingCtx;
+  }
+  document.addEventListener('click',()=>{
+    const ctx=getQueuePingCtx();
+    if(ctx.state==='suspended') ctx.resume();
+  });
+
   function playManagerQueuePing(){
     try{
-      const ctx=new (window.AudioContext||window.webkitAudioContext)();
+      const ctx=getQueuePingCtx();
+      if(ctx.state==='suspended') ctx.resume();
       [0, 0.12, 0.24].forEach((delay,i)=>{
         const osc=ctx.createOscillator();
         const gain=ctx.createGain();
@@ -2293,8 +2309,13 @@
 
   window.requestManager=async function(){
     if(!currentUser) return;
+    if(queueRequestInFlight) return; // blocks a 2nd click firing before Firestore echoes back
     const already=queueEntries.find(e=>e.agentEmail===currentUser.email && e.status!=='done');
     if(already){ toast("You're already in the queue.",'error'); return; }
+    queueRequestInFlight=true;
+    const wrap=agentQueueWrap();
+    const btn=wrap?.querySelector('.btn-queue-request');
+    if(btn){ btn.disabled=true; btn.textContent='Requesting…'; }
     const activeCount=queueEntries.filter(e=>e.status==='active').length;
     const status=activeCount<2?'active':'waiting';
     try{
@@ -2303,7 +2324,12 @@
         requestedAt:new Date().toISOString(),status
       });
       toast(status==='active'?"You're up! Head to the manager's office.":'Added to the waiting list.','success');
-    }catch(e){toast('Failed to join queue.','error');console.error(e);}
+    }catch(e){
+      toast('Failed to join queue.','error');console.error(e);
+      if(btn){ btn.disabled=false; btn.textContent='Request to See Manager'; }
+    }finally{
+      queueRequestInFlight=false;
+    }
   };
 
   window.cancelQueueRequest=async function(id){
