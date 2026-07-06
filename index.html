@@ -2343,19 +2343,14 @@
       startQueueCountdown(wrap, myEntry.id);
     } else if(myEntry.status==='declined'){
       startDeclineCooldown(wrap, myEntry);
-    } else if(myEntry.status==='active'){
-      wrap.innerHTML=`<div class="queue-card queue-card-active">
-        <div class="queue-card-title">✅ You're up — Head to the manager's office!</div>
-        <div class="queue-card-sub">The manager is ready for you now.</div>
-        <button class="btn-queue-cancel" onclick="cancelQueueRequest('${myEntry.id}')">I'm Done / Cancel</button>
-      </div>`;
-      clearQueueCountdown();
     } else {
-      const waitingList=queueEntries.filter(e=>e.status==='waiting');
-      const myPos=waitingList.findIndex(e=>e.agentEmail===currentUser.email)+1;
+      // 'active' or 'waiting' both mean: request sent, not yet acted on by
+      // the manager. No "you're up" / "ready for you" wording here — that
+      // message only appears once the admin actually clicks Accept
+      // (status → 'done', handled above by startQueueCountdown).
       wrap.innerHTML=`<div class="queue-card queue-card-waiting">
-        <div class="queue-card-title">⏳ You're in the queue</div>
-        <div class="queue-card-sub">Position #${myPos} in waiting list · You'll be notified when it's your turn.</div>
+        <div class="queue-card-title">📨 Request sent</div>
+        <div class="queue-card-sub">Waiting for the manager to respond.</div>
         <button class="btn-queue-cancel" onclick="cancelQueueRequest('${myEntry.id}')">Cancel Request</button>
       </div>`;
       clearQueueCountdown();
