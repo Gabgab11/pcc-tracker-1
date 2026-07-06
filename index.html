@@ -2385,17 +2385,12 @@
 
   function startQueueCountdown(wrap, docId){
     clearQueueCountdown();
-    let secs=60;
-    const render=()=>{
-      if(!wrap) return;
+    if(wrap){
       wrap.innerHTML=`<div class="queue-card queue-card-go">
-        <div class="queue-card-title">🚨 Head to the office NOW!</div>
-        <div class="queue-card-sub">The manager is ready. You have <b>${secs}</b> second${secs!==1?'s':''} to get there.</div>
-        <div class="queue-countdown">${String(Math.floor(secs/60)).padStart(2,'0')}:${String(secs%60).padStart(2,'0')}</div>
-        <button class="btn-queue-cancel" onclick="cancelQueueRequest('${docId}')">I'm on my way / Done</button>
+        <div class="queue-card-title">🚨 Proceed to the manager's office</div>
       </div>`;
-    };
-    render();
+    }
+    let secs=60;
     queueCountdownInterval=setInterval(async()=>{
       secs--;
       if(secs<=0){
@@ -2403,7 +2398,7 @@
         try{ await deleteDoc(doc(db,'manager_queue',docId)); }catch(e){}
         const w=agentQueueWrap();
         if(w) w.innerHTML=`<div class="queue-card"><div class="queue-card-title">🧑‍💼 Manager Queue</div><button class="btn-queue-request" onclick="requestManager()">Request to See Manager</button></div>`;
-      } else { render(); }
+      }
     },1000);
   }
 
