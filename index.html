@@ -2517,7 +2517,7 @@
       setTimeout(async()=>{
         try{ await deleteDoc(doc(db,'manager_queue',id)); }catch(e){}
       },65000);
-      toast(`Done with ${displayName(entry.agentName)} — next person promoted.`,'success');
+      toast(`Approved — ${displayName(entry.agentName)} is heading to your office.`,'success');
     }catch(e){toast('Failed to update queue.','error');console.error(e);}
   };
 
