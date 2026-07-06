@@ -2321,7 +2321,7 @@
 
   function declineCooldownExpired(e){
     if(!e || e.status!=='declined' || !e.declinedAt) return true;
-    return (Date.now()-new Date(e.declinedAt).getTime())>=120000; // 2-minute cooldown
+    return (Date.now()-new Date(e.declinedAt).getTime())>=300000; // 5-minute cooldown
   }
 
   function renderAgentQueue(){
@@ -2362,7 +2362,7 @@
     }
   }
 
-  // Shows the 2-minute "you were declined, try again in mm:ss" countdown.
+  // Shows the 5-minute "you were declined, try again in mm:ss" countdown.
   // Once it hits zero, re-renders — declineCooldownExpired() will then
   // treat the (possibly still-undeleted) doc as expired, so the agent
   // immediately sees a fresh "Request to See Manager" button again.
@@ -2370,7 +2370,7 @@
     clearQueueCountdown();
     const render=()=>{
       if(!wrap) return;
-      const remaining=Math.max(0,120-Math.floor((Date.now()-new Date(entry.declinedAt).getTime())/1000));
+      const remaining=Math.max(0,300-Math.floor((Date.now()-new Date(entry.declinedAt).getTime())/1000));
       const mm=String(Math.floor(remaining/60)).padStart(2,'0');
       const ss=String(remaining%60).padStart(2,'0');
       wrap.innerHTML=`<div class="queue-card queue-card-declined">
@@ -2527,7 +2527,7 @@
   };
 
   // Decline a request (whether active or still waiting). The agent sees a
-  // 2-minute cooldown before requestManager() will let them join again.
+  // 5-minute cooldown before requestManager() will let them join again.
   window.adminQueueDecline=async function(id){
     const entry=queueEntries.find(e=>e.id===id);
     if(!entry) return;
@@ -2541,11 +2541,11 @@
           await updateDoc(doc(db,'manager_queue',waiting[0].id),{status:'active'});
         }
       }
-      // Clean up the declined doc once the 2-minute cooldown window has closed
+      // Clean up the declined doc once the 5-minute cooldown window has closed
       setTimeout(async()=>{
         try{ await deleteDoc(doc(db,'manager_queue',id)); }catch(e){}
-      },120000);
-      toast(`Declined ${displayName(entry.agentName)}'s request — 2 min cooldown applied.`,'success');
+      },300000);
+      toast(`Declined ${displayName(entry.agentName)}'s request — 5 min cooldown applied.`,'success');
     }catch(e){toast('Failed to decline.','error');console.error(e);}
   };
 
