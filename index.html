@@ -355,6 +355,42 @@
     renderCurrentView();
   };
 
+  // ── PHONE NUMBER SEARCH (admin only) ──
+  // Searches the raw, unfiltered deals/transfers/mtgRecords arrays — deliberately
+  // ignores window._gdf so a number can be found regardless of the active date filter.
+  window.openPhoneSearch=function(){
+    const dd=document.getElementById('phone-search-dropdown');
+    if(dd) dd.classList.toggle('open');
+    if(dd && dd.classList.contains('open')){
+      const inp=document.getElementById('phone-search-input');
+      if(inp){ inp.value=''; inp.focus(); }
+      document.getElementById('phone-search-results').innerHTML='<div class="empty-state" style="padding:10px 2px">Enter a number to search.</div>';
+    }
+  };
+  document.addEventListener('click',e=>{
+    const dd=document.getElementById('phone-search-dropdown'),btn=document.getElementById('phone-search-btn');
+    if(dd && !dd.contains(e.target) && btn && !btn.contains(e.target)) dd.classList.remove('open');
+  });
+  function normPhone(s){ return (s||'').replace(/\D/g,''); }
+  window.runPhoneSearch=function(){
+    const raw=document.getElementById('phone-search-input').value.trim();
+    const box=document.getElementById('phone-search-results');
+    if(!raw){ box.innerHTML='<div class="empty-state" style="padding:10px 2px">Enter a number to search.</div>'; return; }
+    const needle=normPhone(raw);
+    if(!needle){ box.innerHTML='<div class="empty-state" style="padding:10px 2px">No matches found.</div>'; return; }
+    const results=[];
+    deals.forEach(d=>{ if(d.phone && normPhone(d.phone).includes(needle)) results.push({phone:d.phone,agent:d.name,kind:'Closer',sub:d.client||'—'}); });
+    transfers.forEach(t=>{ if(t.phone && normPhone(t.phone).includes(needle)) results.push({phone:t.phone,agent:t.name,kind:'Opener',sub:t.type||'—'}); });
+    mtgRecords.forEach(r=>{ if(r.phone && normPhone(r.phone).includes(needle)) results.push({phone:r.phone,agent:r.agent,kind:'Mortgage',sub:r.status||'—'}); });
+    if(!results.length){ box.innerHTML='<div class="empty-state" style="padding:10px 2px">No matches found.</div>'; return; }
+    box.innerHTML=results.map(r=>`
+      <div style="padding:9px 2px;border-bottom:1px solid var(--border2)">
+        <div style="font-weight:600;font-size:13px;color:var(--text)">${r.phone}</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:2px">${displayName(r.agent)||'—'} · <span style="color:var(--accent2)">${r.kind}</span></div>
+        <div style="font-size:11px;color:var(--text2);margin-top:1px">${r.sub}</div>
+      </div>`).join('');
+  };
+
   // ── PRESENCE ──
   function startPresence(){
     if(!currentUser)return;
@@ -569,6 +605,8 @@
     // Floating "+" submit button is admin-only
     const fab=document.getElementById('adm-fab-wrap');
     if(fab) fab.style.display=role==='admin'?'flex':'none';
+    const psw=document.getElementById('phone-search-wrap');
+    if(psw) psw.style.display=role==='admin'?'block':'none';
     window._gdf={from:null,to:null,preset:'all',roleScope:'all'};
     updateGdfBadge();
     if(role==='admin')    switchView('admin-overview');
@@ -1252,30 +1290,29 @@
   };
 
   // ── COMMISSION STRUCTURE (admin) — single hub for rankings + agent profiles ──
-  // Pay-period cycle: every period runs from the 28th of one month through
-  // the 27th of the next ("cutoff day" = 27th). All totals here are derived
-  // fresh from the live `deals` / `transfers` / `mtgRecords` arrays on every
-  // render — nothing is cached or accumulated across renders.
+  // Pay-period cycle: every period runs from the 1st through the last day of
+  // the calendar month ("cutoff day" = last day of the month, e.g. Feb 28/29,
+  // Mar 31). All totals here are derived fresh from the live `deals` /
+  // `transfers` / `mtgRecords` arrays on every render — nothing is cached or
+  // accumulated across renders.
   window._ccCollapsed = window._ccCollapsed || { closer:false, opener:false, mortgage:false };
 
   function ccPad(n){return String(n).padStart(2,'0');}
   function ccFmt(d){return `${d.getFullYear()}-${ccPad(d.getMonth()+1)}-${ccPad(d.getDate())}`;}
 
-  // Given any YYYY-MM-DD date, return the pay period that date falls into.
+  // Given any YYYY-MM-DD date, return the pay period (calendar month) that date falls into.
   function ccPeriodForDate(dateStr){
     if(!dateStr) dateStr=getNowEgypt().toISOString().slice(0,10);
     const parts=dateStr.slice(0,10).split('-').map(Number);
-    const y=parts[0],m=parts[1]-1,dd=parts[2]||1;
-    let endY=y, endM=m;
-    if(dd>27){ endM+=1; if(endM>11){endM=0;endY+=1;} }
-    const end=new Date(endY,endM,27);
-    const start=new Date(endY,endM-1,28);
+    const y=parts[0],m=parts[1]-1;
+    const start=new Date(y,m,1);
+    const end=new Date(y,m+1,0); // day 0 of next month = last day of this month
     return { start:ccFmt(start), end:ccFmt(end), key:ccFmt(end) };
   }
   function ccCurrentPeriod(){ return ccPeriodForDate(getNowEgypt().toISOString().slice(0,10)); }
   function ccPeriodLabel(endKey){
     const end=new Date(endKey+'T00:00:00');
-    const start=new Date(end.getFullYear(),end.getMonth()-1,28);
+    const start=new Date(end.getFullYear(),end.getMonth(),1);
     const mo=d=>d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
     return `${mo(start)} – ${mo(end)}, ${end.getFullYear()}`;
   }
@@ -1389,7 +1426,9 @@
     const endDate=new Date(period.end+'T00:00:00');
     const daysLeft=Math.max(0,Math.round((endDate-today)/86400000));
     const dl=document.getElementById('cc-days-left');
-    if(dl)dl.textContent=daysLeft===0?'Cutoff is today — totals finalize tonight':`${daysLeft} day${daysLeft!==1?'s':''} until the ${period.end.slice(-2)}th cutoff`;
+    const cutoffDay=Number(period.end.slice(-2));
+    const ccOrdinal=n=>{const s=['th','st','nd','rd'],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);};
+    if(dl)dl.textContent=daysLeft===0?'Cutoff is today — totals finalize tonight':`${daysLeft} day${daysLeft!==1?'s':''} until the ${ccOrdinal(cutoffDay)} cutoff`;
 
     const scope=window._gdf.roleScope; // 'all' | 'closer' | 'opener' | 'mortgage'
 
@@ -2213,6 +2252,34 @@
     }catch(e){console.error('Ping playback failed:',e);}
   }
 
+  // Simple on-screen popup for new manager-queue requests. Pure UI reaction
+  // to the existing onSnapshot listener above — no new Firestore reads/writes.
+  function showManagerQueuePopup(agentName){
+    let host=document.getElementById('mgr-queue-popup-host');
+    if(!host){
+      host=document.createElement('div');
+      host.id='mgr-queue-popup-host';
+      host.style.cssText='position:fixed;top:70px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:10px;align-items:flex-end;';
+      document.body.appendChild(host);
+    }
+    const card=document.createElement('div');
+    card.style.cssText='background:var(--surface2,#1c1f2b);border:1px solid rgba(79,126,255,.4);border-radius:12px;padding:14px 16px;box-shadow:0 8px 24px rgba(0,0,0,.35);max-width:320px;font-family:\'Inter\',sans-serif;cursor:pointer;animation:mgrQueuePopIn .25s ease-out;';
+    card.innerHTML=`<div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--accent2,#4f7eff);margin-bottom:4px">Manager Request</div>
+      <div style="font-size:14px;color:var(--text,#fff)">Agent <strong>${agentName||'—'}</strong> wants to see you.</div>`;
+    card.onclick=()=>{
+      host.removeChild(card);
+      if(typeof switchView==='function') switchView('admin-overview');
+    };
+    host.appendChild(card);
+    setTimeout(()=>{ if(card.parentNode) card.parentNode.removeChild(card); },8000);
+  }
+  if(!document.getElementById('mgr-queue-popup-style')){
+    const st=document.createElement('style');
+    st.id='mgr-queue-popup-style';
+    st.textContent='@keyframes mgrQueuePopIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}';
+    document.head.appendChild(st);
+  }
+
   function setupQueueListener(){
     if(queueUnsub){ queueUnsub(); queueUnsub=null; }
     // No orderBy here — that would require a composite index and silently
@@ -2227,9 +2294,10 @@
       // the admin — agents don't need to hear other agents' pings.
       const currentIds=new Set(queueEntries.map(e=>e.id));
       if(currentUser?.role==='admin'){
-        const hasNewRequest=queueEntries.some(e=>e.status!=='done' && !knownQueueIds.has(e.id));
-        if(hasNewRequest && knownQueueIds.size>0){ // skip ping on very first load
+        const newEntries=queueEntries.filter(e=>e.status!=='done' && !knownQueueIds.has(e.id));
+        if(newEntries.length && knownQueueIds.size>0){ // skip ping/popup on very first load
           playManagerQueuePing();
+          newEntries.forEach(e=>showManagerQueuePopup(displayName(e.agentName)));
         }
       }
       knownQueueIds=currentIds;
@@ -3362,6 +3430,19 @@ table.ref-table{width:100%;border-collapse:collapse;}
     <div class="topbar">
       <div class="topbar-left"><span class="topbar-crumb">United Contact Center &nbsp;/&nbsp; <span id="breadcrumb">Dashboard</span></span></div>
       <div class="topbar-right">
+        <!-- PHONE SEARCH (admin only) -->
+        <div class="phone-search-wrapper" id="phone-search-wrap" style="display:none;position:relative">
+          <button class="gdf-btn" id="phone-search-btn" onclick="openPhoneSearch()">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <span>Find Number</span>
+          </button>
+          <div class="gdf-dropdown" id="phone-search-dropdown" style="width:320px;max-width:90vw">
+            <div class="gdf-section-label">Search by Phone Number</div>
+            <input type="text" id="phone-search-input" placeholder="Enter phone number…" oninput="runPhoneSearch()"
+              style="width:100%;box-sizing:border-box;padding:9px 11px;border-radius:8px;border:1px solid var(--border2);background:var(--input-bg);color:var(--text);font-family:'Inter',sans-serif;font-size:13px;outline:none;margin-bottom:8px"/>
+            <div id="phone-search-results" style="max-height:320px;overflow-y:auto"></div>
+          </div>
+        </div>
         <!-- GDF -->
         <div class="gdf-wrapper">
           <button class="gdf-btn" id="gdf-btn" onclick="openGdf()">
