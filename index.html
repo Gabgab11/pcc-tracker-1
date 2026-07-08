@@ -369,7 +369,9 @@
   };
   document.addEventListener('click',e=>{
     const dd=document.getElementById('phone-search-dropdown'),btn=document.getElementById('phone-search-btn');
-    if(dd && !dd.contains(e.target) && btn && !btn.contains(e.target)) dd.classList.remove('open');
+    if(!dd||!btn) return;
+    const path=e.composedPath();
+    if(!path.includes(dd) && !path.includes(btn)) dd.classList.remove('open');
   });
   function normPhone(s){ return (s||'').replace(/\D/g,''); }
   window._phoneSearchGroups = {};
