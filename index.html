@@ -535,9 +535,8 @@
       currentUser={role,name,email:fbUser.email,uid:fbUser.uid};
 
       // Persist this agent's own Firebase Auth uid onto their `agents` doc,
-      // once, so an admin can later target a forced password-reset flag at
-      // users/{uid} for them (see resetAgentPassword). Narrow self-write:
-      // only ever touches the `uid` field of the caller's OWN doc — see the
+      // once, for potential future admin tooling. Narrow self-write: only
+      // ever touches the `uid` field of the caller's OWN doc — see the
       // matching Firestore rule. Cheap no-op after the first successful run.
       if(mapped.docId && mapped.uid!==fbUser.uid){
         updateDoc(doc(db,'agents',mapped.docId),{uid:fbUser.uid}).catch(()=>{});
@@ -1574,7 +1573,6 @@
         </div>
         <div class="ar-actions" style="display:flex;justify-content:flex-end;gap:8px">
           <button class="btn-filter-clear" onclick="openEditAgent('${a.id}')">✎ Edit</button>
-          ${a.role!=='admin' ? `<button class="btn-filter-clear" onclick="resetAgentPassword('${a.id}')">🔑 Reset Password</button>` : ''}
           ${inactive
             ? `<button class="btn-approve" style="flex:none;padding:8px 16px" onclick="reactivateAgent('${a.id}')">↩ Reactivate</button>`
             : `<button class="btn-decline" style="flex:none;padding:8px 16px" onclick="deactivateAgent('${a.id}')">🚫 Deactivate</button>`}
@@ -1656,31 +1654,6 @@
     catch(e){ toast('Failed to reactivate agent.','error'); console.error(e); }
   };
 
-  // ── PASSWORD RESET (console-reset workflow, admin-only) ──
-  // Agent emails are dummy addresses, so Firebase's built-in "forgot
-  // password" email flow is a dead end here. This is the two-step
-  // replacement:
-  //   1. Admin manually sets a new temporary password for the agent's
-  //      account in Firebase Console → Authentication (not doable from
-  //      client-side code for another user's account).
-  //   2. Admin clicks this button, which sets users/{uid}.mustChangePassword
-  //      = true — the exact same flag the app already checks on every
-  //      login (handleAuthState) to show the force-password-change screen.
-  // No new Firebase Auth accounts are created, no historical deal/transfer/
-  // mortgage data is touched — those are all keyed by email, never uid.
-  // Requires the agent to have logged in at least once already (so their
-  // uid was captured onto their agents doc — see handleAuthState).
-  window.resetAgentPassword=async function(id){
-    const a=ALL_AGENTS.find(x=>x.id===id); if(!a) return;
-    if(!a.uid){
-      toast(`${displayName(a.name)} hasn't logged in yet, so there's no account to flag. Reset their password in Firebase Console once they've logged in at least once.`,'error');
-      return;
-    }
-    try{
-      await setDoc(doc(db,'users',a.uid),{mustChangePassword:true},{merge:true});
-      toast(`${displayName(a.name)} will be prompted to set a new password on next login. Remember to also set their new temporary password in Firebase Console → Authentication.`,'success');
-    }catch(e){ toast('Failed to flag password reset.','error'); console.error(e); }
-  };
 
   // ── ONE-TIME SYSTEM RESET ──
   // This does NOT delete anything. It writes a single baseline date to
