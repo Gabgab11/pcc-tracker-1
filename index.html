@@ -87,7 +87,7 @@
       // in, but their name stays in the role arrays below so their
       // historical deals/transfers/mortgage records remain fully visible
       // on dashboards, leaderboards, and reports.
-      if(a.active!==false){ newRoleMap[emailLower]={ role:a.role, name:a.name, docId:a.id, active:true }; }
+      if(a.active!==false){ newRoleMap[emailLower]={ role:a.role, name:a.name, docId:a.id, uid:a.uid||null, active:true }; }
       if(a.alias) newAlias[a.name]=a.alias;
       if(a.role==='closer')   closers.push(a.name);
       if(a.role==='opener')   openers.push(a.name);
@@ -534,6 +534,15 @@
       const name=mapped.name;
       currentUser={role,name,email:fbUser.email,uid:fbUser.uid};
 
+      // Persist this agent's own Firebase Auth uid onto their `agents` doc,
+      // once, so an admin can later target a forced password-reset flag at
+      // users/{uid} for them (see resetAgentPassword). Narrow self-write:
+      // only ever touches the `uid` field of the caller's OWN doc — see the
+      // matching Firestore rule. Cheap no-op after the first successful run.
+      if(mapped.docId && mapped.uid!==fbUser.uid){
+        updateDoc(doc(db,'agents',mapped.docId),{uid:fbUser.uid}).catch(()=>{});
+      }
+
       // FIX 4: Enforce role matches what user clicked on login screen
       if(selectedLoginRole && selectedLoginRole !== role){
         showError(document.getElementById('li-error'),`This account is registered as "${role}", not "${selectedLoginRole}".`);
@@ -828,6 +837,7 @@
   // and computes each visible number from ONLY that scope's own records
   // (no more blending all three departments into one "Approved (All)").
   function renderAdminOverview(){
+    refreshResetButtonVisibility();
     const d=gdfDeals(),t=gdfXfers(),m=gdfMtg();
     const scope=window._gdf.roleScope; // 'all' | 'closer' | 'opener' | 'mortgage'
 
@@ -1564,6 +1574,7 @@
         </div>
         <div class="ar-actions" style="display:flex;justify-content:flex-end;gap:8px">
           <button class="btn-filter-clear" onclick="openEditAgent('${a.id}')">✎ Edit</button>
+          ${a.role!=='admin' ? `<button class="btn-filter-clear" onclick="resetAgentPassword('${a.id}')">🔑 Reset Password</button>` : ''}
           ${inactive
             ? `<button class="btn-approve" style="flex:none;padding:8px 16px" onclick="reactivateAgent('${a.id}')">↩ Reactivate</button>`
             : `<button class="btn-decline" style="flex:none;padding:8px 16px" onclick="deactivateAgent('${a.id}')">🚫 Deactivate</button>`}
@@ -1644,6 +1655,80 @@
     try{ await updateDoc(doc(db,'agents',id),{active:true}); toast(`${displayName(a.name)} reactivated.`,'success'); }
     catch(e){ toast('Failed to reactivate agent.','error'); console.error(e); }
   };
+
+  // ── PASSWORD RESET (console-reset workflow, admin-only) ──
+  // Agent emails are dummy addresses, so Firebase's built-in "forgot
+  // password" email flow is a dead end here. This is the two-step
+  // replacement:
+  //   1. Admin manually sets a new temporary password for the agent's
+  //      account in Firebase Console → Authentication (not doable from
+  //      client-side code for another user's account).
+  //   2. Admin clicks this button, which sets users/{uid}.mustChangePassword
+  //      = true — the exact same flag the app already checks on every
+  //      login (handleAuthState) to show the force-password-change screen.
+  // No new Firebase Auth accounts are created, no historical deal/transfer/
+  // mortgage data is touched — those are all keyed by email, never uid.
+  // Requires the agent to have logged in at least once already (so their
+  // uid was captured onto their agents doc — see handleAuthState).
+  window.resetAgentPassword=async function(id){
+    const a=ALL_AGENTS.find(x=>x.id===id); if(!a) return;
+    if(!a.uid){
+      toast(`${displayName(a.name)} hasn't logged in yet, so there's no account to flag. Reset their password in Firebase Console once they've logged in at least once.`,'error');
+      return;
+    }
+    try{
+      await setDoc(doc(db,'users',a.uid),{mustChangePassword:true},{merge:true});
+      toast(`${displayName(a.name)} will be prompted to set a new password on next login. Remember to also set their new temporary password in Firebase Console → Authentication.`,'success');
+    }catch(e){ toast('Failed to flag password reset.','error'); console.error(e); }
+  };
+
+  // ── ONE-TIME SYSTEM RESET ──
+  // This does NOT delete anything. It writes a single baseline date to
+  // config/systemReset. From that moment on, applyBaseline() (see the
+  // realtime listeners near setupRealtimeListeners) excludes every record
+  // dated before the baseline from every in-memory array the app uses —
+  // which means every stat, chart, leaderboard, commission total, and
+  // report for every role recalculates to zero and starts counting fresh,
+  // while the original Firestore documents remain exactly as they were,
+  // permanently, for auditing. Once completed:true is written, the button
+  // hides itself everywhere, for every admin, forever — only a developer
+  // manually deleting/editing the config/systemReset document can undo it.
+  const SYSTEM_RESET_BASELINE_DATE = '2026-06-30';
+
+  window.openSystemResetConfirm=function(){
+    if(window._systemBaseline.completed) return; // already used — never re-openable from the UI
+    document.getElementById('reset-confirm-overlay')?.classList.add('open');
+  };
+  window.closeSystemResetConfirm=function(){
+    document.getElementById('reset-confirm-overlay')?.classList.remove('open');
+  };
+  window.confirmSystemReset=async function(){
+    if(currentUser?.role!=='admin'){toast('Only an admin can do this.','error');closeSystemResetConfirm();return;}
+    if(window._systemBaseline.completed){closeSystemResetConfirm();return;} // safety net against a double-click race
+    const btn=document.getElementById('reset-confirm-btn');
+    if(btn){btn.disabled=true;btn.textContent='Resetting…';}
+    try{
+      await setDoc(doc(db,'config','systemReset'),{
+        completed:true,
+        baselineDate:SYSTEM_RESET_BASELINE_DATE,
+        resetAt:new Date().toISOString(),
+        resetBy:currentUser.email,
+      });
+      toast(`System reset — every statistic now counts from ${SYSTEM_RESET_BASELINE_DATE} onward. Historical records are untouched.`,'success');
+    }catch(e){
+      toast('Failed to reset system. Please try again.','error'); console.error(e);
+    }
+    if(btn){btn.disabled=false;btn.textContent='Reset System';}
+    closeSystemResetConfirm();
+  };
+  // Called from the config/systemReset listener every time it changes, and
+  // once on first load — keeps the button's visibility in sync with the
+  // live Firestore flag for every open tab/admin, with no reload needed.
+  function refreshResetButtonVisibility(){
+    const btn=document.getElementById('system-reset-btn');
+    if(btn) btn.style.display = window._systemBaseline.completed ? 'none' : '';
+  }
+  window.refreshResetButtonVisibility = refreshResetButtonVisibility;
 
   function ccBuildRoster(stats,kind,periodKey){
     if(!stats.length)return '<div class="empty-state">No team members configured.</div>';
@@ -3093,6 +3178,8 @@ table.ref-table{width:100%;border-collapse:collapse;}
 
 #del-confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998;display:none;align-items:center;justify-content:center;padding:20px;}
 #del-confirm-overlay.open{display:flex;}
+#reset-confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998;display:none;align-items:center;justify-content:center;padding:20px;}
+#reset-confirm-overlay.open{display:flex;}
 /* ── Floating admin submit button ── */
 #adm-fab-wrap{position:fixed;bottom:28px;right:28px;z-index:900;display:flex;flex-direction:column;align-items:flex-end;gap:8px;}
 .adm-fab-btn{width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-size:26px;line-height:1;border:none;cursor:pointer;box-shadow:0 4px 20px rgba(79,126,255,.45);transition:transform .15s,box-shadow .15s;display:flex;align-items:center;justify-content:center;}
@@ -3228,6 +3315,21 @@ table.ref-table{width:100%;border-collapse:collapse;}
     <div class="del-confirm-btns">
       <button class="btn-del-cancel" onclick="closeDeleteConfirm()">Cancel</button>
       <button class="btn-del-confirm" id="del-confirm-btn" onclick="confirmDelete()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- ONE-TIME SYSTEM RESET CONFIRMATION -->
+<div id="reset-confirm-overlay">
+  <div class="del-confirm-box" style="max-width:460px">
+    <div class="del-confirm-icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+    </div>
+    <div class="del-confirm-title">Reset System Statistics?</div>
+    <div class="del-confirm-msg">This resets every dashboard, leaderboard, chart, commission total, and report — for Openers, Closers, Mortgage, and Admin — back to zero, so all statistics start counting fresh from <b>June 30, 2026</b> onward.<br><br>No database records are deleted. Every historical deal, transfer, and mortgage record stays stored permanently for auditing — it just won't be counted in any total anymore.<br><br>This is a <b>one-time action</b>. Once confirmed, this button disappears forever and cannot be used again unless a developer manually re-enables it.</div>
+    <div class="del-confirm-btns">
+      <button class="btn-del-cancel" onclick="closeSystemResetConfirm()">Cancel</button>
+      <button class="btn-del-confirm" id="reset-confirm-btn" onclick="confirmSystemReset()">Reset System</button>
     </div>
   </div>
 </div>
@@ -3487,6 +3589,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
       <div class="view" id="view-admin-overview">
         <div class="view-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
           <div><div class="view-title" id="topbar-greeting">Overview</div><div class="view-sub">Full team performance · filtered by the master filter above.</div></div>
+          <button id="system-reset-btn" class="btn-decline" style="flex:none;padding:9px 16px;display:none" onclick="openSystemResetConfirm()">⚠ Reset System</button>
         </div>
         <div class="stats-row-7" id="adm-stats-row">
           <div class="stat-card blue" data-scope="all" id="adm-card-total"><div class="stat-label">Total Submissions</div><div class="stat-value" id="adm-stat-total">0</div><div class="stat-sub" id="adm-stat-total-sub">Deals + Xfers + Mortgage</div></div>
