@@ -372,23 +372,53 @@
     if(dd && !dd.contains(e.target) && btn && !btn.contains(e.target)) dd.classList.remove('open');
   });
   function normPhone(s){ return (s||'').replace(/\D/g,''); }
+  window._phoneSearchGroups = {};
   window.runPhoneSearch=function(){
     const raw=document.getElementById('phone-search-input').value.trim();
     const box=document.getElementById('phone-search-results');
     if(!raw){ box.innerHTML='<div class="empty-state" style="padding:10px 2px">Enter a number to search.</div>'; return; }
     const needle=normPhone(raw);
     if(!needle){ box.innerHTML='<div class="empty-state" style="padding:10px 2px">No matches found.</div>'; return; }
-    const results=[];
-    deals.forEach(d=>{ if(d.phone && normPhone(d.phone).includes(needle)) results.push({phone:d.phone,agent:d.name,kind:'Closer',sub:d.client||'—'}); });
-    transfers.forEach(t=>{ if(t.phone && normPhone(t.phone).includes(needle)) results.push({phone:t.phone,agent:t.name,kind:'Opener',sub:t.type||'—'}); });
-    mtgRecords.forEach(r=>{ if(r.phone && normPhone(r.phone).includes(needle)) results.push({phone:r.phone,agent:r.agent,kind:'Mortgage',sub:r.status||'—'}); });
-    if(!results.length){ box.innerHTML='<div class="empty-state" style="padding:10px 2px">No matches found.</div>'; return; }
-    box.innerHTML=results.map(r=>`
-      <div style="padding:9px 2px;border-bottom:1px solid var(--border2)">
-        <div style="font-weight:600;font-size:13px;color:var(--text)">${r.phone}</div>
-        <div style="font-size:12px;color:var(--text2);margin-top:2px">${displayName(r.agent)||'—'} · <span style="color:var(--accent2)">${r.kind}</span></div>
-        <div style="font-size:11px;color:var(--text2);margin-top:1px">${r.sub}</div>
-      </div>`).join('');
+    const records=[];
+    deals.forEach(d=>{ if(d.phone && normPhone(d.phone).includes(needle)) records.push({phone:d.phone,kind:'Closer',
+      client:d.client||'—', dealType:d.dealType||'—', submittedBy:d.name, paired:d.opener, pairedLabel:'Opener', status:d.status||'—'}); });
+    transfers.forEach(t=>{ if(t.phone && normPhone(t.phone).includes(needle)) records.push({phone:t.phone,kind:'Opener',
+      client:t.name?displayName(t.name):'—', dealType:t.type||'—', submittedBy:t.name, paired:t.closer, pairedLabel:'Closer', status:t.status||'—'}); });
+    mtgRecords.forEach(r=>{ if(r.phone && normPhone(r.phone).includes(needle)) records.push({phone:r.phone,kind:'Mortgage',
+      client:'—', dealType:'Mortgage', submittedBy:r.agent, paired:null, pairedLabel:'', status:r.status||'—'}); });
+    if(!records.length){ box.innerHTML='<div class="empty-state" style="padding:10px 2px">No matches found.</div>'; return; }
+    // group by normalized phone so the same number's Opener/Closer/Mortgage records sit together
+    const groups={};
+    records.forEach(r=>{ const key=normPhone(r.phone); (groups[key]=groups[key]||[]).push(r); });
+    window._phoneSearchGroups=groups;
+    box.innerHTML=Object.keys(groups).map((key,gi)=>{
+      const list=groups[key];
+      return `<div style="padding:9px 2px;border-bottom:1px solid var(--border2);cursor:pointer" onclick="openPhoneRecord('${key}',0)">
+        <div style="font-weight:600;font-size:13px;color:var(--text)">${list[0].phone}</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:2px">${list.map(r=>r.kind).join(' + ')}</div>
+      </div>`;
+    }).join('');
+  };
+  window.openPhoneRecord=function(key,idx){
+    const list=window._phoneSearchGroups[key];
+    if(!list) return;
+    const r=list[idx];
+    const box=document.getElementById('phone-search-results');
+    const tabs=list.length>1 ? `<div style="display:flex;gap:6px;margin-bottom:10px">${list.map((rec,i)=>
+      `<button onclick="event.stopPropagation();openPhoneRecord('${key}',${i})" style="flex:1;padding:6px 8px;border-radius:7px;border:1px solid var(--border2);background:${i===idx?'var(--accent2)':'transparent'};color:${i===idx?'#fff':'var(--text2)'};font-size:12px;font-weight:600;cursor:pointer">${rec.kind}</button>`).join('')}</div>` : '';
+    box.innerHTML=`
+      <div style="padding:2px">
+        <button onclick="runPhoneSearch()" style="background:none;border:none;color:var(--accent2);font-size:12px;cursor:pointer;padding:0 0 8px;text-align:left">← Back to results</button>
+        ${tabs}
+        <div style="font-weight:700;font-size:14px;color:var(--text);margin-bottom:6px">${r.phone}</div>
+        <div style="font-size:12px;color:var(--text2);line-height:1.8">
+          <div><strong style="color:var(--text)">Client:</strong> ${r.client}</div>
+          <div><strong style="color:var(--text)">Deal Type:</strong> ${r.dealType}</div>
+          <div><strong style="color:var(--text)">Submitted by (${r.kind}):</strong> ${displayName(r.submittedBy)||'—'}</div>
+          ${r.paired?`<div><strong style="color:var(--text)">${r.pairedLabel}:</strong> ${displayName(r.paired)||'—'}</div>`:''}
+          <div><strong style="color:var(--text)">Status:</strong> ${r.status}</div>
+        </div>
+      </div>`;
   };
 
   // ── PRESENCE ──
@@ -2349,8 +2379,7 @@
       // message only appears once the admin actually clicks Accept
       // (status → 'done', handled above by startQueueCountdown).
       wrap.innerHTML=`<div class="queue-card queue-card-waiting">
-        <div class="queue-card-title">📨 Request sent</div>
-        <div class="queue-card-sub">Waiting for the manager to respond.</div>
+        <div class="queue-card-title">Request submitted.</div>
         <button class="btn-queue-cancel" onclick="cancelQueueRequest('${myEntry.id}')">Cancel Request</button>
       </div>`;
       clearQueueCountdown();
@@ -2382,7 +2411,7 @@
     clearQueueCountdown();
     if(wrap){
       wrap.innerHTML=`<div class="queue-card queue-card-go">
-        <div class="queue-card-title">🚨 Proceed to the manager's office</div>
+        <div class="queue-card-title">Proceed to Manager's Office.</div>
       </div>`;
     }
     let secs=60;
@@ -2424,7 +2453,7 @@
       // can lag long enough for a fast/repeated click to slip through and
       // create duplicate requests for the same agent.
       myQueueEntryId=ref.id;
-      toast(status==='active'?"You're up! Head to the manager's office.":'Added to the waiting list.','success');
+      toast('Request submitted.','success');
     }catch(e){
       toast('Failed to join queue.','error');console.error(e);
       if(btn){ btn.disabled=false; btn.textContent='Request to See Manager'; }
