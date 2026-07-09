@@ -1375,8 +1375,7 @@
     const fmt=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
     const todayStr=fmt(today);
     if(preset==='today')      return { from:todayStr, to:todayStr };
-    if(preset==='7d')         { const d=new Date(today); d.setDate(d.getDate()-6);  return { from:fmt(d), to:todayStr }; }
-    if(preset==='30d')        { const d=new Date(today); d.setDate(d.getDate()-29); return { from:fmt(d), to:todayStr }; }
+    if(preset==='yesterday')  { const d=new Date(today); d.setDate(d.getDate()-1); const ys=fmt(d); return { from:ys, to:ys }; }
     if(preset==='thismonth')  return { from:fmt(new Date(today.getFullYear(),today.getMonth(),1)), to:todayStr };
     if(preset==='custom')     return { from:fromInput||null, to:toInput||null };
     return { from:null, to:null }; // 'all'
@@ -1724,7 +1723,7 @@
     renderAgentProfileBody();
   };
   function updateApFilterBadge(){
-    const labels={today:'Today','7d':'Past 7 Days','30d':'Past 30 Days',thismonth:'This Month',all:'All Time',custom:'Custom Range'};
+    const labels={today:'Today',yesterday:'Yesterday',thismonth:'This Month',all:'All Time',custom:'Custom Range'};
     const lbl=document.getElementById('ap-filter-label');
     if(lbl) lbl.textContent=labels[window._apFilter.preset]||'All Time';
     const btn=document.getElementById('ap-filter-btn');
@@ -1737,7 +1736,7 @@
     const monthKeys=Object.keys(r.monthly).sort((a,b)=>b.localeCompare(a));
     const recordsSorted=[...r.records].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
     const maxMonth=Math.max(1,...monthKeys.map(k=>r.monthly[k].total));
-    const filterLabels={today:'Today','7d':'Past 7 Days','30d':'Past 30 Days',thismonth:'This Month',all:'All Time',custom:'Custom Range'};
+    const filterLabels={today:'Today',yesterday:'Yesterday',thismonth:'This Month',all:'All Time',custom:'Custom Range'};
     const activeFilterLabel=filterLabels[window._apFilter.preset]||'All Time';
 
     const chartRows = monthKeys.slice(0,6).reverse().map(k=>`
@@ -1767,8 +1766,7 @@
           <div class="gdf-dropdown" id="ap-filter-dropdown">
             <div class="gdf-section-label">This agent's commission filter</div>
             <button class="gdf-preset ap-filter-preset ${window._apFilter.preset==='today'?'active':''}"     data-preset="today"     onclick="applyApPreset('today')">Today</button>
-            <button class="gdf-preset ap-filter-preset ${window._apFilter.preset==='7d'?'active':''}"        data-preset="7d"        onclick="applyApPreset('7d')">Past 7 Days</button>
-            <button class="gdf-preset ap-filter-preset ${window._apFilter.preset==='30d'?'active':''}"       data-preset="30d"       onclick="applyApPreset('30d')">Past 30 Days</button>
+            <button class="gdf-preset ap-filter-preset ${window._apFilter.preset==='yesterday'?'active':''}" data-preset="yesterday" onclick="applyApPreset('yesterday')">Yesterday</button>
             <button class="gdf-preset ap-filter-preset ${window._apFilter.preset==='thismonth'?'active':''}" data-preset="thismonth" onclick="applyApPreset('thismonth')">This Month</button>
             <button class="gdf-preset ap-filter-preset ${window._apFilter.preset==='all'?'active':''}"       data-preset="all"       onclick="applyApPreset('all')">All Time</button>
             <button class="gdf-preset ap-filter-preset ${window._apFilter.preset==='custom'?'active':''}"    data-preset="custom"    onclick="applyApPreset('custom')">Custom Date Range…</button>
