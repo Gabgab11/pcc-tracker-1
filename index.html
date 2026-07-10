@@ -1304,6 +1304,14 @@
     </button>`;
   }
 
+  function buildEditBtn(kind,id){
+    if(currentUser?.role==='readonly') return '';
+    const fn = kind==='deal' ? `openEditDeal('${id}')` : `openEditTransfer('${id}')`;
+    return `<button type="button" class="edit-button" title="Edit" onclick="event.stopPropagation();${fn}">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+    </button>`;
+  }
+
   window.openDeleteConfirm=function(kind,id,label){
     window._pendingDelete={kind,id};
     const msgEl=document.getElementById('del-confirm-msg');
@@ -1901,6 +1909,82 @@
       </div>`;
   }
 
+  // ── Edit Deal modal ──
+  window._editingDealId=null;
+  window.openEditDeal=function(id){
+    const d=deals.find(x=>x.id===id); if(!d) return;
+    window._editingDealId=id;
+    document.getElementById('ed-client').value=d.client||'';
+    document.getElementById('ed-phone').value=d.phone||'';
+    document.getElementById('ed-deal-type').value=d.dealType||'';
+    document.getElementById('ed-debt').value=d.debt||'';
+    document.getElementById('ed-monthly').value=d.monthly||'';
+    document.getElementById('ed-firstpay').value=d.firstpay||'';
+    document.getElementById('ed-closing').value=d.closing||'';
+    document.getElementById('ed-comm').value=d.comm||0;
+    document.getElementById('ed-modal-error').style.display='none';
+    document.getElementById('ed-modal-overlay').classList.add('open');
+  };
+  window.closeEditDealModal=function(){
+    document.getElementById('ed-modal-overlay').classList.remove('open');
+    window._editingDealId=null;
+  };
+  window.saveEditDeal=async function(){
+    const id=window._editingDealId; if(!id) return;
+    const client=document.getElementById('ed-client').value.trim();
+    const phone=document.getElementById('ed-phone').value.trim();
+    const dealType=document.getElementById('ed-deal-type').value;
+    const debt=document.getElementById('ed-debt').value;
+    const monthly=document.getElementById('ed-monthly').value;
+    const firstpay=document.getElementById('ed-firstpay').value;
+    const closing=document.getElementById('ed-closing').value;
+    const comm=Number(document.getElementById('ed-comm').value)||0;
+    const errEl=document.getElementById('ed-modal-error');
+    if(!client||!dealType){ showError(errEl,'Client name and deal type are required.'); return; }
+    const btn=document.getElementById('ed-save-btn'); btn.disabled=true; btn.textContent='Saving…';
+    try{
+      await updateDoc(doc(db,'deals',id),{client,phone,dealType,debt,monthly,firstpay,closing,comm});
+      closeEditDealModal();
+      toast('Deal updated!','success');
+    }catch(e){ showError(errEl,'Failed to save changes. Please try again.'); console.error(e); }
+    btn.disabled=false; btn.textContent='Save Changes';
+  };
+
+  // ── Edit Transfer modal ──
+  window._editingXferId=null;
+  window.openEditTransfer=function(id){
+    const t=transfers.find(x=>x.id===id); if(!t) return;
+    window._editingXferId=id;
+    document.getElementById('et-type').value=t.type||'';
+    document.getElementById('et-phone').value=t.phone||'';
+    document.getElementById('et-closer').value=t.closer||'';
+    document.getElementById('et-date').value=(t.date||'').slice(0,10);
+    document.getElementById('et-comm').value=t.comm||0;
+    document.getElementById('et-modal-error').style.display='none';
+    document.getElementById('et-modal-overlay').classList.add('open');
+  };
+  window.closeEditTransferModal=function(){
+    document.getElementById('et-modal-overlay').classList.remove('open');
+    window._editingXferId=null;
+  };
+  window.saveEditTransfer=async function(){
+    const id=window._editingXferId; if(!id) return;
+    const type=document.getElementById('et-type').value.trim();
+    const phone=document.getElementById('et-phone').value.trim();
+    const closer=document.getElementById('et-closer').value.trim();
+    const date=document.getElementById('et-date').value;
+    const comm=Number(document.getElementById('et-comm').value)||0;
+    const errEl=document.getElementById('et-modal-error');
+    if(!type){ showError(errEl,'Lead source / transfer type is required.'); return; }
+    const btn=document.getElementById('et-save-btn'); btn.disabled=true; btn.textContent='Saving…';
+    try{
+      await updateDoc(doc(db,'transfers',id),{type,phone,closer:closer||null,date,comm});
+      closeEditTransferModal();
+      toast('Transfer updated!','success');
+    }catch(e){ showError(errEl,'Failed to save changes. Please try again.'); console.error(e); }
+    btn.disabled=false; btn.textContent='Save Changes';
+  };
+
   // ── ADMIN RECORDS VIEW ──
   window.onRoleTypeChange=function(){
     const role=document.getElementById('f-role-type').value,dw=document.getElementById('f-deal-type-wrap'),ds=document.getElementById('f-deal-type'),sw=document.getElementById('f-status-wrap');
@@ -1921,6 +2005,24 @@
   };
 
   function getFilters(){return{status:document.getElementById('f-status')?.value||'All',roleType:document.getElementById('f-role-type')?.value||'All',dealType:document.getElementById('f-deal-type')?.value||'All'};}
+
+  // Only the actions relevant to a record's current state are shown —
+  // Pending gets Approve + Decline with an editable commission field;
+  // Approved only gets a Decline (to reverse); Declined only gets an
+  // Approve (to reverse). No separate status banner is needed since the
+  // buttons themselves communicate the state.
+  function dealActionsHtml(d,isReadOnly){
+    if(isReadOnly) return '';
+    if(d.status==='Approved') return `<div class="ar-actions"><div class="ar-btns"><button class="btn-decline" onclick="adminDealAction('${d.id}','Declined')">✗ Decline</button></div></div>`;
+    if(d.status==='Declined') return `<div class="ar-actions"><div class="ar-btns"><button class="btn-approve" onclick="adminDealAction('${d.id}','Approved')">✓ Approve</button></div></div>`;
+    return `<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-d-${d.id}" value="${d.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminDealAction('${d.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminDealAction('${d.id}','Declined')">✗ Decline</button></div></div>`;
+  }
+  function xferActionsHtml(t,isReadOnly){
+    if(isReadOnly) return '';
+    if(t.status==='Approved') return `<div class="ar-actions"><div class="ar-btns"><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`;
+    if(t.status==='Declined') return `<div class="ar-actions"><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ Approve</button></div></div>`;
+    return `<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-t-${t.id}" value="${t.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`;
+  }
 
   function renderAdminResults(){
     const f=getFilters(),role=f.roleType;
@@ -1945,19 +2047,19 @@
     else{dSec.style.display='block';tSec.style.display='block';}
     if(role!=='Opener'){
       dWrap.innerHTML=!baseDeal.length?'<div class="empty-state">No deals match the current filters.</div>':baseDeal.map(d=>`<div class="admin-record">
-        <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${d.status==='Approved'?'badge-green':d.status==='Declined'?'badge-red':'badge-amber'}">${d.status}</div><span class="ar-name">${displayName(d.name)} → ${d.client||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(d.createdAt)}</span>${buildDeleteBtn('deal',d.id,(d.client||displayName(d.name)||'this deal'))}</div></div>
+        <div class="admin-record-top"><div class="ar-left"><span class="ar-name">${displayName(d.name)} → ${d.client||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(d.createdAt)}</span>${buildEditBtn('deal',d.id)}${buildDeleteBtn('deal',d.id,(d.client||displayName(d.name)||'this deal'))}</div></div>
         <div class="ar-grid"><div class="ar-field"><span class="ar-key">Opener</span><span class="ar-val">${d.opener?displayName(d.opener):'—'}</span></div><div class="ar-field"><span class="ar-key">Deal Type</span><span class="ar-val">${d.dealType||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${d.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Monthly</span><span class="ar-val">$${d.monthly||'—'}</span></div><div class="ar-field"><span class="ar-key">First Pay</span><span class="ar-val">${fmtDate(d.firstpay)}</span></div><div class="ar-field"><span class="ar-key">Closing</span><span class="ar-val">${fmtDate(d.closing)}</span></div><div class="ar-field"><span class="ar-key">Debt</span><span class="ar-val">$${Number(d.debt||0).toLocaleString()}</span></div></div>
-        ${d.status!=='Pending'?`<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${d.comm||0}</strong> <span class="ar-status-text">(${d.status})</span></div>`:''}
-        ${isReadOnly?'':`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-d-${d.id}" value="${d.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminDealAction('${d.id}','Approved')">✓ ${d.status==='Approved'?'Update':'Approve'}</button><button class="btn-decline" onclick="adminDealAction('${d.id}','Declined')">✗ Decline</button></div></div>`}
+        ${d.status!=='Pending'?`<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${d.comm||0}</strong></div>`:''}
+        ${dealActionsHtml(d,isReadOnly)}
       </div>`).join('');
       if(countEl&&role==='Closer')countEl.textContent=baseDeal.length+' deal'+(baseDeal.length!==1?'s':'');
     }
     if(role!=='Closer'){
       tWrap.innerHTML=!baseXfer.length?'<div class="empty-state">No transfers match the current filters.</div>':baseXfer.map(t=>`<div class="admin-record">
-        <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${t.status==='Approved'?'badge-green':t.status==='Declined'?'badge-red':'badge-amber'}">${t.status||'Pending'}</div><span class="ar-name">${displayName(t.name)||'—'} — ${t.type||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(t.date||t.createdAt)}</span>${buildDeleteBtn('transfer',t.id,(displayName(t.name)||'this transfer'))}</div></div>
+        <div class="admin-record-top"><div class="ar-left"><span class="ar-name">${displayName(t.name)||'—'} — ${t.type||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(t.date||t.createdAt)}</span>${buildEditBtn('transfer',t.id)}${buildDeleteBtn('transfer',t.id,(displayName(t.name)||'this transfer'))}</div></div>
         <div class="ar-grid"><div class="ar-field"><span class="ar-key">Lead Source</span><span class="ar-val">${t.type||'—'}</span></div>${t.closer?`<div class="ar-field"><span class="ar-key">Closer</span><span class="ar-val">${displayName(t.closer)}</span></div>`:''}<div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${t.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${t.comm||0}</span></div></div>
-        ${t.status!=='Pending'?`<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${t.comm||0}</strong> <span class="ar-status-text">(${t.status||'Pending'})</span></div>`:''}
-        ${isReadOnly?'':`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-t-${t.id}" value="${t.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ ${t.status==='Approved'?'Update':'Approve'}</button><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`}
+        ${t.status!=='Pending'?`<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${t.comm||0}</strong></div>`:''}
+        ${xferActionsHtml(t,isReadOnly)}
       </div>`).join('');
       if(countEl&&role==='Opener')countEl.textContent=baseXfer.length+' transfer'+(baseXfer.length!==1?'s':'');
     }
@@ -3176,6 +3278,11 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .bin-button:hover .garbage { animation: throw 0.4s linear; }
 @keyframes throw { from { transform: translate(-400%, -700%); opacity: 0; } to { transform: translate(0%, 0%); opacity: 1; } }
 
+/* EDIT BUTTON — sits beside the delete button on record cards */
+.edit-button{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background-color:rgba(90,150,255,.12);border:2px solid rgba(90,150,255,.35);color:#5a96ff;cursor:pointer;transition:.2s;flex-shrink:0;}
+.edit-button:hover{background-color:rgba(90,150,255,.28);}
+.edit-button:active{transform:scale(0.9);}
+
 #del-confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998;display:none;align-items:center;justify-content:center;padding:20px;}
 #del-confirm-overlay.open{display:flex;}
 /* ── Floating admin submit button ── */
@@ -3653,6 +3760,46 @@ table.ref-table{width:100%;border-collapse:collapse;}
         <div id="deals-section"><div class="section-heading">Closer Deals</div><div id="adm-deals"><div class="empty-state">No deals yet.</div></div></div>
         <div class="divider"></div>
         <div id="transfers-section"><div class="section-heading">Opener Transfers</div><div id="adm-transfers"><div class="empty-state">No transfers yet.</div></div></div>
+      </div>
+
+      <!-- ══ EDIT DEAL MODAL ══ -->
+      <div id="ed-modal-overlay" class="ap-overlay">
+        <div class="ap-box" style="max-width:480px">
+          <button class="ap-close" onclick="closeEditDealModal()">✕</button>
+          <div class="form-card-title">Edit Deal</div>
+          <div class="field"><label>Client Name</label><input type="text" id="ed-client" placeholder="Full name"/></div>
+          <div class="field"><label>Client Phone</label><input type="text" id="ed-phone" placeholder="423-482-1384"/></div>
+          <div class="field"><label>Type of Deal</label><select id="ed-deal-type">
+            <option value="">Select deal type…</option>
+            <option value="Debt Settlement">Debt Settlement</option>
+            <option value="Debt Validation">Debt Validation</option>
+          </select></div>
+          <div class="field-row"><div class="field"><label>Amount of Debt ($)</label><input type="number" id="ed-debt" placeholder="0.00"/></div><div class="field"><label>Monthly Payment ($)</label><input type="number" id="ed-monthly" placeholder="0.00"/></div></div>
+          <div class="field-row"><div class="field"><label>First Payment Date</label><input type="date" id="ed-firstpay"/></div><div class="field"><label>Closing Date &amp; Time</label><input type="datetime-local" id="ed-closing"/></div></div>
+          <div class="field"><label>Commission ($)</label><input type="number" id="ed-comm" placeholder="0.00"/></div>
+          <div class="login-error" id="ed-modal-error" style="display:none"></div>
+          <button class="btn-form" id="ed-save-btn" onclick="saveEditDeal()">Save Changes</button>
+        </div>
+      </div>
+
+      <!-- ══ EDIT TRANSFER MODAL ══ -->
+      <div id="et-modal-overlay" class="ap-overlay">
+        <div class="ap-box" style="max-width:480px">
+          <button class="ap-close" onclick="closeEditTransferModal()">✕</button>
+          <div class="form-card-title">Edit Transfer</div>
+          <div class="field"><label>Lead Source / Transfer Type</label>
+            <select id="et-type">
+              <option value="">Select lead source…</option>
+              <optgroup label="Closed Deals (Tiered)"><option value="1st Close">1st Close — $5</option><option value="2nd Close">2nd Close — $7.50</option><option value="3rd Close">3rd+ Close — $10</option></optgroup>
+              <optgroup label="Flat Rate"><option value="PccSub10">PCC Sub 10K — $1</option><option value="PccAbove10">PCC Above 10K — $2</option><option value="TaxAbove10">Tax Above 10K — $5</option><option value="TaxBelow10">Tax Below 10K — $1</option><option value="Student Loan">Student Loan — $2</option></optgroup>
+            </select>
+          </div>
+          <div class="field"><label>Assign to Closer (optional)</label><input type="text" id="et-closer" placeholder="Closer name or Outsource"/></div>
+          <div class="field-row"><div class="field"><label>Transfer Date</label><input type="date" id="et-date"/></div><div class="field"><label>Client Phone</label><input type="text" id="et-phone" placeholder="423-482-1384"/></div></div>
+          <div class="field"><label>Commission ($)</label><input type="number" id="et-comm" placeholder="0.00"/></div>
+          <div class="login-error" id="et-modal-error" style="display:none"></div>
+          <button class="btn-form" id="et-save-btn" onclick="saveEditTransfer()">Save Changes</button>
+        </div>
       </div>
 
       <!-- ══ ADMIN MORTGAGE ══ -->
