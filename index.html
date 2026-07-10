@@ -236,14 +236,14 @@
 
   function updateGdfBadge(){
     const {preset,roleScope} = window._gdf;
-    const presetLbls = {today:'Today',thismonth:'This Month',all:'All Time',custom:'Custom'};
+    const presetLbls = {today:'Today',yesterday:'Yesterday',thismonth:'This Month',all:'All Time',custom:'Custom'};
     const scopeLbls  = {all:'All',closer:'Closers',opener:'Openers',mortgage:'Mortgage'};
     const lbl  = document.getElementById('gdf-label');
     const btn  = document.getElementById('gdf-btn');
     const scLbl= document.getElementById('gdf-scope-label');
     if (lbl) lbl.textContent = presetLbls[preset]||'All Time';
     if (btn) btn.classList.toggle('gdf-active', preset!=='all' || roleScope!=='all');
-    if (scLbl) scLbl.textContent = currentUser?.role==='admin' ? '· '+(scopeLbls[roleScope]||'All') : '';
+    if (scLbl) scLbl.textContent = (currentUser?.role==='admin'||currentUser?.role==='readonly') ? '· '+(scopeLbls[roleScope]||'All') : '';
     document.querySelectorAll('.gdf-preset').forEach(b=>b.classList.toggle('active',b.dataset.preset===preset));
     document.querySelectorAll('.gdf-scope-btn').forEach(b=>b.classList.toggle('active',b.dataset.scope===roleScope));
   }
@@ -251,10 +251,13 @@
   window.openGdf=function(){
     const dd=document.getElementById('gdf-dropdown');
     if(dd) dd.classList.toggle('open');
+    const isAdminLike = currentUser?.role==='admin' || currentUser?.role==='readonly';
     const sr=document.getElementById('gdf-scope-row');
-    if(sr) sr.style.display = currentUser?.role==='admin' ? 'block':'none';
+    if(sr) sr.style.display = isAdminLike ? 'block':'none';
     const sd=document.getElementById('gdf-scope-divider');
-    if(sd) sd.style.display = currentUser?.role==='admin' ? 'block':'none';
+    if(sd) sd.style.display = isAdminLike ? 'block':'none';
+    const yb=document.getElementById('gdf-yesterday-btn');
+    if(yb) yb.style.display = isAdminLike ? 'block':'none';
   };
   document.addEventListener('click',e=>{
     const dd=document.getElementById('gdf-dropdown'),btn=document.getElementById('gdf-btn');
@@ -274,6 +277,7 @@
     const todayStr=fmt(today);
     let from=null,to=null;
     if      (preset==='today')     { from=todayStr; to=todayStr; }
+    else if (preset==='yesterday') { const d=new Date(today); d.setDate(d.getDate()-1); const ys=fmt(d); from=ys; to=ys; }
     else if (preset==='thismonth') { from=fmt(new Date(today.getFullYear(),today.getMonth(),1)); to=todayStr; }
     else if (preset==='all')       { from=null; to=null; }
     else if (preset==='custom')    { document.getElementById('gdf-custom-wrap').style.display='flex'; return; }
@@ -437,6 +441,8 @@
     if(currentUser?.role==='admin'){
       const agView=document.getElementById('view-admin-agents');
       if(agView && agView.style.display!=='none' && typeof renderAdminAgents==='function') renderAdminAgents();
+    }
+    if(currentUser?.role==='admin'||currentUser?.role==='readonly'){
       const ccView=document.getElementById('view-admin-commission');
       if(ccView && ccView.style.display!=='none' && typeof renderAdminCommission==='function') renderAdminCommission();
     }
@@ -499,7 +505,7 @@
 
   window.selectRole=function(role){
     selectedLoginRole=role;
-    ['opener','closer','mortgage','admin'].forEach(r=>document.getElementById('rs-'+r)?.classList.toggle('active',r===role));
+    ['opener','closer','mortgage','admin','readonly'].forEach(r=>document.getElementById('rs-'+r)?.classList.toggle('active',r===role));
   };
 
   window.doLogin=async function(){
@@ -560,7 +566,7 @@
     document.getElementById('li-btn').disabled=false;
     document.getElementById('li-error').style.display='none';
     selectedLoginRole='';
-    ['opener','closer','mortgage','admin'].forEach(r=>document.getElementById('rs-'+r)?.classList.remove('active'));
+    ['opener','closer','mortgage','admin','readonly'].forEach(r=>document.getElementById('rs-'+r)?.classList.remove('active'));
     showScreen('login');
   };
 
@@ -576,7 +582,7 @@
     document.getElementById('app').style.display='flex';
     const role=currentUser.role;
     document.getElementById('sb-user-name').textContent=displayName(currentUser.name);
-    document.getElementById('sb-user-role').textContent=role.charAt(0).toUpperCase()+role.slice(1);
+    document.getElementById('sb-user-role').textContent=role==='readonly'?'Read-Only':role.charAt(0).toUpperCase()+role.slice(1);
     document.getElementById('sb-avatar').textContent=displayName(currentUser.name).slice(0,2).toUpperCase();
     const hour=getNowEgypt().getHours();
     document.getElementById('topbar-greeting').textContent=(hour<12?'Good morning':hour<17?'Good afternoon':'Good evening')+', '+displayName(currentUser.name);
@@ -585,10 +591,11 @@
     const fab=document.getElementById('adm-fab-wrap');
     if(fab) fab.style.display=role==='admin'?'flex':'none';
     const psw=document.getElementById('phone-search-wrap');
-    if(psw) psw.style.display=role==='admin'?'block':'none';
+    if(psw) psw.style.display=(role==='admin'||role==='readonly')?'block':'none';
     window._gdf={from:null,to:null,preset:'all',roleScope:'all'};
     updateGdfBadge();
     if(role==='admin')    switchView('admin-overview');
+    if(role==='readonly') switchView('admin-overview');
     if(role==='closer')   switchView('closer-dashboard');
     if(role==='opener')   switchView('opener-dashboard');
     if(role==='mortgage') switchView('mtg-dashboard');
@@ -610,25 +617,25 @@
     teardownListeners();
     const role=currentUser.role;
 
-    // Closer deals — admin and closer only, mortgage explicitly excluded
-    if(role==='admin'||role==='closer'){
-      const q=role==='admin'
+    // Closer deals — admin/readonly and closer only, mortgage explicitly excluded
+    if(role==='admin'||role==='readonly'||role==='closer'){
+      const q=(role==='admin'||role==='readonly')
         ?query(collection(db,'deals'),orderBy('createdAt','desc'))
         :query(collection(db,'deals'),where('closerEmail','==',currentUser.email),orderBy('createdAt','desc'));
       dealsUnsub=onSnapshot(q,snap=>{deals=[];snap.forEach(d=>deals.push({id:d.id,...d.data()}));syncGlobals();renderCurrentView();if(window.refreshEOD)window.refreshEOD();},err=>console.error(err));
     }
 
-    // Opener transfers — admin and opener only, mortgage explicitly excluded
-    if(role==='admin'||role==='opener'){
-      const q=role==='admin'
+    // Opener transfers — admin/readonly and opener only, mortgage explicitly excluded
+    if(role==='admin'||role==='readonly'||role==='opener'){
+      const q=(role==='admin'||role==='readonly')
         ?query(collection(db,'transfers'),orderBy('createdAt','desc'))
         :query(collection(db,'transfers'),where('openerEmail','==',currentUser.email),orderBy('createdAt','desc'));
       xferUnsub=onSnapshot(q,snap=>{transfers=[];snap.forEach(t=>transfers.push({id:t.id,...t.data()}));syncGlobals();renderCurrentView();if(window.refreshEOD)window.refreshEOD();if(role==='opener')updateOpenerCommPreview();},err=>console.error(err));
     }
 
-    // Mortgage transfers — admin and mortgage only
-    if(role==='admin'||role==='mortgage'){
-      const q=role==='admin'
+    // Mortgage transfers — admin/readonly and mortgage only
+    if(role==='admin'||role==='readonly'||role==='mortgage'){
+      const q=(role==='admin'||role==='readonly')
         ?query(collection(db,'mortgage_transfers'),orderBy('createdAt','desc'))
         :query(collection(db,'mortgage_transfers'),where('agentEmail','==',currentUser.email),orderBy('createdAt','desc'));
       mtgUnsub=onSnapshot(q,snap=>{
@@ -678,6 +685,20 @@
       <div class="sb-nav-item" data-view="admin-agents" onclick="switchView('admin-agents')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Agent Management
       </div>`;
+    } else if(role==='readonly'){
+      nav.innerHTML=`
+      <div class="sb-nav-item active" data-view="admin-overview" onclick="switchView('admin-overview')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Overview
+      </div>
+      <div class="sb-nav-item" data-view="admin-deals" onclick="switchView('admin-deals')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Deals &amp; Transfers
+      </div>
+      <div class="sb-nav-item" data-view="admin-mortgage" onclick="switchView('admin-mortgage')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Mortgage Records
+      </div>
+      <div class="sb-nav-item" data-view="admin-commission" onclick="switchView('admin-commission')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M15.5 9.5c0-1.6-1.57-2.5-3.5-2.5s-3.5 0.9-3.5 2.5c0 3.4 7 1.6 7 5 0 1.6-1.57 2.5-3.5 2.5s-3.5-0.9-3.5-2.5"/></svg>Commission Structure
+      </div>`;
     } else if(role==='closer'){
       nav.innerHTML=`
       <div class="sb-nav-item active" data-view="closer-dashboard" onclick="switchView('closer-dashboard')">
@@ -720,6 +741,7 @@
     const role=currentUser?.role;
     const allowed={
       admin:   ['admin-overview','admin-deals','admin-mortgage','admin-commission','admin-agents'],
+      readonly:['admin-overview','admin-deals','admin-mortgage','admin-commission'],
       closer:  ['closer-dashboard','closer-submit','closer-history'],
       opener:  ['opener-dashboard','opener-submit','opener-history'],
       mortgage:['mtg-dashboard','mtg-submit','mtg-records'],
@@ -749,7 +771,7 @@
 
   function renderCurrentView(){
     const role=currentUser?.role;
-    if(role==='admin'){
+    if(role==='admin'||role==='readonly'){
       renderAdminOverview();
       const ad=document.getElementById('view-admin-deals');
       if(ad&&ad.style.display!=='none')renderAdminResults();
@@ -929,7 +951,8 @@
         <div class="task-detail-item"><span class="task-detail-label">Closing</span><span>${fmtDate(d.closing)}</span></div>
         <div class="task-detail-item"><span class="task-detail-label">Commission</span><span class="task-comm">$${d.comm||0}</span></div>
       </div>
-      ${isPending?`<div class="task-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-d-${d.id}" value="${d.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminDealAction('${d.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminDealAction('${d.id}','Declined')">✗ Decline</button></div></div>`
+      ${isPending&&currentUser?.role!=='readonly'?`<div class="task-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-d-${d.id}" value="${d.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminDealAction('${d.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminDealAction('${d.id}','Declined')">✗ Decline</button></div></div>`
+      :isPending?`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:var(--amber)">⏳ Pending</b> · Commission: <b style="color:var(--green)">$${d.comm||0}</b></div>`
       :`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:${tab==='approved'?'var(--green)':'var(--red)'}">${tab==='approved'?'✅ Approved':'❌ Declined'}</b> · Commission: <b style="color:var(--green)">$${d.comm||0}</b></div>`}
     </div>`;
   }
@@ -946,7 +969,8 @@
         <div class="task-detail-item"><span class="task-detail-label">Date</span><span>${fmtDate(t.date)}</span></div>
         <div class="task-detail-item"><span class="task-detail-label">Commission</span><span class="task-comm">$${t.comm||0}</span></div>
       </div>
-      ${isPending?`<div class="task-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-t-${t.id}" value="${t.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`
+      ${isPending&&currentUser?.role!=='readonly'?`<div class="task-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-t-${t.id}" value="${t.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`
+      :isPending?`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:var(--amber)">⏳ Pending</b> · Commission: <b style="color:var(--green)">$${t.comm||0}</b></div>`
       :`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:${tab==='approved'?'var(--green)':'var(--red)'}">${tab==='approved'?'✅ Approved':'❌ Declined'}</b> · Commission: <b style="color:var(--green)">$${t.comm||0}</b></div>`}
     </div>`;
   }
@@ -963,8 +987,9 @@
         <div class="task-detail-item"><span class="task-detail-label">Date</span><span>${fmtDate(r.date)}</span></div>
         <div class="task-detail-item"><span class="task-detail-label">Commission</span><span class="task-comm">$${r.comm||0}</span></div>
       </div>
-      ${isPending
+      ${isPending&&currentUser?.role!=='readonly'
         ?`<div class="task-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`
+        :isPending?`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:var(--amber)">⏳ Pending</b> · Commission: <b style="color:var(--green)">$${r.comm||0}</b></div>`
         :`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:${tab==='approved'?'var(--green)':'var(--red)'}">${tab==='approved'?'✅ Approved':'❌ Declined'}</b> · Commission: <b style="color:var(--green)">$${r.comm||0}</b></div>`
       }
     </div>`;
@@ -1026,7 +1051,27 @@
     const btn=document.getElementById('decline-submit-btn');btn.disabled=true;btn.textContent='Declining…';
     const coll=p.kind==='deal'?'deals':p.kind==='mortgage'?'mortgage_transfers':'transfers';
     try{
+      // If declining a mortgage record that was previously Approved (an
+      // admin correcting an earlier approval, not just a fresh Pending
+      // decline), removing it from the agent's approved sequence can shift
+      // everyone after it down a slot — recompute and fix up their
+      // seq/comm so tiers stay correct. No-op for a Pending decline since
+      // agentApproved simply won't include this record either way.
+      let fixups=[];
+      if(p.kind==='mortgage'){
+        const r=mtgRecords.find(x=>x.id===p.id);
+        if(r && r.status==='Approved'){
+          const agentApproved=mtgRecords.filter(x=>x.agent===r.agent && x.status==='Approved' && x.id!==p.id);
+          const recompute=mtgComputeApprovedCommissions(agentApproved);
+          agentApproved.forEach(rec=>{
+            const t=recompute.get(rec.id);
+            if(t && ((rec.comm||0)!==t.comm || rec.seq!==t.seq))
+              fixups.push(updateDoc(doc(db,'mortgage_transfers',rec.id),{comm:t.comm,seq:t.seq}));
+          });
+        }
+      }
       await updateDoc(doc(db,coll,p.id),{status:'Declined',comm:0,declineReason:reason,resolvedAt:new Date().toISOString()});
+      if(fixups.length) await Promise.all(fixups);
       toast('Declined — reason saved and visible to the agent.','error');
       closeDeclineConfirm();
     }catch(e){toast('Failed to decline.','error');console.error(e);}
@@ -1173,13 +1218,14 @@
   // approved records are read-only; declined records are dimmed.
   function renderAdminMortgage(){
     const m=gdfMtg();
+    const isReadOnly=currentUser?.role==='readonly';
     document.getElementById('adm-mtg-count').textContent=m.length;
     const wrap=document.getElementById('adm-mtg-list');
     if(!m.length){wrap.innerHTML='<div class="empty-state">No mortgage transfers in this date range.</div>';return;}
     wrap.innerHTML=m.map(r=>{
       const isPending=!r.status||r.status==='Pending';
       const isDeclined=r.status==='Declined';
-      return `<div class="admin-record ${isPending?'':'resolved'}">
+      return `<div class="admin-record">
         <div class="admin-record-top">
           <div class="ar-left">
             <div class="status-badge ${r.status==='Approved'?'badge-green':isDeclined?'badge-red':'badge-amber'}">${r.status||'Pending'}</div>
@@ -1193,10 +1239,8 @@
           <div class="ar-field"><span class="ar-key">Date</span><span class="ar-val">${fmtDate(r.date||r.createdAt)}</span></div>
           <div class="ar-field"><span class="ar-key">Seq #</span><span class="ar-val">${r.seq||'—'}</span></div>
         </div>
-        ${isPending
-          ? `<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`
-          : `<div class="ar-comm-resolved">Commission: <strong>$${r.comm||0}</strong> <span class="ar-status-text">(${r.status}${r.seq?` · #${r.seq}`:''})</span></div>`
-        }
+        ${!isPending ? `<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${r.comm||0}</strong> <span class="ar-status-text">(${r.status}${r.seq?` · #${r.seq}`:''})</span></div>` : ''}
+        ${isReadOnly?'':`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ ${isPending?'Approve':'Re-Approve'}</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`}
       </div>`;
     }).join('');
   }
@@ -1214,6 +1258,7 @@
   window._pendingDelete = null;
 
   function buildDeleteBtn(kind,id,label){
+    if(currentUser?.role==='readonly') return '';
     const safeLabel=String(label).replace(/'/g,"\\'").replace(/"/g,'&quot;');
     return `<button type="button" class="bin-button" title="Delete permanently" onclick="event.stopPropagation();openDeleteConfirm('${kind}','${id}','${safeLabel}')">
       <svg class="bin-top" viewBox="0 0 39 7" fill="none" xmlns="http://www.w3.org/2000/svg"><line y1="5" x2="39" y2="5" stroke="white" stroke-width="4"/><line x1="12" y1="1.5" x2="26.0357" y2="1.5" stroke="white" stroke-width="3"/></svg>
@@ -1242,6 +1287,7 @@
     if(currentUser?.role!=='admin'){toast('Only an admin can delete records.','error');closeDeleteConfirm();return;}
     const collName=COLLECTION_BY_KIND[pending.kind];
     if(!collName){closeDeleteConfirm();return;}
+    const deletedAgentEmail = pending.kind==='agent' ? ALL_AGENTS.find(x=>x.id===pending.id)?.email : null;
     const btn=document.getElementById('del-confirm-btn');
     if(btn){btn.disabled=true;btn.textContent='Deleting…';}
     try{
@@ -1253,6 +1299,7 @@
       if(pending.kind==='mortgage')  mtgRecords = mtgRecords.filter(x=>x.id!==pending.id);
       if(pending.kind==='agent'){
         ALL_AGENTS = ALL_AGENTS.filter(x=>x.id!==pending.id);
+        if(deletedAgentEmail) deleteDoc(doc(db,'roles',deletedAgentEmail)).catch(()=>{});
         renderAdminAgents();
       }
       syncGlobals();
@@ -1462,6 +1509,7 @@
     opener:   { department:'Openers',   commissionStructure:'Standard Opener Tiers'  },
     mortgage: { department:'Mortgage',  commissionStructure:'Mortgage Tiered Engine' },
     admin:    { department:'Administration', commissionStructure:'N/A' },
+    readonly: { department:'Read-Only Access', commissionStructure:'N/A' },
   };
 
   window.onAgentRoleChange=function(){
@@ -1488,11 +1536,11 @@
     wrap.innerHTML=list.map(a=>{
       const inactive=a.active===false;
       const dn=displayName(a.name);
-      const roleColors={admin:'badge-blue',closer:'badge-teal',opener:'badge-green',mortgage:'badge-amber'};
+      const roleColors={admin:'badge-blue',closer:'badge-teal',opener:'badge-green',mortgage:'badge-amber',readonly:'badge-teal'};
       return `<div class="admin-record ${inactive?'resolved':''}" style="${inactive?'opacity:.6':''}">
         <div class="admin-record-top">
           <div class="ar-left">
-            <div class="status-badge ${inactive?'badge-red':(roleColors[a.role]||'badge-blue')}">${inactive?'Deactivated':a.role.charAt(0).toUpperCase()+a.role.slice(1)}</div>
+            <div class="status-badge ${inactive?'badge-red':(roleColors[a.role]||'badge-blue')}">${inactive?'Deactivated':(a.role==='readonly'?'Read-Only':a.role.charAt(0).toUpperCase()+a.role.slice(1))}</div>
             <span class="ar-name">${dn}${a.alias?` <span style="color:var(--text3);font-weight:400">(real: ${a.name})</span>`:''}</span>
           </div>
           <div class="ar-top-right">
@@ -1560,6 +1608,8 @@
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ showError(errEl,'Please enter a valid email address.'); return; }
     const dupe=ALL_AGENTS.find(a=>a.email===email && a.id!==window._editingAgentId);
     if(dupe){ showError(errEl,'An agent with this email already exists.'); return; }
+    const oldAgent=window._editingAgentId ? ALL_AGENTS.find(x=>x.id===window._editingAgentId) : null;
+    const oldEmail=oldAgent?.email||null;
     const btn=document.getElementById('ag-save-btn'); btn.disabled=true; btn.textContent='Saving…';
     try{
       if(window._editingAgentId){
@@ -1568,6 +1618,19 @@
       } else {
         await setDoc(doc(collection(db,'agents')),{name,email,alias,role,department,commissionStructure,active:true,createdAt:new Date().toISOString()});
         toast('Agent added! They can now log in and will appear across the CRM automatically.','success');
+      }
+      // Keep the roles/{email} lookup doc in sync — this is a small,
+      // separate collection that ONLY Firestore security rules consult (via
+      // a direct-path get()) to grant read-only accounts broad read access
+      // across deals/transfers/mortgage_transfers, since rules can't query
+      // the `agents` collection by field. Never affects write permissions —
+      // read-only accounts never get any write/update/delete rule.
+      if(role==='readonly'){
+        setDoc(doc(db,'roles',email),{role:'readonly'}).catch(()=>{});
+        if(oldEmail && oldEmail!==email) deleteDoc(doc(db,'roles',oldEmail)).catch(()=>{});
+      } else if(oldEmail){
+        // Role changed away from readonly (or email changed) — revoke.
+        deleteDoc(doc(db,'roles',oldEmail)).catch(()=>{});
       }
       closeAgentModal();
     }catch(e){ showError(errEl,'Failed to save agent. Please try again.'); console.error(e); }
@@ -1824,6 +1887,7 @@
 
   function renderAdminResults(){
     const f=getFilters(),role=f.roleType;
+    const isReadOnly=currentUser?.role==='readonly';
     const dWrap=document.getElementById('adm-deals'),tWrap=document.getElementById('adm-transfers');
     const dSec=document.getElementById('deals-section'),tSec=document.getElementById('transfers-section');
     const countEl=document.getElementById('f-count');
@@ -1843,18 +1907,20 @@
     else if(role==='Closer'){dSec.style.display='block';tSec.style.display='none';}
     else{dSec.style.display='block';tSec.style.display='block';}
     if(role!=='Opener'){
-      dWrap.innerHTML=!baseDeal.length?'<div class="empty-state">No deals match the current filters.</div>':baseDeal.map(d=>`<div class="admin-record ${d.status!=='Pending'?'resolved':''}">
+      dWrap.innerHTML=!baseDeal.length?'<div class="empty-state">No deals match the current filters.</div>':baseDeal.map(d=>`<div class="admin-record">
         <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${d.status==='Approved'?'badge-green':d.status==='Declined'?'badge-red':'badge-amber'}">${d.status}</div><span class="ar-name">${displayName(d.name)} → ${d.client||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(d.createdAt)}</span>${buildDeleteBtn('deal',d.id,(d.client||displayName(d.name)||'this deal'))}</div></div>
         <div class="ar-grid"><div class="ar-field"><span class="ar-key">Opener</span><span class="ar-val">${d.opener?displayName(d.opener):'—'}</span></div><div class="ar-field"><span class="ar-key">Deal Type</span><span class="ar-val">${d.dealType||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${d.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Monthly</span><span class="ar-val">$${d.monthly||'—'}</span></div><div class="ar-field"><span class="ar-key">First Pay</span><span class="ar-val">${fmtDate(d.firstpay)}</span></div><div class="ar-field"><span class="ar-key">Closing</span><span class="ar-val">${fmtDate(d.closing)}</span></div><div class="ar-field"><span class="ar-key">Debt</span><span class="ar-val">$${Number(d.debt||0).toLocaleString()}</span></div></div>
-        ${d.status!=='Pending'?`<div class="ar-comm-resolved">Commission: <strong>$${d.comm||0}</strong> <span class="ar-status-text">(${d.status})</span></div>`:`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-d-${d.id}" value="${d.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminDealAction('${d.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminDealAction('${d.id}','Declined')">✗ Decline</button></div></div>`}
+        ${d.status!=='Pending'?`<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${d.comm||0}</strong> <span class="ar-status-text">(${d.status})</span></div>`:''}
+        ${isReadOnly?'':`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-d-${d.id}" value="${d.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminDealAction('${d.id}','Approved')">✓ ${d.status==='Approved'?'Update':'Approve'}</button><button class="btn-decline" onclick="adminDealAction('${d.id}','Declined')">✗ Decline</button></div></div>`}
       </div>`).join('');
       if(countEl&&role==='Closer')countEl.textContent=baseDeal.length+' deal'+(baseDeal.length!==1?'s':'');
     }
     if(role!=='Closer'){
-      tWrap.innerHTML=!baseXfer.length?'<div class="empty-state">No transfers match the current filters.</div>':baseXfer.map(t=>`<div class="admin-record ${t.status!=='Pending'?'resolved':''}">
+      tWrap.innerHTML=!baseXfer.length?'<div class="empty-state">No transfers match the current filters.</div>':baseXfer.map(t=>`<div class="admin-record">
         <div class="admin-record-top"><div class="ar-left"><div class="status-badge ${t.status==='Approved'?'badge-green':t.status==='Declined'?'badge-red':'badge-amber'}">${t.status||'Pending'}</div><span class="ar-name">${displayName(t.name)||'—'} — ${t.type||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(t.date||t.createdAt)}</span>${buildDeleteBtn('transfer',t.id,(displayName(t.name)||'this transfer'))}</div></div>
         <div class="ar-grid"><div class="ar-field"><span class="ar-key">Lead Source</span><span class="ar-val">${t.type||'—'}</span></div>${t.closer?`<div class="ar-field"><span class="ar-key">Closer</span><span class="ar-val">${displayName(t.closer)}</span></div>`:''}<div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${t.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${t.comm||0}</span></div></div>
-        ${t.status!=='Pending'?`<div class="ar-comm-resolved">Commission: <strong>$${t.comm||0}</strong> <span class="ar-status-text">(${t.status||'Pending'})</span></div>`:`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-t-${t.id}" value="${t.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`}
+        ${t.status!=='Pending'?`<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${t.comm||0}</strong> <span class="ar-status-text">(${t.status||'Pending'})</span></div>`:''}
+        ${isReadOnly?'':`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-t-${t.id}" value="${t.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ ${t.status==='Approved'?'Update':'Approve'}</button><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`}
       </div>`).join('');
       if(countEl&&role==='Opener')countEl.textContent=baseXfer.length+' transfer'+(baseXfer.length!==1?'s':'');
     }
@@ -2135,9 +2201,11 @@
       return;
     }
     // On admin approval: recompute full sequence so this record gets the
-    // correct tier commission in context of the agent's other approved records.
+    // correct tier commission in context of the agent's other approved
+    // records. Excludes this record's own id from the "already approved"
+    // set so re-approving an already-Approved record never double-counts it.
     try{
-      const agentApproved=mtgRecords.filter(x=>x.agent===r.agent && x.status==='Approved');
+      const agentApproved=mtgRecords.filter(x=>x.agent===r.agent && x.status==='Approved' && x.id!==id);
       const recompute=mtgComputeApprovedCommissions([...agentApproved,{...r,id,status:'Approved'}]);
       const tier=recompute.get(id);
       const commToSave=editEl && editEl.value!=='' ? finalComm : (tier?.comm ?? r.comm ?? 0);
@@ -2262,7 +2330,7 @@
 
   function renderQueueForCurrentUser(){
     if(!currentUser) return;
-    if(currentUser.role==='admin') renderAdminQueue();
+    if(currentUser.role==='admin'||currentUser.role==='readonly') renderAdminQueue();
     else renderAgentQueue();
   }
 
@@ -2411,6 +2479,7 @@
       wrap.innerHTML=`<div class="empty-state">No one in the queue right now.</div>`;
       return;
     }
+    const canAct = currentUser?.role==='admin';
     let html='';
     if(active.length){
       html+=`<div class="tasks-section-label">Now Active (${active.length}/2)</div>`;
@@ -2422,10 +2491,10 @@
             <div class="queue-admin-meta">${e.role} · Requested ${fmtTime(e.requestedAt)}</div>
           </div>
         </div>
-        <div class="queue-admin-actions">
+        ${canAct?`<div class="queue-admin-actions">
           <button class="btn-queue-done" onclick="adminQueueDone('${e.id}')">✓ Accept</button>
           <button class="btn-queue-remove" onclick="adminQueueDecline('${e.id}')">✕ Decline</button>
-        </div>
+        </div>`:''}
       </div>`).join('');
     }
     if(waiting.length){
@@ -2438,7 +2507,7 @@
             <div class="queue-admin-meta">${e.role} · Waiting since ${fmtTime(e.requestedAt)}</div>
           </div>
         </div>
-        <button class="btn-queue-remove" onclick="adminQueueDecline('${e.id}')">✕ Decline</button>
+        ${canAct?`<button class="btn-queue-remove" onclick="adminQueueDecline('${e.id}')">✕ Decline</button>`:''}
       </div>`).join('');
     }
     wrap.innerHTML=html;
@@ -3308,11 +3377,12 @@ table.ref-table{width:100%;border-collapse:collapse;}
   <div class="login-box">
     <div class="login-wordmark">United Contact Center</div>
     <div class="login-welcome">Welcome Back · Sign In to Continue</div>
-    <div class="role-grid">
+    <div class="role-grid" style="grid-template-columns:repeat(5,1fr)">
       <div class="role-btn-card" id="rs-opener"   onclick="selectRole('opener')"><span class="role-icon">📞</span><span class="role-btn-name">Opener</span></div>
       <div class="role-btn-card" id="rs-closer"   onclick="selectRole('closer')"><span class="role-icon">🤝</span><span class="role-btn-name">Closer</span></div>
       <div class="role-btn-card" id="rs-mortgage" onclick="selectRole('mortgage')"><span class="role-icon">🏠</span><span class="role-btn-name">Mortgage</span></div>
       <div class="role-btn-card" id="rs-admin"    onclick="selectRole('admin')"><span class="role-icon">⚙️</span><span class="role-btn-name">Admin</span></div>
+      <div class="role-btn-card" id="rs-readonly" onclick="selectRole('readonly')"><span class="role-icon">👁️</span><span class="role-btn-name">Read-Only</span></div>
     </div>
     <div class="form-group"><label class="form-label">Email address</label><input class="form-input" id="li-email" type="email" placeholder="you@example.com" autocomplete="email"/></div>
     <div class="form-group"><label class="form-label">Password</label><input class="form-input" id="li-pass" type="password" placeholder="••••••••" autocomplete="current-password"/></div>
@@ -3390,6 +3460,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
             <div class="gdf-divider" id="gdf-scope-divider" style="display:none"></div>
             <div class="gdf-section-label">Date Range</div>
             <button class="gdf-preset" data-preset="today"     onclick="applyGdfPreset('today')">Today</button>
+            <button class="gdf-preset" data-preset="yesterday" id="gdf-yesterday-btn" style="display:none" onclick="applyGdfPreset('yesterday')">Yesterday</button>
             <button class="gdf-preset" data-preset="thismonth" onclick="applyGdfPreset('thismonth')">This Month</button>
             <button class="gdf-preset active" data-preset="all"    onclick="applyGdfPreset('all')">All Time</button>
             <button class="gdf-preset"         data-preset="custom" onclick="applyGdfPreset('custom')">Custom Range…</button>
@@ -3617,7 +3688,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
           <div class="filter-panel-title">Filters</div>
           <div class="filter-grid">
             <div class="filter-field"><label>Search</label><input type="text" id="ag-search" placeholder="Name or email…" oninput="filterAgents()"/></div>
-            <div class="filter-field"><label>Role</label><select id="ag-filter-role" onchange="filterAgents()"><option value="All">All Roles</option><option value="Admin">Admin</option><option value="Closer">Closer</option><option value="Opener">Opener</option><option value="Mortgage">Mortgage</option></select></div>
+            <div class="filter-field"><label>Role</label><select id="ag-filter-role" onchange="filterAgents()"><option value="All">All Roles</option><option value="Admin">Admin</option><option value="Closer">Closer</option><option value="Opener">Opener</option><option value="Mortgage">Mortgage</option><option value="Readonly">Read-Only</option></select></div>
           </div>
           <div class="filter-actions">
             <div class="filter-count" id="ag-count"></div>
@@ -3640,6 +3711,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
             <option value="opener">Opener</option>
             <option value="mortgage">Mortgage</option>
             <option value="admin">Admin</option>
+            <option value="readonly">Read-Only</option>
           </select></div>
           <div class="field"><label>Department</label><input type="text" id="ag-department" placeholder="e.g. Closers" oninput="this.dataset.touched='1'"/></div>
           <div class="field"><label>Commission Structure</label><input type="text" id="ag-comm-structure" placeholder="e.g. Standard Closer Tiers" oninput="this.dataset.touched='1'"/></div>
