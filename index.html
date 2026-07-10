@@ -317,6 +317,34 @@
     if(!path.includes(dd) && !path.includes(btn)) dd.classList.remove('open');
   });
   function normPhone(s){ return (s||'').replace(/\D/g,''); }
+
+  // ── PHONE FORMAT + DUPLICATE VALIDATION ──
+  // Only "423-482-1384" is accepted: exactly 3 digits, dash, 3 digits, dash,
+  // 4 digits. Anything else (extra +1, spaces, parens, missing dashes, etc.)
+  // is rejected.
+  const PHONE_FORMAT_RE = /^\d{3}-\d{3}-\d{4}$/;
+  function isValidPhoneFormat(phone){ return PHONE_FORMAT_RE.test((phone||'').trim()); }
+
+  // category: 'opener' -> transfers, 'closer' -> deals, 'mortgage' -> mtgRecords.
+  // A duplicate only blocks submission if the exact same phone number already
+  // exists within that same category's collection. The same number is fine
+  // across different categories (e.g. an opener transfer and the closer deal
+  // it converts into can share a phone number).
+  function phoneExistsInCategory(phone, category){
+    const target=normPhone(phone);
+    if(!target) return false;
+    const source = category==='opener' ? transfers : category==='closer' ? deals : mtgRecords;
+    return source.some(r=>normPhone(r.phone)===target);
+  }
+  function showPhoneAlert(inputId){
+    const el=document.getElementById(inputId+'-alert');
+    if(el) el.style.display='block';
+  }
+  function clearPhoneAlert(inputId){
+    const el=document.getElementById(inputId+'-alert');
+    if(el) el.style.display='none';
+  }
+  window.clearPhoneAlert=clearPhoneAlert;
   window._phoneSearchGroups = {};
   window.runPhoneSearch=function(){
     const raw=document.getElementById('phone-search-input').value.trim();
@@ -1130,7 +1158,10 @@
     const agent=document.getElementById('adm-mtg-name').value;
     const phone=document.getElementById('adm-mtg-sub-phone').value.trim();
     const date =document.getElementById('adm-mtg-sub-date').value;
+    clearPhoneAlert('adm-mtg-sub-phone');
     if(!agent||!phone||!date){toast('Please complete all required fields.','error');return;}
+    if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
+    if(phoneExistsInCategory(phone,'mortgage')){showPhoneAlert('adm-mtg-sub-phone');return;}
     const agentDoc=ALL_AGENTS.find(a=>a.name===agent && a.role==='mortgage');
     const agentEmail=agentDoc?.email||agent.toLowerCase()+'@ucc.com';
     const btn=document.getElementById('adm-mtg-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
@@ -1170,8 +1201,11 @@
     const date=document.getElementById('adm-op-date').value;
     const phone=document.getElementById('adm-op-phone').value.trim();
     const closer=document.getElementById('adm-op-closer').value;
+    clearPhoneAlert('adm-op-phone');
     if(!name||!type||!date||!phone){toast('Please complete all required fields.','error');return;}
     if(CLOSED_TYPES.includes(type)&&!closer){toast('Please select a closer for this transfer type.','error');return;}
+    if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
+    if(phoneExistsInCategory(phone,'opener')){showPhoneAlert('adm-op-phone');return;}
     const agentDoc=ALL_AGENTS.find(a=>a.name===name && a.role==='opener');
     const openerEmail=agentDoc?.email||name.toLowerCase()+'@pcc.com';
     const comm=openerCommForNext(type);
@@ -1196,7 +1230,10 @@
     const monthly=document.getElementById('adm-cl-monthly').value;
     const firstpay=document.getElementById('adm-cl-firstpay').value;
     const closing=document.getElementById('adm-cl-closing').value;
+    clearPhoneAlert('adm-cl-phone');
     if(!name||!opener||!dealType||!client||!phone||!debt||!monthly){toast('Please complete all required fields.','error');return;}
+    if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
+    if(phoneExistsInCategory(phone,'closer')){showPhoneAlert('adm-cl-phone');return;}
     const base=closerBaseComm(monthly);
     const dateStr=closing?closing.split('T')[0]:new Date().toISOString().split('T')[0];
     const existing=await countCloserDealsOnDate(dateStr),mult=existing>=1?2:1,comm=base*mult;
@@ -2092,8 +2129,11 @@
   window.handleTransferType=function(){const type=document.getElementById('op-type').value;document.getElementById('op-closer-wrap').style.display=CLOSED_TYPES.includes(type)?'block':'none';updateOpenerCommPreview();};
   window.submitOpener=async function(){
     const name=document.getElementById('op-name').value,type=document.getElementById('op-type').value,date=document.getElementById('op-date').value,phone=document.getElementById('op-phone').value.trim(),closer=document.getElementById('op-closer').value;
+    clearPhoneAlert('op-phone');
     if(!name||!type||!date||!phone){toast('Please complete all required fields.','error');return;}
     if(CLOSED_TYPES.includes(type)&&!closer){toast('Please select a closer for this transfer type.','error');return;}
+    if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
+    if(phoneExistsInCategory(phone,'opener')){showPhoneAlert('op-phone');return;}
     const comm=openerCommForNext(type);
     const btn=document.getElementById('op-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
     try{await addDoc(collection(db,'transfers'),{name,type,date,phone,closer:closer||null,comm,status:'Pending',openerEmail:currentUser.email,createdAt:new Date().toISOString()});['op-date','op-phone'].forEach(id=>document.getElementById(id).value='');document.getElementById('op-type').value='';document.getElementById('op-closer').value='';document.getElementById('op-closer-wrap').style.display='none';document.getElementById('op-comm-preview').textContent='—';document.getElementById('op-tier-label').textContent='';updateOpenerCommPreview();toast('Transfer submitted!','success');}
@@ -2114,7 +2154,10 @@
   };
   window.submitCloser=async function(){
     const name=document.getElementById('cl-name').value,opener=document.getElementById('cl-opener').value,dealType=document.getElementById('cl-deal-type').value,client=document.getElementById('cl-client').value.trim(),phone=document.getElementById('cl-phone').value.trim(),debt=document.getElementById('cl-debt').value,monthly=document.getElementById('cl-monthly').value,firstpay=document.getElementById('cl-firstpay').value,closing=document.getElementById('cl-closing').value;
+    clearPhoneAlert('cl-phone');
     if(!name||!opener||!dealType||!client||!phone||!debt||!monthly){toast('Please complete all required fields.','error');return;}
+    if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
+    if(phoneExistsInCategory(phone,'closer')){showPhoneAlert('cl-phone');return;}
     const base=closerBaseComm(monthly),dateStr=closing?closing.split('T')[0]:new Date().toISOString().split('T')[0];
     const existing=await countCloserDealsOnDate(dateStr),mult=existing>=1?2:1,comm=base*mult;
     const btn=document.getElementById('cl-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
@@ -2158,7 +2201,10 @@
   };
   window.submitMtgTransfer=async function(){
     const agent=document.getElementById('mtg-agent').value,phone=document.getElementById('mtg-phone').value.trim(),date=document.getElementById('mtg-date').value;
+    clearPhoneAlert('mtg-phone');
     if(!agent||!phone||!date){toast('Please complete all fields.','error');return;}
+    if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
+    if(phoneExistsInCategory(phone,'mortgage')){showPhoneAlert('mtg-phone');return;}
     const btn=document.getElementById('mtg-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
     // Mortgage agents submit only qualified transfers — no admin review
     // step. The transfer counts the instant it's submitted: it's written
@@ -3309,7 +3355,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
       </div>
       <div class="comm-preview-card"><div class="comm-preview-label">Commission for this transfer</div><div class="comm-preview-amount" id="adm-op-comm-preview">—</div></div>
       <div class="field" id="adm-op-closer-wrap" style="display:none"><label>Assign to Closer</label><select id="adm-op-closer"><option value="">Select closer…</option><option value="Outsource">Outsource</option></select></div>
-      <div class="field-row"><div class="field"><label>Transfer Date</label><input id="adm-op-date" type="date"/></div><div class="field"><label>Client Phone</label><input id="adm-op-phone" placeholder="+1 (000) 000-0000"/></div></div>
+      <div class="field-row"><div class="field"><label>Transfer Date</label><input id="adm-op-date" type="date"/></div><div class="field"><label>Client Phone</label><input id="adm-op-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('adm-op-phone')"/><div id="adm-op-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div></div>
       <button class="btn-form" id="adm-op-submit-btn" onclick="adminSubmitOpener()">Submit Transfer</button>
     </div>
 
@@ -3320,7 +3366,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
         <div class="field"><label>Opener Name</label><select id="adm-cl-opener"><option value="">Select opener…</option><option value="N/A">N/A</option></select></div>
       </div>
       <div class="field"><label>Type of Deal</label><select id="adm-cl-deal-type"><option value="">Select deal type…</option><option value="Debt Settlement">Debt Settlement</option><option value="Debt Validation">Debt Validation</option></select></div>
-      <div class="field-row"><div class="field"><label>Client Name</label><input id="adm-cl-client" placeholder="Full name"/></div><div class="field"><label>Client Phone</label><input id="adm-cl-phone" placeholder="Phone number"/></div></div>
+      <div class="field-row"><div class="field"><label>Client Name</label><input id="adm-cl-client" placeholder="Full name"/></div><div class="field"><label>Client Phone</label><input id="adm-cl-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('adm-cl-phone')"/><div id="adm-cl-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div></div>
       <div class="field-row"><div class="field"><label>Amount of Debt ($)</label><input id="adm-cl-debt" type="number" placeholder="0.00"/></div><div class="field"><label>Monthly Payment ($)</label><input id="adm-cl-monthly" type="number" placeholder="0.00" oninput="admAutoCommission()"/></div></div>
       <div class="field-row"><div class="field"><label>First Payment Date</label><input id="adm-cl-firstpay" type="date"/></div><div class="field"><label>Closing Date &amp; Time</label><input id="adm-cl-closing" type="datetime-local" onchange="admAutoCommission()"/></div></div>
       <div class="field"><label>Estimated Commission</label><input id="adm-cl-commission" readonly placeholder="Fill in monthly payment to calculate"/></div>
@@ -3331,7 +3377,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
     <!-- MORTGAGE FORM -->
     <div id="adm-submit-mtg-form" style="display:none">
       <div class="field"><label>Agent Name</label><select id="adm-mtg-name"><option value="">Select agent…</option></select></div>
-      <div class="field"><label>Client Phone</label><input type="text" id="adm-mtg-sub-phone" placeholder="e.g. (555) 123-4567"/></div>
+      <div class="field"><label>Client Phone</label><input type="text" id="adm-mtg-sub-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('adm-mtg-sub-phone')"/><div id="adm-mtg-sub-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div>
       <div class="field"><label>Date</label><input type="date" id="adm-mtg-sub-date"/></div>
       <div class="fp-note" style="margin-top:8px;margin-bottom:12px"><strong>Pending Review</strong>This submission will land as Pending for admin approval. Commission will be calculated at time of approval based on the agent's sequence number.</div>
       <button class="btn-form btn-form-teal" id="adm-mtg-submit-btn" onclick="adminSubmitMortgage()">Submit Transfer</button>
@@ -3762,7 +3808,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
           </div>
           <div class="comm-preview-card"><div class="comm-preview-label">Commission for this transfer</div><div class="comm-preview-amount" id="op-comm-preview">—</div><div class="comm-preview-sub" id="op-tier-label"></div></div>
           <div class="field" id="op-closer-wrap" style="display:none"><label>Assign to Closer</label><select id="op-closer"><option value="">Select closer…</option><option value="Outsource">Outsource</option></select></div>
-          <div class="field-row"><div class="field"><label>Transfer Date</label><input id="op-date" type="date"/></div><div class="field"><label>Client Phone</label><input id="op-phone" placeholder="+1 (000) 000-0000"/></div></div>
+          <div class="field-row"><div class="field"><label>Transfer Date</label><input id="op-date" type="date"/></div><div class="field"><label>Client Phone</label><input id="op-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('op-phone')"/><div id="op-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div></div>
           <button class="btn-form" id="op-submit-btn" onclick="submitOpener()">Submit Transfer</button>
         </div>
         <div class="comm-table-card">
@@ -3821,7 +3867,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
             <div class="field"><label>Opener Name</label><select id="cl-opener"><option value="">Select opener…</option><option value="N/A">N/A</option></select></div>
           </div>
           <div class="field"><label>Type of Deal</label><select id="cl-deal-type"><option value="">Select deal type…</option><option value="Debt Settlement">Debt Settlement</option><option value="Debt Validation">Debt Validation</option></select></div>
-          <div class="field-row"><div class="field"><label>Client Name</label><input id="cl-client" placeholder="Full name"/></div><div class="field"><label>Client Phone</label><input id="cl-phone" placeholder="Phone number"/></div></div>
+          <div class="field-row"><div class="field"><label>Client Name</label><input id="cl-client" placeholder="Full name"/></div><div class="field"><label>Client Phone</label><input id="cl-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('cl-phone')"/><div id="cl-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div></div>
           <div class="field-row"><div class="field"><label>Amount of Debt ($)</label><input id="cl-debt" type="number" placeholder="0.00"/></div><div class="field"><label>Monthly Payment ($)</label><input id="cl-monthly" type="number" placeholder="0.00" oninput="autoCommission()"/></div></div>
           <div class="field-row"><div class="field"><label>First Payment Date</label><input id="cl-firstpay" type="date"/></div><div class="field"><label>Closing Date &amp; Time</label><input id="cl-closing" type="datetime-local" onchange="autoCommission()"/></div></div>
           <div class="field"><label>Estimated Commission (admin will finalize)</label><input id="cl-commission" readonly placeholder="Fill in monthly payment to calculate"/></div>
@@ -3863,7 +3909,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
         <div class="form-card">
           <div class="form-card-title">Transfer Details</div>
           <div class="field"><label>Agent Name</label><select id="mtg-agent"><option value="">Select agent…</option></select></div>
-          <div class="field"><label>Client Phone</label><input type="text" id="mtg-phone" placeholder="e.g. (555) 123-4567"/></div>
+          <div class="field"><label>Client Phone</label><input type="text" id="mtg-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('mtg-phone')"/><div id="mtg-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div>
           <div class="field"><label>Date</label><input type="date" id="mtg-date"/></div>
           <button class="btn-form btn-form-teal" id="mtg-submit-btn" onclick="submitMtgTransfer()">Submit Transfer</button>
         </div>
