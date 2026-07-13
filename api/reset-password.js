@@ -60,11 +60,25 @@ module.exports = async (req, res) => {
       await admin.auth().updateUser(targetUid, { password: newPassword });
     } else {
       if (!targetData.email) return res.status(400).json({ error: 'Agent has no email on file' });
-      const newUser = await admin.auth().createUser({
-        email: targetData.email,
-        password: newPassword,
-      });
-      targetUid = newUser.uid;
+      try {
+        const newUser = await admin.auth().createUser({
+          email: targetData.email,
+          password: newPassword,
+        });
+        targetUid = newUser.uid;
+      } catch (createErr) {
+        // An Auth account for this email already exists (e.g. created
+        // earlier, or created outside this flow) but was never linked
+        // back to the agent's Firestore doc. Look it up and use it
+        // instead of failing.
+        if (createErr.code === 'auth/email-already-exists') {
+          const existingUser = await admin.auth().getUserByEmail(targetData.email);
+          targetUid = existingUser.uid;
+          await admin.auth().updateUser(targetUid, { password: newPassword });
+        } else {
+          throw createErr;
+        }
+      }
       await targetRef.update({ uid: targetUid });
     }
 
