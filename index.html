@@ -1600,7 +1600,7 @@
         </div>
         <div class="ar-actions" style="display:flex;justify-content:flex-end;gap:8px">
           <button class="btn-filter-clear" onclick="openEditAgent('${a.id}')">✎ Edit</button>
-          ${a.role!=='admin' ? `<button class="btn-filter-clear" onclick="resetAgentPassword('${a.id}')">🔑 Reset Password</button>` : ''}
+          ${a.role!=='admin' ? `<button class="btn-filter-clear" onclick="openResetPasswordModal('${a.id}')">🔑 Reset Password</button>` : ''}
           ${inactive
             ? `<button class="btn-approve" style="flex:none;padding:8px 16px" onclick="reactivateAgent('${a.id}')">↩ Reactivate</button>`
             : `<button class="btn-decline" style="flex:none;padding:8px 16px" onclick="deactivateAgent('${a.id}')">🚫 Deactivate</button>`}
@@ -1697,31 +1697,71 @@
     catch(e){ toast('Failed to reactivate agent.','error'); console.error(e); }
   };
 
-  // ── PASSWORD RESET (console-reset workflow, admin-only) ──
+  // ── PASSWORD RESET (guided console-assisted workflow, admin-only) ──
   // Agent emails are dummy addresses, so Firebase's built-in "forgot
-  // password" email flow is a dead end here. This is the two-step
-  // replacement:
-  //   1. Admin manually sets a new temporary password for the agent's
-  //      account (see the delete-and-recreate-with-same-email approach for
-  //      existing accounts, since Console alone can't set another user's
-  //      password directly without Admin SDK access).
-  //   2. Admin clicks this button, which sets users/{uid}.mustChangePassword
-  //      = true — the exact same flag the app already checks on every
-  //      login (handleAuthState) to show the force-password-change screen.
-  // No new Firebase Auth accounts are created, no historical deal/transfer/
-  // mortgage data is touched — those are all keyed by email, never uid.
-  // Requires the agent to have logged in at least once already (so their
-  // uid was captured onto their agents doc — see handleAuthState).
-  window.resetAgentPassword=async function(id){
+  // password" email flow is a dead end here, and this app has no backend
+  // (no Cloud Functions / Admin SDK), so there is no way to change another
+  // account's password purely from client code — that's a Firebase Auth
+  // security boundary, not something we can code around. The one
+  // unavoidable manual step is deleting + recreating that ONE Auth user in
+  // the Firebase Console with the same email + a new password. Everything
+  // else is automatic:
+  //   • The agent's Firestore doc is keyed by docId/email, never uid, so no
+  //     historical deals/transfers/mortgage records are touched.
+  //   • The moment they log in with the new account, handleAuthState's
+  //     existing uid auto-heal (`mapped.uid!==fbUser.uid` → updateDoc)
+  //     re-links their agents doc to the new uid automatically.
+  //   • A recreated account has no matching users/{uid} doc yet, so
+  //     handleAuthState's existing `!ud.exists() → mustChange=true` logic
+  //     already forces them to set their own password on first login —
+  //     no extra flag-writing needed here.
+  // This modal's job is just to make the manual part fast: generate a
+  // strong password, one-click copy for the email/password, and a direct
+  // link to the right Console page.
+  function genTempPassword(len=10){
+    const chars='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%';
+    const arr=new Uint32Array(len); crypto.getRandomValues(arr);
+    let out=''; for(let i=0;i<len;i++) out+=chars[arr[i]%chars.length];
+    return out;
+  }
+  window.regenTempPassword=function(){ document.getElementById('pw-new-password').value=genTempPassword(); };
+  window.copyField=function(id,btn){
+    const el=document.getElementById(id);
+    const done=()=>{ const old=btn.textContent; btn.textContent='Copied!'; setTimeout(()=>{btn.textContent=old;},1200); };
+    if(navigator.clipboard && window.isSecureContext){
+      navigator.clipboard.writeText(el.value).then(done).catch(()=>{ el.select(); document.execCommand('copy'); done(); });
+    } else { el.select(); document.execCommand('copy'); done(); }
+  };
+  window._pwResetAgentId=null;
+  window.openResetPasswordModal=function(id){
     const a=ALL_AGENTS.find(x=>x.id===id); if(!a) return;
-    if(!a.uid){
-      toast(`${displayName(a.name)} hasn't logged in yet, so there's no account to flag. Reset their password once they've logged in at least once.`,'error');
-      return;
-    }
+    window._pwResetAgentId=id;
+    document.getElementById('pw-agent-name').textContent=displayName(a.name);
+    document.getElementById('pw-agent-email').value=a.email||'';
+    document.getElementById('pw-new-password').value=genTempPassword();
+    document.getElementById('pw-console-link').href=`https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/users`;
+    document.getElementById('pw-steps').innerHTML = a.uid
+      ? `1. Open <a href="#" id="pw-console-link2" target="_blank" style="color:var(--accent2)">Authentication → Users</a> in the Firebase Console<br/>2. Find <strong>${a.email}</strong>, delete that row<br/>3. Click "Add user", paste the email and new password below<br/>4. Click Done — they'll be asked to set their own password the moment they log back in`
+      : `1. Open <a href="#" id="pw-console-link2" target="_blank" style="color:var(--accent2)">Authentication → Users</a> in the Firebase Console<br/>2. Click "Add user" — ${displayName(a.name)} hasn't logged in yet, so there's no existing row to delete<br/>3. Paste the email and new password below<br/>4. Click Done — they'll be asked to set their own password on first login`;
+    const link2=document.getElementById('pw-console-link2'); if(link2) link2.href=document.getElementById('pw-console-link').href;
+    document.getElementById('pw-modal-error').style.display='none';
+    document.getElementById('pw-modal-overlay').classList.add('open');
+  };
+  window.closePasswordModal=function(){
+    document.getElementById('pw-modal-overlay').classList.remove('open');
+    window._pwResetAgentId=null;
+  };
+  window.confirmPasswordReset=async function(){
+    const id=window._pwResetAgentId;
+    const a=ALL_AGENTS.find(x=>x.id===id); if(!a){ closePasswordModal(); return; }
+    const btn=document.getElementById('pw-confirm-btn'); btn.disabled=true; btn.textContent='Saving…';
     try{
-      await setDoc(doc(db,'users',a.uid),{mustChangePassword:true},{merge:true});
-      toast(`${displayName(a.name)} will be prompted to set a new password on next login. Remember to also set their new temporary password.`,'success');
-    }catch(e){ toast('Failed to flag password reset.','error'); console.error(e); }
+      // Purely informational audit trail — never stores the password itself.
+      await updateDoc(doc(db,'agents',id),{lastPasswordResetAt:new Date().toISOString()}).catch(()=>{});
+      toast(`Done. Once ${displayName(a.name)} logs in with the new password, everything reconnects automatically and they'll be prompted to choose their own.`,'success');
+      closePasswordModal();
+    }catch(e){ toast('Something went wrong closing this out, but if you already updated it in the Console, the new password is live.','error'); console.error(e); }
+    btn.disabled=false; btn.textContent="I've updated it in Firebase — Done";
   };
 
   function ccBuildRoster(stats,kind,periodKey){
@@ -3910,6 +3950,38 @@ table.ref-table{width:100%;border-collapse:collapse;}
           <div class="field"><label>Commission Structure</label><input type="text" id="ag-comm-structure" placeholder="e.g. Standard Closer Tiers" oninput="this.dataset.touched='1'"/></div>
           <div class="login-error" id="ag-modal-error" style="display:none"></div>
           <button class="btn-form" id="ag-save-btn" onclick="saveAgent()">Save Agent</button>
+        </div>
+      </div>
+
+      <!-- ══ RESET PASSWORD MODAL ══ -->
+      <div id="pw-modal-overlay" class="ap-overlay">
+        <div class="ap-box" style="max-width:480px">
+          <button class="ap-close" onclick="closePasswordModal()">✕</button>
+          <div class="form-card-title">Reset Password — <span id="pw-agent-name"></span></div>
+          <div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:14px">
+            Firebase doesn't allow one account to change another account's password directly, so this takes one quick manual step in the Firebase Console — everything else (reconnecting their record, forcing them to pick their own password) happens automatically the next time they log in.
+          </div>
+          <div class="field">
+            <label>Agent Email</label>
+            <div style="display:flex;gap:8px">
+              <input type="text" id="pw-agent-email" readonly style="flex:1"/>
+              <button class="btn-filter-clear" onclick="copyField('pw-agent-email',this)">Copy</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>New Temporary Password</label>
+            <div style="display:flex;gap:8px">
+              <input type="text" id="pw-new-password" style="flex:1"/>
+              <button class="btn-filter-clear" onclick="copyField('pw-new-password',this)">Copy</button>
+            </div>
+            <div style="margin-top:6px"><button class="btn-filter-clear" onclick="regenTempPassword()">🎲 Generate a different one</button></div>
+          </div>
+          <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:12px 14px;margin:14px 0;font-size:12px;color:var(--text2);line-height:1.9">
+            <strong style="color:var(--text)">Steps:</strong><br/>
+            <span id="pw-steps">1. Open <a href="#" id="pw-console-link" target="_blank" style="color:var(--accent2)">Authentication → Users</a> in the Firebase Console<br/>2. Find the email above, delete that row<br/>3. Click "Add user", paste the email and new password above<br/>4. Click Done below</span>
+          </div>
+          <div class="login-error" id="pw-modal-error" style="display:none"></div>
+          <button class="btn-form" id="pw-confirm-btn" onclick="confirmPasswordReset()">I've updated it in Firebase — Done</button>
         </div>
       </div>
 
