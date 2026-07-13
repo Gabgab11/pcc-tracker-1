@@ -1904,11 +1904,22 @@
       <div class="bar-row"><div class="bar-label-wrap"><span class="bar-name">${ccMonthLabel(k)}</span><span class="bar-val">$${r.monthly[k].total.toLocaleString()} · ${r.monthly[k].count}</span></div><div class="bar-track"><div class="bar-fill" style="width:${Math.round((r.monthly[k].total/maxMonth)*100)}%"></div></div></div>`
     ).join('') || '<div class="empty-state">No approved months in this range.</div>';
 
-    const recordRows = recordsSorted.slice(0,8).map(rec=>{
+    // Show every record in the selected range — never silently truncate.
+    // The first INITIAL_VISIBLE rows render normally; anything beyond that
+    // is still in the DOM (so no data is lost or omitted), just
+    // display:none until "Show all" is clicked, which reveals them via
+    // toggleApRecordRows() with no extra fetch or re-render needed.
+    const INITIAL_VISIBLE = 8;
+    const totalRecordCount = recordsSorted.length;
+    const recordRows = recordsSorted.map((rec,i)=>{
       const label = kind==='closer' ? (rec.client||'—') : kind==='opener' ? (displayName(rec.name)+' · '+(rec.type||'—')) : (rec.phone||'—');
       const phone = rec.phone||'—';
-      return `<tr><td>${fmtDate(rec.createdAt)}</td><td>${label}</td><td>${phone}</td><td><span class="status-badge ${rec.status==='Approved'?'badge-green':rec.status==='Declined'?'badge-red':'badge-amber'}">${rec.status||'Pending'}</span></td><td class="ref-amt">$${rec.comm||0}</td></tr>`;
+      const extra = i>=INITIAL_VISIBLE;
+      return `<tr${extra?' class="ap-row-extra" style="display:none"':''}><td>${fmtDate(rec.createdAt)}</td><td>${label}</td><td>${phone}</td><td><span class="status-badge ${rec.status==='Approved'?'badge-green':rec.status==='Declined'?'badge-red':'badge-amber'}">${rec.status||'Pending'}</span></td><td class="ref-amt">$${rec.comm||0}</td></tr>`;
     }).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--text3)">No records in this range.</td></tr>`;
+    const showMoreBtn = totalRecordCount>INITIAL_VISIBLE
+      ? `<button class="ap-show-more-btn" id="ap-show-more-btn" data-total="${totalRecordCount}" data-visible="${INITIAL_VISIBLE}" onclick="toggleApRecordRows()">Show all ${totalRecordCount} →</button>`
+      : '';
 
     const dn=displayName(r.name);
     return `
@@ -1956,11 +1967,20 @@
         ${chartRows}
       </div>
       <div class="panel-card">
-        <div class="panel-card-title">Recent ${cfg.label}s <span style="color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">· ${activeFilterLabel}</span></div>
+        <div class="panel-card-title"><span>Recent ${cfg.label}s <span style="color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">· ${activeFilterLabel}</span></span><span class="ap-record-count">${totalRecordCount} total</span></div>
         <table class="ref-table"><thead><tr><th>Date</th><th>${kind==='closer'?'Client':kind==='opener'?'Lead'  :'Client'}</th><th>Phone</th><th>Status</th><th>Commission</th></tr></thead>
         <tbody>${recordRows}</tbody></table>
+        ${showMoreBtn}
       </div>`;
   }
+  window.toggleApRecordRows=function(){
+    const btn=document.getElementById('ap-show-more-btn'); if(!btn) return;
+    const total=Number(btn.dataset.total), visible=Number(btn.dataset.visible);
+    const extras=document.querySelectorAll('.ap-row-extra');
+    const nowHidden = extras.length>0 && extras[0].style.display==='none';
+    extras.forEach(r=>{ r.style.display = nowHidden ? 'table-row' : 'none'; });
+    btn.textContent = nowHidden ? 'Show fewer ↑' : `Show all ${total} →`;
+  };
 
   // ── Edit Deal modal ──
   window._editingDealId=null;
@@ -3141,6 +3161,9 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .ref-table td{font-size:12px;color:var(--text);padding:8px 16px;border-top:1px solid var(--border);}
 .ref-table .ref-amt{color:var(--green);font-weight:600;}
 .ref-table .ref-section td{background:rgba(79,126,255,.04);color:var(--accent2);font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:6px 16px;}
+.ap-record-count{font-size:10px;font-weight:700;color:var(--accent2);background:rgba(79,126,255,.1);border:1px solid rgba(79,126,255,.2);padding:2px 8px;border-radius:20px;text-transform:none;letter-spacing:0;}
+.ap-show-more-btn{display:block;width:100%;margin-top:10px;padding:9px;border:1px solid var(--border);border-radius:7px;background:rgba(79,126,255,.06);color:var(--accent2);font-family:'Inter',sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:background .15s;}
+.ap-show-more-btn:hover{background:rgba(79,126,255,.14);}
 
 /* COMMISSION STRUCTURE */
 .cc-period-banner{background:linear-gradient(135deg,rgba(79,126,255,.1),rgba(139,111,255,.06));border:1px solid rgba(79,126,255,.2);border-radius:12px;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px;}
