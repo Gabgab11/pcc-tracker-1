@@ -1739,11 +1739,6 @@
     document.getElementById('pw-agent-name').textContent=displayName(a.name);
     document.getElementById('pw-agent-email').value=a.email||'';
     document.getElementById('pw-new-password').value=genTempPassword();
-    document.getElementById('pw-console-link').href=`https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/users`;
-    document.getElementById('pw-steps').innerHTML = a.uid
-      ? `1. Open <a href="#" id="pw-console-link2" target="_blank" style="color:var(--accent2)">Authentication → Users</a> in the Firebase Console<br/>2. Find <strong>${a.email}</strong>, delete that row<br/>3. Click "Add user", paste the email and new password below<br/>4. Click Done — they'll be asked to set their own password the moment they log back in`
-      : `1. Open <a href="#" id="pw-console-link2" target="_blank" style="color:var(--accent2)">Authentication → Users</a> in the Firebase Console<br/>2. Click "Add user" — ${displayName(a.name)} hasn't logged in yet, so there's no existing row to delete<br/>3. Paste the email and new password below<br/>4. Click Done — they'll be asked to set their own password on first login`;
-    const link2=document.getElementById('pw-console-link2'); if(link2) link2.href=document.getElementById('pw-console-link').href;
     document.getElementById('pw-modal-error').style.display='none';
     document.getElementById('pw-modal-overlay').classList.add('open');
   };
@@ -1751,17 +1746,35 @@
     document.getElementById('pw-modal-overlay').classList.remove('open');
     window._pwResetAgentId=null;
   };
+  // ── PASSWORD RESET (direct, via Vercel serverless function + Firebase
+  // Admin SDK — see /api/reset-password.js). No more manual Console step:
+  // the server verifies the caller is an admin, then changes the target
+  // agent's password (or creates their Auth account if they've never
+  // logged in yet) and flags mustChangePassword so they set their own
+  // password on next login, same as before.
   window.confirmPasswordReset=async function(){
     const id=window._pwResetAgentId;
     const a=ALL_AGENTS.find(x=>x.id===id); if(!a){ closePasswordModal(); return; }
+    const newPassword=document.getElementById('pw-new-password').value;
+    const errEl=document.getElementById('pw-modal-error');
+    errEl.style.display='none';
+    if(!newPassword || newPassword.length<8){
+      showError(errEl,'Password must be at least 8 characters.'); return;
+    }
     const btn=document.getElementById('pw-confirm-btn'); btn.disabled=true; btn.textContent='Saving…';
     try{
-      // Purely informational audit trail — never stores the password itself.
-      await updateDoc(doc(db,'agents',id),{lastPasswordResetAt:new Date().toISOString()}).catch(()=>{});
-      toast(`Done. Once ${displayName(a.name)} logs in with the new password, everything reconnects automatically and they'll be prompted to choose their own.`,'success');
+      const idToken = await auth.currentUser.getIdToken();
+      const resp = await fetch('/api/reset-password', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'Authorization':`Bearer ${idToken}` },
+        body: JSON.stringify({ targetAgentId:id, newPassword })
+      });
+      const data = await resp.json().catch(()=>({}));
+      if(!resp.ok) throw new Error(data.error||`Request failed (${resp.status})`);
+      toast(`Done. ${displayName(a.name)}'s password has been changed — they'll be prompted to set their own on next login.`,'success');
       closePasswordModal();
-    }catch(e){ toast('Something went wrong closing this out, but if you already updated it in the Console, the new password is live.','error'); console.error(e); }
-    btn.disabled=false; btn.textContent="I've updated it in Firebase — Done";
+    }catch(e){ showError(errEl,'Failed: '+e.message); console.error(e); }
+    btn.disabled=false; btn.textContent='Change Password';
   };
 
   function ccBuildRoster(stats,kind,periodKey){
@@ -3959,7 +3972,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
           <button class="ap-close" onclick="closePasswordModal()">✕</button>
           <div class="form-card-title">Reset Password — <span id="pw-agent-name"></span></div>
           <div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:14px">
-            Firebase doesn't allow one account to change another account's password directly, so this takes one quick manual step in the Firebase Console — everything else (reconnecting their record, forcing them to pick their own password) happens automatically the next time they log in.
+            This changes their password directly — no Firebase Console step needed. They'll be prompted to set their own password the next time they log in.
           </div>
           <div class="field">
             <label>Agent Email</label>
@@ -3976,12 +3989,8 @@ table.ref-table{width:100%;border-collapse:collapse;}
             </div>
             <div style="margin-top:6px"><button class="btn-filter-clear" onclick="regenTempPassword()">🎲 Generate a different one</button></div>
           </div>
-          <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:12px 14px;margin:14px 0;font-size:12px;color:var(--text2);line-height:1.9">
-            <strong style="color:var(--text)">Steps:</strong><br/>
-            <span id="pw-steps">1. Open <a href="#" id="pw-console-link" target="_blank" style="color:var(--accent2)">Authentication → Users</a> in the Firebase Console<br/>2. Find the email above, delete that row<br/>3. Click "Add user", paste the email and new password above<br/>4. Click Done below</span>
-          </div>
           <div class="login-error" id="pw-modal-error" style="display:none"></div>
-          <button class="btn-form" id="pw-confirm-btn" onclick="confirmPasswordReset()">I've updated it in Firebase — Done</button>
+          <button class="btn-form" id="pw-confirm-btn" onclick="confirmPasswordReset()">Change Password</button>
         </div>
       </div>
 
