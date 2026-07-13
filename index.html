@@ -147,7 +147,7 @@
   }
 
   const CLOSED_TYPES  = ['1st Close','2nd Close','3rd Close'];
-  const FLAT_COMM     = { PccSub10:1, PccAbove10:2, TaxAbove10:5, TaxBelow10:1, 'Student Loan':2 };
+  const FLAT_COMM     = { PccSub10:1, PccAbove10:2.5, TaxAbove10:5, TaxBelow10:1, 'Student Loan':2 };
   const TIER_RATES    = [5, 7.50, 10];
 
   // ── MORTGAGE COMMISSION ENGINE ──
@@ -1996,10 +1996,16 @@
     document.getElementById('ed-closing').value=d.closing||'';
     document.getElementById('ed-comm').value=d.comm||0;
     document.getElementById('ed-modal-error').style.display='none';
+    const edActions=document.getElementById('ed-actions-container');
+    if(edActions){
+      const isReadOnly=currentUser?.role==='readonly';
+      edActions.innerHTML = `<div style="margin-top:6px"><div class="panel-card-title" style="margin-bottom:8px">Review</div>${dealActionsHtml(d,isReadOnly)}</div>`;
+    }
     document.getElementById('ed-modal-overlay').classList.add('open');
   };
   window.closeEditDealModal=function(){
     document.getElementById('ed-modal-overlay').classList.remove('open');
+    const edActions=document.getElementById('ed-actions-container'); if(edActions) edActions.innerHTML='';
     window._editingDealId=null;
   };
   window.saveEditDeal=async function(){
@@ -2034,10 +2040,16 @@
     document.getElementById('et-date').value=(t.date||'').slice(0,10);
     document.getElementById('et-comm').value=t.comm||0;
     document.getElementById('et-modal-error').style.display='none';
+    const etActions=document.getElementById('et-actions-container');
+    if(etActions){
+      const isReadOnly=currentUser?.role==='readonly';
+      etActions.innerHTML = `<div style="margin-top:6px"><div class="panel-card-title" style="margin-bottom:8px">Review</div>${xferActionsHtml(t,isReadOnly)}</div>`;
+    }
     document.getElementById('et-modal-overlay').classList.add('open');
   };
   window.closeEditTransferModal=function(){
     document.getElementById('et-modal-overlay').classList.remove('open');
+    const etActions=document.getElementById('et-actions-container'); if(etActions) etActions.innerHTML='';
     window._editingXferId=null;
   };
   window.saveEditTransfer=async function(){
@@ -2123,7 +2135,6 @@
         <div class="admin-record-top"><div class="ar-left"><span class="ar-name">${displayName(d.name)} → ${d.client||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(d.createdAt)}</span>${buildEditBtn('deal',d.id)}${buildDeleteBtn('deal',d.id,(d.client||displayName(d.name)||'this deal'))}</div></div>
         <div class="ar-grid"><div class="ar-field"><span class="ar-key">Opener</span><span class="ar-val">${d.opener?displayName(d.opener):'—'}</span></div><div class="ar-field"><span class="ar-key">Deal Type</span><span class="ar-val">${d.dealType||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${d.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Monthly</span><span class="ar-val">$${d.monthly||'—'}</span></div><div class="ar-field"><span class="ar-key">First Pay</span><span class="ar-val">${fmtDate(d.firstpay)}</span></div><div class="ar-field"><span class="ar-key">Closing</span><span class="ar-val">${fmtDate(d.closing)}</span></div><div class="ar-field"><span class="ar-key">Debt</span><span class="ar-val">$${Number(d.debt||0).toLocaleString()}</span></div></div>
         ${d.status!=='Pending'?`<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${d.comm||0}</strong></div>`:''}
-        ${dealActionsHtml(d,isReadOnly)}
       </div>`).join('');
       if(countEl&&role==='Closer')countEl.textContent=baseDeal.length+' deal'+(baseDeal.length!==1?'s':'');
     }
@@ -2132,7 +2143,6 @@
         <div class="admin-record-top"><div class="ar-left"><span class="ar-name">${displayName(t.name)||'—'} — ${t.type||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(t.date||t.createdAt)}</span>${buildEditBtn('transfer',t.id)}${buildDeleteBtn('transfer',t.id,(displayName(t.name)||'this transfer'))}</div></div>
         <div class="ar-grid"><div class="ar-field"><span class="ar-key">Lead Source</span><span class="ar-val">${t.type||'—'}</span></div>${t.closer?`<div class="ar-field"><span class="ar-key">Closer</span><span class="ar-val">${displayName(t.closer)}</span></div>`:''}<div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${t.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${t.comm||0}</span></div></div>
         ${t.status!=='Pending'?`<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${t.comm||0}</strong></div>`:''}
-        ${xferActionsHtml(t,isReadOnly)}
       </div>`).join('');
       if(countEl&&role==='Opener')countEl.textContent=baseXfer.length+' transfer'+(baseXfer.length!==1?'s':'');
     }
@@ -3533,7 +3543,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
         <select id="adm-op-type" onchange="handleAdmTransferType()">
           <option value="">Select lead source…</option>
           <optgroup label="Closed Deals (Tiered)"><option value="1st Close">1st Close — $5</option><option value="2nd Close">2nd Close — $7.50</option><option value="3rd Close">3rd+ Close — $10</option></optgroup>
-          <optgroup label="Flat Rate"><option value="PccSub10">PCC Sub 10K — $1</option><option value="PccAbove10">PCC Above 10K — $2</option><option value="TaxAbove10">Tax Above 10K — $5</option><option value="TaxBelow10">Tax Below 10K — $1</option><option value="Student Loan">Student Loan — $2</option></optgroup>
+          <optgroup label="Flat Rate"><option value="PccSub10">PCC Sub 10K — $1</option><option value="PccAbove10">PCC Above 10K — $2.50</option><option value="TaxAbove10">Tax Above 10K — $5</option><option value="TaxBelow10">Tax Below 10K — $1</option><option value="Student Loan">Student Loan — $2</option></optgroup>
         </select>
       </div>
       <div class="comm-preview-card"><div class="comm-preview-label">Commission for this transfer</div><div class="comm-preview-amount" id="adm-op-comm-preview">—</div></div>
@@ -3855,6 +3865,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
           <div class="field"><label>Commission ($)</label><input type="number" id="ed-comm" placeholder="0.00"/></div>
           <div class="login-error" id="ed-modal-error" style="display:none"></div>
           <button class="btn-form" id="ed-save-btn" onclick="saveEditDeal()">Save Changes</button>
+          <div id="ed-actions-container"></div>
         </div>
       </div>
 
@@ -3867,7 +3878,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
             <select id="et-type">
               <option value="">Select lead source…</option>
               <optgroup label="Closed Deals (Tiered)"><option value="1st Close">1st Close — $5</option><option value="2nd Close">2nd Close — $7.50</option><option value="3rd Close">3rd+ Close — $10</option></optgroup>
-              <optgroup label="Flat Rate"><option value="PccSub10">PCC Sub 10K — $1</option><option value="PccAbove10">PCC Above 10K — $2</option><option value="TaxAbove10">Tax Above 10K — $5</option><option value="TaxBelow10">Tax Below 10K — $1</option><option value="Student Loan">Student Loan — $2</option></optgroup>
+              <optgroup label="Flat Rate"><option value="PccSub10">PCC Sub 10K — $1</option><option value="PccAbove10">PCC Above 10K — $2.50</option><option value="TaxAbove10">Tax Above 10K — $5</option><option value="TaxBelow10">Tax Below 10K — $1</option><option value="Student Loan">Student Loan — $2</option></optgroup>
             </select>
           </div>
           <div class="field"><label>Assign to Closer (optional)</label><input type="text" id="et-closer" placeholder="Closer name or Outsource"/></div>
@@ -3875,6 +3886,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
           <div class="field"><label>Commission ($)</label><input type="number" id="et-comm" placeholder="0.00"/></div>
           <div class="login-error" id="et-modal-error" style="display:none"></div>
           <button class="btn-form" id="et-save-btn" onclick="saveEditTransfer()">Save Changes</button>
+          <div id="et-actions-container"></div>
         </div>
       </div>
 
@@ -4054,7 +4066,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
             <select id="op-type" onchange="handleTransferType()">
               <option value="">Select lead source…</option>
               <optgroup label="Closed Deals (Tiered)"><option value="1st Close">1st Close — $5</option><option value="2nd Close">2nd Close — $7.50</option><option value="3rd Close">3rd+ Close — $10</option></optgroup>
-              <optgroup label="Flat Rate"><option value="PccSub10">PCC Sub 10K — $1</option><option value="PccAbove10">PCC Above 10K — $2</option><option value="TaxAbove10">Tax Above 10K — $5</option><option value="TaxBelow10">Tax Below 10K — $1</option><option value="Student Loan">Student Loan — $2</option></optgroup>
+              <optgroup label="Flat Rate"><option value="PccSub10">PCC Sub 10K — $1</option><option value="PccAbove10">PCC Above 10K — $2.50</option><option value="TaxAbove10">Tax Above 10K — $5</option><option value="TaxBelow10">Tax Below 10K — $1</option><option value="Student Loan">Student Loan — $2</option></optgroup>
             </select>
           </div>
           <div class="comm-preview-card"><div class="comm-preview-label">Commission for this transfer</div><div class="comm-preview-amount" id="op-comm-preview">—</div><div class="comm-preview-sub" id="op-tier-label"></div></div>
@@ -4072,7 +4084,7 @@ table.ref-table{width:100%;border-collapse:collapse;}
             <tr><td>3rd+ Close</td><td class="ref-amt">$10</td><td style="color:var(--text2)">3rd+ today</td></tr>
             <tr class="ref-section"><td colspan="3">Flat rate</td></tr>
             <tr><td>PCC Sub 10K</td><td class="ref-amt">$1</td><td style="color:var(--text2)">Flat</td></tr>
-            <tr><td>PCC Above 10K</td><td class="ref-amt">$2</td><td style="color:var(--text2)">Flat</td></tr>
+            <tr><td>PCC Above 10K</td><td class="ref-amt">$2.50</td><td style="color:var(--text2)">Flat</td></tr>
             <tr><td>Tax Above 10K</td><td class="ref-amt">$5</td><td style="color:var(--text2)">Flat</td></tr>
             <tr><td>Tax Below 10K</td><td class="ref-amt">$1</td><td style="color:var(--text2)">Flat</td></tr>
             <tr><td>Student Loan</td><td class="ref-amt">$2</td><td style="color:var(--text2)">Flat</td></tr>
