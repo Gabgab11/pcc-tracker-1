@@ -216,8 +216,16 @@
   }
 
   // ── GDF FILTER HELPERS ──
-  function gdfFilterArr(arr){
-    const {from,to} = window._gdf;
+  // `role` tells the filter which team's shift schedule to use for the
+  // Today/Yesterday presets ('closer'/'opener' → standard 5PM–2AM,
+  // 'mortgage' → 4PM–1AM). This Month/Custom/All stay plain calendar-date
+  // range comparisons, unchanged.
+  function gdfFilterArr(arr, role){
+    const {preset,from,to} = window._gdf;
+    if(preset==='today' || preset==='yesterday'){
+      const key=shiftTodayKey(role, preset==='yesterday'?1:0);
+      return arr.filter(item=>shiftDayKeyFor(item.createdAt,role)===key);
+    }
     if (!from && !to) return arr;
     return arr.filter(item=>{
       const d=(item.createdAt||item.date||'').slice(0,10);
@@ -230,9 +238,10 @@
   // teams' arrays return empty so every consumer (stats, leaderboards, feeds,
   // commission structure) automatically shows zero/blank for excluded teams —
   // there is no separate "scope filter" to forget to apply somewhere.
-  function gdfDeals()  { const s=window._gdf.roleScope; if(s!=='all'&&s!=='closer')   return []; return gdfFilterArr(deals);      }
-  function gdfXfers()  { const s=window._gdf.roleScope; if(s!=='all'&&s!=='opener')   return []; return gdfFilterArr(transfers);  }
-  function gdfMtg()    { const s=window._gdf.roleScope; if(s!=='all'&&s!=='mortgage') return []; return gdfFilterArr(mtgRecords); }
+  function gdfDeals()  { const s=window._gdf.roleScope; if(s!=='all'&&s!=='closer')   return []; return gdfFilterArr(deals,'closer');        }
+  function gdfXfers()  { const s=window._gdf.roleScope; if(s!=='all'&&s!=='opener')   return []; return gdfFilterArr(transfers,'opener');    }
+  function gdfMtg()    { const s=window._gdf.roleScope; if(s!=='all'&&s!=='mortgage') return []; return gdfFilterArr(mtgRecords,'mortgage'); }
+
 
   function updateGdfBadge(){
     const {preset,roleScope} = window._gdf;
@@ -271,13 +280,17 @@
   };
 
   window.applyGdfPreset=function(preset){
-    const today=new Date(); today.setHours(0,0,0,0);
+    const today=getNowEgypt(); today.setHours(0,0,0,0);
     const pad=n=>String(n).padStart(2,'0');
     const fmt=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
     const todayStr=fmt(today);
     let from=null,to=null;
-    if      (preset==='today')     { from=todayStr; to=todayStr; }
-    else if (preset==='yesterday') { const d=new Date(today); d.setDate(d.getDate()-1); const ys=fmt(d); from=ys; to=ys; }
+    // 'today'/'yesterday' are resolved PER TEAM at filter time (see
+    // gdfFilterArr) since each team's shift-day boundary sits at a
+    // different hour — there is no single calendar date that means "today"
+    // for both Mortgage and Openers/Closers near the shift boundary.
+    if      (preset==='today')     { from=null; to=null; }
+    else if (preset==='yesterday') { from=null; to=null; }
     else if (preset==='thismonth') { from=fmt(new Date(today.getFullYear(),today.getMonth(),1)); to=todayStr; }
     else if (preset==='all')       { from=null; to=null; }
     else if (preset==='custom')    { document.getElementById('gdf-custom-wrap').style.display='flex'; return; }
@@ -403,6 +416,109 @@
   }
   function stopPresence(){ if(presenceRef){set(presenceRef,{online:false,lastSeen:serverTimestamp()});presenceRef=null;} }
 
+  // ── SHIFT ENGINE (single source of truth, shared by the countdown UI AND
+  // every "today"/"yesterday"/daily stat, tier reset, leaderboard, and
+  // report in the app) ──
+  // Openers + Closers share one shift window ("standard"): 5:00 PM – 2:00 AM
+  // Egypt time. Mortgage runs on its own, separate window: 4:00 PM – 1:00 AM
+  // Egypt time. A team's BUSINESS DAY runs from that team's shift-start hour
+  // to the same hour the next calendar day — so a record created after
+  // midnight, while the shift is still running, is always grouped with the
+  // day the shift STARTED on. The business day only rolls over when the
+  // next shift starts (4PM for Mortgage, 5PM for Openers/Closers) — never
+  // at the literal midnight calendar boundary.
+  const SHIFT_DEFS = {
+    standard: { start:17, end:2, dur:9*3600, label:'Egypt: 5PM – 2AM · Mon–Fri', nextLabel:'Next shift: 5PM Egypt' },
+    mortgage: { start:16, end:1, dur:9*3600, label:'Egypt: 4PM – 1AM · Mon–Fri', nextLabel:'Next shift: 4PM Egypt' },
+  };
+  function shiftTeamForRole(role){ return role==='mortgage' ? 'mortgage' : 'standard'; }
+  function shiftPad2(n){ return String(n).padStart(2,'0'); }
+  function shiftYmd(y,mo,d){ return `${y}-${shiftPad2(mo)}-${shiftPad2(d)}`; }
+  // Reinterprets a real timestamp (Date, or an ISO string with a 'Z'/offset)
+  // as Egypt wall-clock time. Only ever reads back via getHours()/
+  // getMonth()/etc — never toISOString() — so it's correct no matter what
+  // timezone the browser itself happens to be running in.
+  function toEgyptDate(input){
+    const d = input instanceof Date ? input : new Date(input);
+    if(isNaN(d.getTime())) return null;
+    return new Date(d.toLocaleString('en-US',{timeZone:'Africa/Cairo'}));
+  }
+  function getNowEgypt(){ return toEgyptDate(new Date()); }
+  function egyptTodayDateStr(){ const e=getNowEgypt(); return shiftYmd(e.getFullYear(),e.getMonth()+1,e.getDate()); }
+  function shiftDayKeyFromEgyptDate(egyptDate, team){
+    const cfg=SHIFT_DEFS[team], h=egyptDate.getHours();
+    if(h>=cfg.start) return shiftYmd(egyptDate.getFullYear(),egyptDate.getMonth()+1,egyptDate.getDate());
+    const prev=new Date(egyptDate); prev.setDate(prev.getDate()-1);
+    return shiftYmd(prev.getFullYear(),prev.getMonth()+1,prev.getDate());
+  }
+  // The shift/business-day (YYYY-MM-DD) a given record belongs to, for the
+  // given role. Accepts:
+  //  • a real timestamp — Date, or an ISO string ending in 'Z'/an offset
+  //    (e.g. createdAt) — converted to true Egypt wall-clock time first.
+  //  • a "bare" local string with no timezone designator — either a
+  //    datetime-local value (e.g. the closer's "Closing Date & Time" field,
+  //    "2026-07-14T00:15") or a plain "YYYY-MM-DD" date-only field (Transfer
+  //    Date / mortgage Date) — read literally by component, since those
+  //    values already represent Egypt wall-clock time exactly as entered;
+  //    running them through a timezone conversion would silently shift them
+  //    by the browser's own offset from Cairo. A bare date with NO time
+  //    portion has no hour to roll back on, so it's used as-is.
+  function shiftDayKeyFor(input, role){
+    if(!input) return '';
+    const team=shiftTeamForRole(role), cfg=SHIFT_DEFS[team];
+    if(typeof input==='string' && !/Z$|[+-]\d{2}:?\d{2}$/.test(input)){
+      const [datePart,timePart]=input.split('T');
+      if(!datePart) return '';
+      const [y,mo,d]=datePart.split('-').map(Number);
+      if(!y||!mo||!d) return '';
+      if(!timePart) return shiftYmd(y,mo,d);
+      const h=Number(timePart.split(':')[0])||0;
+      if(h>=cfg.start) return shiftYmd(y,mo,d);
+      const dt=new Date(y,mo-1,d); dt.setDate(dt.getDate()-1);
+      return shiftYmd(dt.getFullYear(),dt.getMonth()+1,dt.getDate());
+    }
+    const eg=toEgyptDate(input);
+    if(!eg) return '';
+    return shiftDayKeyFromEgyptDate(eg,team);
+  }
+  // Today's (or a past) shift-day key for a role, counting back
+  // `offsetDays` full shift-days from the current moment.
+  function shiftTodayKey(role, offsetDays){
+    const team=shiftTeamForRole(role);
+    const anchorKey=shiftDayKeyFromEgyptDate(getNowEgypt(),team);
+    if(!offsetDays) return anchorKey;
+    const [y,m,d]=anchorKey.split('-').map(Number);
+    const anchor=new Date(y,m-1,d); anchor.setDate(anchor.getDate()-offsetDays);
+    return shiftYmd(anchor.getFullYear(),anchor.getMonth()+1,anchor.getDate());
+  }
+  // Full shift status (active?/secsLeft/pct) for a team at a given Egypt-
+  // local moment — drives the countdown UI. Correctly keeps a shift ACTIVE
+  // past midnight into the next calendar day — even into a weekend calendar
+  // date (e.g. Friday's overnight shift finishing at 1AM/2AM Saturday) — by
+  // checking the weekday the SHIFT STARTED on, not the current moment's
+  // weekday.
+  function isWeekdayNum(dow){ return dow>=1 && dow<=5; }
+  function computeShiftStatus(nowEgypt, team){
+    const cfg=SHIFT_DEFS[team];
+    const h=nowEgypt.getHours(), m=nowEgypt.getMinutes(), s=nowEgypt.getSeconds(), dow=nowEgypt.getDay();
+    let active=false, secsLeft=0;
+    if(h>=cfg.start){
+      if(isWeekdayNum(dow)){ active=true; secsLeft=cfg.dur-(h*3600+m*60+s-cfg.start*3600); }
+    } else if(h<cfg.end || (h===cfg.end&&m===0&&s===0)){
+      const yestDow=(dow+6)%7;
+      if(isWeekdayNum(yestDow)){ active=true; secsLeft=cfg.dur-((24-cfg.start)*3600+h*3600+m*60+s); }
+    }
+    if(active) secsLeft=Math.max(0,secsLeft);
+    return { active, secsLeft, pct: active?Math.max(0,Math.min(100,((cfg.dur-secsLeft)/cfg.dur)*100)):0, cfg, isCurrentDayWeekday:isWeekdayNum(dow) };
+  }
+  // Expose to the plain (non-module) <script> block later in the page —
+  // e.g. the shift-countdown UI — which cannot import module-scoped
+  // functions directly.
+  window.SHIFT_DEFS=SHIFT_DEFS; window.shiftTeamForRole=shiftTeamForRole;
+  window.getNowEgypt=getNowEgypt; window.toEgyptDate=toEgyptDate;
+  window.shiftDayKeyFor=shiftDayKeyFor; window.shiftTodayKey=shiftTodayKey;
+  window.computeShiftStatus=computeShiftStatus;
+
   // ── COMMISSION ──
   function closerBaseComm(m){
     m=Number(m);
@@ -410,13 +526,22 @@
     if(m>=251)return 40; if(m>=200)return 25;if(m>=150)return 10;
     return 0;
   }
-  async function countCloserDealsOnDate(dateStr){
-    if(!currentUser||!dateStr)return 0;
-    try{const snap=await getDocs(query(collection(db,'deals'),where('closerEmail','==',currentUser.email),where('closingDate','==',dateStr)));return snap.size;}catch(e){return 0;}
+  // How many deals has this closer already logged in the SAME shift-day as
+  // `closingLocalDateTime` (their "Closing Date & Time" field, falling back
+  // to right now if left blank)? Reads straight from the already-live
+  // `deals` array (real-time synced for closers to their own deals, and for
+  // admin/readonly to every deal) — no extra Firestore round-trip, and
+  // correctly keeps counting a shift's deals past midnight instead of
+  // resetting at the calendar boundary.
+  function countCloserDealsInShift(closerName, closingLocalDateTime){
+    if(!closerName) return 0;
+    const key = closingLocalDateTime ? shiftDayKeyFor(closingLocalDateTime,'closer') : shiftTodayKey('closer',0);
+    if(!key) return 0;
+    return (deals||[]).filter(d=>d.name===closerName && shiftDayKeyFor(d.closing||d.createdAt,'closer')===key).length;
   }
   function countClosedToday(){
-    const t=getNowEgypt().toISOString().slice(0,10);
-    return (transfers||[]).filter(x=>CLOSED_TYPES.includes(x.type)&&(x.createdAt||'').slice(0,10)===t).length;
+    const t=shiftTodayKey('opener',0);
+    return (transfers||[]).filter(x=>CLOSED_TYPES.includes(x.type)&&shiftDayKeyFor(x.createdAt,'opener')===t).length;
   }
   function openerCommForNext(type){
     if(FLAT_COMM[type]!==undefined)return FLAT_COMM[type];
@@ -429,7 +554,6 @@
     const c=countClosedToday();
     return`${['1st','2nd','3rd+'][Math.min(c,2)]} closed deal today — $${TIER_RATES[Math.min(c,2)]} commission`;
   }
-  function getNowEgypt(){return new Date(new Date().toLocaleString('en-US',{timeZone:'Africa/Cairo'}));}
 
   // ── DYNAMIC AGENT DROPDOWNS ──
   // Every <select> that lists agent names (Opener Name, Assign-to-Closer,
@@ -1180,13 +1304,13 @@
     const comm=openerCommForNext(type);
     document.getElementById('adm-op-comm-preview').textContent=type?`$${comm}`:'—';
   };
-  window.admAutoCommission=async function(){
+  window.admAutoCommission=function(){
     const monthly=document.getElementById('adm-cl-monthly').value;
     const closing=document.getElementById('adm-cl-closing').value;
+    const name=document.getElementById('adm-cl-name').value;
     if(!monthly){document.getElementById('adm-cl-commission').value='';document.getElementById('adm-cl-tier-info').textContent='';return;}
     const base=closerBaseComm(monthly);
-    const dateStr=closing?closing.split('T')[0]:new Date().toISOString().split('T')[0];
-    const existing=await countCloserDealsOnDate(dateStr),mult=existing>=1?2:1;
+    const existing=countCloserDealsInShift(name,closing),mult=existing>=1?2:1;
     document.getElementById('adm-cl-commission').value='$'+(base*mult);
     const ti=document.getElementById('adm-cl-tier-info');
     ti.textContent=mult===2?`⚡ Tier ×2 active — ${existing} deal(s) already closed today!`:'Tier 1 — First deal of the day';
@@ -1235,8 +1359,8 @@
     if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
     if(phoneExistsInCategory(phone,'closer')){showPhoneAlert('adm-cl-phone');return;}
     const base=closerBaseComm(monthly);
-    const dateStr=closing?closing.split('T')[0]:new Date().toISOString().split('T')[0];
-    const existing=await countCloserDealsOnDate(dateStr),mult=existing>=1?2:1,comm=base*mult;
+    const dateStr=closing?closing.split('T')[0]:egyptTodayDateStr();
+    const existing=countCloserDealsInShift(name,closing),mult=existing>=1?2:1,comm=base*mult;
     const agentDoc=ALL_AGENTS.find(a=>a.name===name && a.role==='closer');
     const closerEmail=agentDoc?.email||name.toLowerCase()+'@pcc.com';
     const btn=document.getElementById('adm-cl-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
@@ -1370,14 +1494,14 @@
 
   // Given any YYYY-MM-DD date, return the pay period (calendar month) that date falls into.
   function ccPeriodForDate(dateStr){
-    if(!dateStr) dateStr=getNowEgypt().toISOString().slice(0,10);
+    if(!dateStr) dateStr=egyptTodayDateStr();
     const parts=dateStr.slice(0,10).split('-').map(Number);
     const y=parts[0],m=parts[1]-1;
     const start=new Date(y,m,1);
     const end=new Date(y,m+1,0); // day 0 of next month = last day of this month
     return { start:ccFmt(start), end:ccFmt(end), key:ccFmt(end) };
   }
-  function ccCurrentPeriod(){ return ccPeriodForDate(getNowEgypt().toISOString().slice(0,10)); }
+  function ccCurrentPeriod(){ return ccPeriodForDate(egyptTodayDateStr()); }
   function ccPeriodLabel(endKey){
     const end=new Date(endKey+'T00:00:00');
     const start=new Date(end.getFullYear(),end.getMonth(),1);
@@ -1462,12 +1586,14 @@
   window._apFilter = { preset:'all', from:null, to:null, kind:null, name:null };
 
   function apFilterDateRange(preset, fromInput, toInput){
-    const today=new Date(); today.setHours(0,0,0,0);
+    // 'today'/'yesterday' are resolved PER TEAM inside apApplyFilter (each
+    // team's shift-day boundary sits at a different hour), so no date is
+    // precomputed for them here.
+    if(preset==='today' || preset==='yesterday') return { from:null, to:null };
+    const today=getNowEgypt(); today.setHours(0,0,0,0);
     const pad=n=>String(n).padStart(2,'0');
     const fmt=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
     const todayStr=fmt(today);
-    if(preset==='today')      return { from:todayStr, to:todayStr };
-    if(preset==='yesterday')  { const d=new Date(today); d.setDate(d.getDate()-1); const ys=fmt(d); return { from:ys, to:ys }; }
     if(preset==='thismonth')  return { from:fmt(new Date(today.getFullYear(),today.getMonth(),1)), to:todayStr };
     if(preset==='custom')     return { from:fromInput||null, to:toInput||null };
     return { from:null, to:null }; // 'all'
@@ -1475,8 +1601,14 @@
 
   // Applies the per-agent filter to one agent's RAW (unfiltered) records,
   // by date (createdAt, falling back to the role's own date field).
-  function apApplyFilter(records, dateField){
-    const {from,to}=window._apFilter;
+  // `role` ('closer'/'opener'/'mortgage') picks which team's shift schedule
+  // governs the Today/Yesterday presets.
+  function apApplyFilter(records, dateField, role){
+    const {preset,from,to}=window._apFilter;
+    if(preset==='today' || preset==='yesterday'){
+      const key=shiftTodayKey(role, preset==='yesterday'?1:0);
+      return records.filter(r=>shiftDayKeyFor(r.createdAt,role)===key);
+    }
     if(!from && !to) return records;
     return records.filter(r=>{
       const d=(r[dateField]||r.createdAt||'').slice(0,10);
@@ -1848,7 +1980,7 @@
     if(rank!==undefined) window._apFilter._rank=rank;
     if(totalAgents!==undefined) window._apFilter._total=totalAgents;
     const cfg=CC_ROLE_CFG[kind]; if(!cfg) return;
-    const rawRecords=apApplyFilter(ccRawRecordsFor(kind), cfg.dateField);
+    const rawRecords=apApplyFilter(ccRawRecordsFor(kind), cfg.dateField, kind);
     const r=ccBuildAgentStats(name,kind,rawRecords,cfg);
     document.getElementById('ap-body').innerHTML=buildAgentProfileHTML(r,kind,window._apFilter._rank,window._apFilter._total);
   }
@@ -2194,11 +2326,11 @@
   function renderOpenerDashboard(){
     const t=gdfXfers();
     document.getElementById('op-stat-total').textContent='$'+t.reduce((s,x)=>s+(x.comm||0),0);
-    const todayStr=getNowEgypt().toISOString().slice(0,10);
-    const todayAll=transfers.filter(x=>(x.createdAt||'').slice(0,10)===todayStr);
+    const todayKey=shiftTodayKey('opener',0);
+    const todayAll=transfers.filter(x=>shiftDayKeyFor(x.createdAt,'opener')===todayKey);
     document.getElementById('op-stat-today').textContent=todayAll.length;
     document.getElementById('op-stat-comm-today').textContent='$'+todayAll.reduce((s,x)=>s+(x.comm||0),0);
-    const todayClosed=transfers.filter(x=>CLOSED_TYPES.includes(x.type)&&(x.createdAt||'').slice(0,10)===todayStr);
+    const todayClosed=transfers.filter(x=>CLOSED_TYPES.includes(x.type)&&shiftDayKeyFor(x.createdAt,'opener')===todayKey);
     renderTierTracker(todayClosed.length);
     const feed=document.getElementById('op-recent-feed');
     const recent=t.slice(0,5);
@@ -2229,8 +2361,8 @@
   function renderCloserDashboard(){
     const d=gdfDeals();
     document.getElementById('cl-stat-total').textContent='$'+d.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0);
-    const todayStr=getNowEgypt().toISOString().slice(0,10);
-    const todayD=deals.filter(x=>(x.createdAt||'').slice(0,10)===todayStr);
+    const todayKey=shiftTodayKey('closer',0);
+    const todayD=deals.filter(x=>shiftDayKeyFor(x.createdAt,'closer')===todayKey);
     document.getElementById('cl-stat-today').textContent=todayD.length;
     document.getElementById('cl-stat-comm-today').textContent='$'+todayD.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0);
     const feed=document.getElementById('cl-recent-feed');
@@ -2328,11 +2460,12 @@
 
   // ── CLOSER SUBMIT ──
   window.autoFillCloserName=function(){if(currentUser?.role==='closer'){const s=document.getElementById('cl-name');s.value=currentUser.name;s.disabled=true;}};
-  window.autoCommission=async function(){
+  window.autoCommission=function(){
     const monthly=document.getElementById('cl-monthly').value,closing=document.getElementById('cl-closing').value,tierEl=document.getElementById('cl-tier-info');
+    const name=document.getElementById('cl-name').value;
     if(!monthly){document.getElementById('cl-commission').value='';tierEl.textContent='';return;}
-    const base=closerBaseComm(monthly),dateStr=closing?closing.split('T')[0]:new Date().toISOString().split('T')[0];
-    const existing=await countCloserDealsOnDate(dateStr),mult=existing>=1?2:1;
+    const base=closerBaseComm(monthly);
+    const existing=countCloserDealsInShift(name,closing),mult=existing>=1?2:1;
     document.getElementById('cl-commission').value='$'+(base*mult);
     tierEl.textContent=mult===2?`⚡ Tier ×2 active — ${existing} deal(s) already closed today!`:'Tier 1 — First deal of the day';
     tierEl.style.color=mult===2?'var(--purple)':'var(--text2)';
@@ -2343,8 +2476,8 @@
     if(!name||!opener||!dealType||!client||!phone||!debt||!monthly){toast('Please complete all required fields.','error');return;}
     if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
     if(phoneExistsInCategory(phone,'closer')){showPhoneAlert('cl-phone');return;}
-    const base=closerBaseComm(monthly),dateStr=closing?closing.split('T')[0]:new Date().toISOString().split('T')[0];
-    const existing=await countCloserDealsOnDate(dateStr),mult=existing>=1?2:1,comm=base*mult;
+    const base=closerBaseComm(monthly),dateStr=closing?closing.split('T')[0]:egyptTodayDateStr();
+    const existing=countCloserDealsInShift(name,closing),mult=existing>=1?2:1,comm=base*mult;
     const btn=document.getElementById('cl-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
     try{await addDoc(collection(db,'deals'),{name,opener,dealType,client,phone,debt,monthly,firstpay,closing,closingDate:dateStr,comm,status:'Pending',closerEmail:currentUser.email,createdAt:new Date().toISOString()});['cl-client','cl-phone','cl-debt','cl-monthly','cl-firstpay','cl-closing'].forEach(id=>document.getElementById(id).value='');document.getElementById('cl-opener').value='';document.getElementById('cl-deal-type').value='';document.getElementById('cl-commission').value='';document.getElementById('cl-tier-info').textContent='';toast('Deal submitted! Pending admin approval.','success');}
     catch(e){toast('Failed to submit.','error');console.error(e);}
@@ -2356,8 +2489,8 @@
   function renderMtgDashboard(){
     const m=gdfMtg();
     document.getElementById('mtg-stat-total').textContent=m.length;
-    const todayStr=getNowEgypt().toISOString().slice(0,10);
-    document.getElementById('mtg-stat-today').textContent=mtgRecords.filter(x=>(x.createdAt||'').slice(0,10)===todayStr).length;
+    const todayKey=shiftTodayKey('mortgage',0);
+    document.getElementById('mtg-stat-today').textContent=mtgRecords.filter(x=>shiftDayKeyFor(x.createdAt,'mortgage')===todayKey).length;
     document.getElementById('mtg-stat-alltime').textContent=mtgRecords.length;
     const feed=document.getElementById('mtg-recent-feed');
     const recent=m.slice(0,5);
@@ -4213,38 +4346,38 @@ function updateStrength(val){
   // ── SHIFT WINDOWS (independent per team) ──
   // Openers + Closers: 5:00 PM – 2:00 AM Egypt time (9h)
   // Mortgage:          4:00 PM – 1:00 AM Egypt time (9h) — separate window, runs on its own clock
-  const SHIFTS = {
-    standard: { start:17, end:2, dur:9*3600, label:'Egypt: 5PM – 2AM · Mon–Fri', nextLabel:'Next shift: 5PM Egypt' },
-    mortgage: { start:16, end:1, dur:9*3600, label:'Egypt: 4PM – 1AM · Mon–Fri', nextLabel:'Next shift: 4PM Egypt' },
-  };
-  function shiftFor(role){ return role==='mortgage' ? SHIFTS.mortgage : SHIFTS.standard; }
-  function getNow(){return new Date(new Date().toLocaleString('en-US',{timeZone:'Africa/Cairo'}));}
+  // All the actual math (which team's window applies, whether it's
+  // currently active, seconds remaining, and which business/shift day a
+  // record belongs to) lives in ONE shared place — window.computeShiftStatus
+  // / window.shiftDayKeyFor / window.shiftTodayKey, defined earlier in the
+  // module script — so the countdown shown here can never drift out of
+  // sync with the "today" stats, EOD summary, leaderboards, and reports
+  // that use the exact same functions.
+  function getNow(){ return window.getNowEgypt(); }
   function isWD(d){const day=d.getDay();return day>=1&&day<=5;}
-  function active(d,cfg){if(!isWD(d))return false;const{start,end}=cfg;const h=d.getHours(),m=d.getMinutes(),s=d.getSeconds();return(h>=start)||(h<end)||(h===end&&m===0&&s===0);}
-  function secsLeft(d,cfg){const{start,end}=cfg;const h=d.getHours(),m=d.getMinutes(),s=d.getSeconds(),now=h*3600+m*60+s,endSecs=end*3600;return now>=start*3600?(24*3600-now)+endSecs:endSecs-now;}
   function fmt(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;}
   function buildEOD(role){
-    const today=getNow().toISOString().slice(0,10);
-    if(role==='closer'){const td=(window._deals||[]).filter(d=>(d.createdAt||'').slice(0,10)===today),ap=td.filter(d=>d.status==='Approved'),tc=ap.reduce((s,d)=>s+(d.comm||0),0);return`<div class="eod-title">Shift Summary</div><div class="eod-grid"><div class="eod-stat"><div class="eod-val">${td.length}</div><div class="eod-lbl">Deals</div></div><div class="eod-stat"><div class="eod-val">${ap.length}</div><div class="eod-lbl">Approved</div></div><div class="eod-stat"><div class="eod-val">$${tc}</div><div class="eod-lbl">Earned</div></div></div><div class="eod-msg">${ap.length>0?'🔥 Incredible shift!':'💪 Keep at it tomorrow.'}</div>`;}
-    const tt=(window._transfers||[]).filter(t=>(t.createdAt||'').slice(0,10)===today),ap=tt.filter(t=>t.status==='Approved'),tc=tt.reduce((s,t)=>s+(t.comm||0),0);
+    const today=window.shiftTodayKey(role,0);
+    if(role==='closer'){const td=(window._deals||[]).filter(d=>window.shiftDayKeyFor(d.createdAt,'closer')===today),ap=td.filter(d=>d.status==='Approved'),tc=ap.reduce((s,d)=>s+(d.comm||0),0);return`<div class="eod-title">Shift Summary</div><div class="eod-grid"><div class="eod-stat"><div class="eod-val">${td.length}</div><div class="eod-lbl">Deals</div></div><div class="eod-stat"><div class="eod-val">${ap.length}</div><div class="eod-lbl">Approved</div></div><div class="eod-stat"><div class="eod-val">$${tc}</div><div class="eod-lbl">Earned</div></div></div><div class="eod-msg">${ap.length>0?'🔥 Incredible shift!':'💪 Keep at it tomorrow.'}</div>`;}
+    const tt=(window._transfers||[]).filter(t=>window.shiftDayKeyFor(t.createdAt,'opener')===today),ap=tt.filter(t=>t.status==='Approved'),tc=tt.reduce((s,t)=>s+(t.comm||0),0);
     return`<div class="eod-title">Shift Summary</div><div class="eod-grid"><div class="eod-stat"><div class="eod-val">${tt.length}</div><div class="eod-lbl">Transfers</div></div><div class="eod-stat"><div class="eod-val">${ap.length}</div><div class="eod-lbl">Approved</div></div><div class="eod-stat"><div class="eod-val">$${tc}</div><div class="eod-lbl">Earned</div></div></div><div class="eod-msg">${tt.length>0?'🔥 Solid shift!':'💪 Tomorrow is a fresh start.'}</div>`;
   }
   window.refreshEOD=function(){
     const role=window._currentRole;if(!role||role==='admin'||role==='mortgage')return;
     const eodId=role==='closer'?'eod-closer':'eod-opener',eodEl=document.getElementById(eodId);if(!eodEl)return;
-    const cfg=shiftFor(role),now=getNow(),a=active(now,cfg);
-    if(a){
-      const today=now.toISOString().slice(0,10);
-      if(role==='closer'){const td=(window._deals||[]).filter(d=>(d.createdAt||'').slice(0,10)===today),ap=td.filter(d=>d.status==='Approved'),tc=ap.reduce((s,d)=>s+(d.comm||0),0);eodEl.innerHTML=`<div class="eod-title" style="font-size:12px;margin-bottom:8px;">Today's Progress</div><div class="eod-grid"><div class="eod-stat"><div class="eod-val">${td.length}</div><div class="eod-lbl">Deals</div></div><div class="eod-stat"><div class="eod-val">${ap.length}</div><div class="eod-lbl">Approved</div></div><div class="eod-stat"><div class="eod-val">$${tc}</div><div class="eod-lbl">Earned</div></div></div>`;eodEl.style.display=td.length>0?'block':'none';}
-      else{const tt=(window._transfers||[]).filter(t=>(t.createdAt||'').slice(0,10)===today),ap=tt.filter(t=>t.status==='Approved'),tc=tt.reduce((s,t)=>s+(t.comm||0),0);eodEl.innerHTML=`<div class="eod-title" style="font-size:12px;margin-bottom:8px;">Today's Progress</div><div class="eod-grid"><div class="eod-stat"><div class="eod-val">${tt.length}</div><div class="eod-lbl">Transfers</div></div><div class="eod-stat"><div class="eod-val">${ap.length}</div><div class="eod-lbl">Approved</div></div><div class="eod-stat"><div class="eod-val">$${tc}</div><div class="eod-lbl">Earned</div></div></div>`;eodEl.style.display=tt.length>0?'block':'none';}
+    const team=window.shiftTeamForRole(role),now=getNow(),status=window.computeShiftStatus(now,team);
+    if(status.active){
+      const today=window.shiftTodayKey(role,0);
+      if(role==='closer'){const td=(window._deals||[]).filter(d=>window.shiftDayKeyFor(d.createdAt,'closer')===today),ap=td.filter(d=>d.status==='Approved'),tc=ap.reduce((s,d)=>s+(d.comm||0),0);eodEl.innerHTML=`<div class="eod-title" style="font-size:12px;margin-bottom:8px;">Today's Progress</div><div class="eod-grid"><div class="eod-stat"><div class="eod-val">${td.length}</div><div class="eod-lbl">Deals</div></div><div class="eod-stat"><div class="eod-val">${ap.length}</div><div class="eod-lbl">Approved</div></div><div class="eod-stat"><div class="eod-val">$${tc}</div><div class="eod-lbl">Earned</div></div></div>`;eodEl.style.display=td.length>0?'block':'none';}
+      else{const tt=(window._transfers||[]).filter(t=>window.shiftDayKeyFor(t.createdAt,'opener')===today),ap=tt.filter(t=>t.status==='Approved'),tc=tt.reduce((s,t)=>s+(t.comm||0),0);eodEl.innerHTML=`<div class="eod-title" style="font-size:12px;margin-bottom:8px;">Today's Progress</div><div class="eod-grid"><div class="eod-stat"><div class="eod-val">${tt.length}</div><div class="eod-lbl">Transfers</div></div><div class="eod-stat"><div class="eod-val">${ap.length}</div><div class="eod-lbl">Approved</div></div><div class="eod-stat"><div class="eod-val">$${tc}</div><div class="eod-lbl">Earned</div></div></div>`;eodEl.style.display=tt.length>0?'block':'none';}
     } else{eodEl.innerHTML=buildEOD(role);eodEl.style.display='block';}
   };
   function updateShiftEl(tId,pId,tagId,pctId,eodId,role){
-    const cfg=shiftFor(role);
-    const now=getNow(),a=active(now,cfg),tEl=document.getElementById(tId),pEl=document.getElementById(pId),tagEl=document.getElementById(tagId),pctEl=document.getElementById(pctId),eodEl=document.getElementById(eodId);
+    const team=window.shiftTeamForRole(role), cfg=window.SHIFT_DEFS[team];
+    const now=getNow(),status=window.computeShiftStatus(now,team),tEl=document.getElementById(tId),pEl=document.getElementById(pId),tagEl=document.getElementById(tagId),pctEl=document.getElementById(pctId),eodEl=document.getElementById(eodId);
     if(!tEl)return;
-    if(a){
-      const sl=secsLeft(now,cfg),pct=Math.max(0,Math.min(100,((cfg.dur-sl)/cfg.dur)*100)),urgent=sl<=1800;
+    if(status.active){
+      const sl=status.secsLeft,pct=status.pct,urgent=sl<=1800;
       tEl.textContent=fmt(sl);tEl.className='shift-timer-val'+(urgent?' urgent':'');
       if(pctEl)pctEl.textContent=Math.round(pct)+'%';
       if(pEl){pEl.style.width=pct+'%';pEl.className='shift-progress-bar'+(urgent?' urgent':'');}
@@ -4258,15 +4391,13 @@ function updateStrength(val){
   }
   function tick(){
     const role=window._currentRole;
-    const stdCfg=SHIFTS.standard,now=getNow(),aStd=active(now,stdCfg);
+    const team=window.shiftTeamForRole(role), now=getNow(), status=window.computeShiftStatus(now,team);
     const tb=document.getElementById('topbar-shift-timer');
     if(tb){
-      const cfgForTopbar=shiftFor(role);
-      const aTop=active(now,cfgForTopbar);
-      tb.textContent=aTop?fmt(secsLeft(now,cfgForTopbar))+' left':isWD(now)?'Off shift':'Weekend';
+      tb.textContent=status.active?fmt(status.secsLeft)+' left':isWD(now)?'Off shift':'Weekend';
     }
     const dot=document.getElementById('shift-status-dot');
-    if(dot){const cfgForTopbar=shiftFor(role);dot.style.background=active(now,cfgForTopbar)?'var(--green)':'var(--amber)';}
+    if(dot){dot.style.background=status.active?'var(--green)':'var(--amber)';}
     if(role==='closer')   updateShiftEl('shift-timer-closer','shift-progress-closer','shift-tag-closer','shift-pct-closer','eod-closer','closer');
     if(role==='opener')   updateShiftEl('shift-timer-opener','shift-progress-opener','shift-tag-opener','shift-pct-opener','eod-opener','opener');
     if(role==='mortgage') updateShiftEl('shift-timer-mtg','shift-progress-mtg','shift-tag-mtg','shift-pct-mtg',null,'mortgage');
