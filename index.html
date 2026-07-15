@@ -335,8 +335,14 @@
   // Only "423-482-1384" is accepted: exactly 3 digits, dash, 3 digits, dash,
   // 4 digits. Anything else (extra +1, spaces, parens, missing dashes, etc.)
   // is rejected.
-  const PHONE_FORMAT_RE = /^\d{3}-\d{3}-\d{4}$/;
-  function isValidPhoneFormat(phone){ return PHONE_FORMAT_RE.test((phone||'').trim()); }
+  // 10 digits, dashes optional (423-482-1384 or 4234821384 both fine) — the
+  // only thing explicitly rejected is a leading +1 country code.
+  const PHONE_FORMAT_RE = /^\d{3}-?\d{3}-?\d{4}$/;
+  function isValidPhoneFormat(phone){
+    const p=(phone||'').trim();
+    if(p.startsWith('+1')) return false;
+    return PHONE_FORMAT_RE.test(p);
+  }
 
   // category: 'opener' -> transfers, 'closer' -> deals, 'mortgage' -> mtgRecords.
   // A duplicate only blocks submission if the exact same phone number already
@@ -1153,7 +1159,14 @@
 
   window.adminDealAction=async function(id,action){
     const d=deals.find(x=>x.id===id);if(!d){toast('Deal not found.','error');return;}
-    const editEl=document.getElementById('comm-d-'+id);
+    // Scope the commission lookup to the exact card the button lives in —
+    // NOT a global getElementById('comm-d-'+id) — because the same record
+    // can be rendered in two places at once (this card AND the Overview
+    // "Tasks" pending queue), which would otherwise give both copies the
+    // same id and silently read whichever one happens to come first in the
+    // DOM instead of the one actually edited.
+    const card=(typeof event!=='undefined'&&event?.target)?event.target.closest('.task-card,.admin-record,.ap-box'):null;
+    const editEl=card?card.querySelector('.ar-comm-input'):document.getElementById('comm-d-'+id);
     const finalComm=editEl?(Number(editEl.value)||0):(d.comm||0);
     if(action==='Declined'){
       window._pendingDecline={id,kind:'deal',finalComm};
@@ -1166,7 +1179,8 @@
 
   window.adminXferAction=async function(id,action){
     const t=transfers.find(x=>x.id===id);if(!t){toast('Transfer not found.','error');return;}
-    const editEl=document.getElementById('comm-t-'+id);
+    const card=(typeof event!=='undefined'&&event?.target)?event.target.closest('.task-card,.admin-record,.ap-box'):null;
+    const editEl=card?card.querySelector('.ar-comm-input'):document.getElementById('comm-t-'+id);
     const finalComm=editEl?(Number(editEl.value)||0):(t.comm||0);
     if(action==='Declined'){
       window._pendingDecline={id,kind:'transfer',finalComm};
@@ -1284,7 +1298,7 @@
     const date =document.getElementById('adm-mtg-sub-date').value;
     clearPhoneAlert('adm-mtg-sub-phone');
     if(!agent||!phone||!date){toast('Please complete all required fields.','error');return;}
-    if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
+    if(!isValidPhoneFormat(phone)){toast('Phone must be 10 digits (dashes optional). No +1 prefix.','error');return;}
     if(phoneExistsInCategory(phone,'mortgage')){showPhoneAlert('adm-mtg-sub-phone');return;}
     const agentDoc=ALL_AGENTS.find(a=>a.name===agent && a.role==='mortgage');
     const agentEmail=agentDoc?.email||agent.toLowerCase()+'@ucc.com';
@@ -1328,7 +1342,7 @@
     clearPhoneAlert('adm-op-phone');
     if(!name||!type||!date||!phone){toast('Please complete all required fields.','error');return;}
     if(CLOSED_TYPES.includes(type)&&!closer){toast('Please select a closer for this transfer type.','error');return;}
-    if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
+    if(!isValidPhoneFormat(phone)){toast('Phone must be 10 digits (dashes optional). No +1 prefix.','error');return;}
     if(phoneExistsInCategory(phone,'opener')){showPhoneAlert('adm-op-phone');return;}
     const agentDoc=ALL_AGENTS.find(a=>a.name===name && a.role==='opener');
     const openerEmail=agentDoc?.email||name.toLowerCase()+'@pcc.com';
@@ -1356,7 +1370,7 @@
     const closing=document.getElementById('adm-cl-closing').value;
     clearPhoneAlert('adm-cl-phone');
     if(!name||!opener||!dealType||!client||!phone||!debt||!monthly){toast('Please complete all required fields.','error');return;}
-    if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
+    if(!isValidPhoneFormat(phone)){toast('Phone must be 10 digits (dashes optional). No +1 prefix.','error');return;}
     if(phoneExistsInCategory(phone,'closer')){showPhoneAlert('adm-cl-phone');return;}
     const base=closerBaseComm(monthly);
     const dateStr=closing?closing.split('T')[0]:egyptTodayDateStr();
@@ -1377,12 +1391,25 @@
   // admin can submit on their behalf (lands as Pending for admin to approve).
   // This view handles both cases: pending records show approve/decline;
   // approved records are read-only; declined records are dimmed.
+  // Mortgage's own filter state — Status only (no role-type/deal-type split
+  // since every mortgage record is the same agent-type and record-type),
+  // mirroring the pattern getFilters()/applyFilters()/clearFilters() use
+  // for Deals & Transfers.
+  function getMtgFilters(){ return { status: document.getElementById('mf-status')?.value || 'All' }; }
+  window.applyMtgFilters=function(){ renderAdminMortgage(); };
+  window.clearMtgFilters=function(){
+    const s=document.getElementById('mf-status'); if(s)s.value='All';
+    const c=document.getElementById('mf-count'); if(c)c.textContent='';
+    renderAdminMortgage();
+  };
+
   function renderAdminMortgage(){
-    const m=gdfMtg();
-    const isReadOnly=currentUser?.role==='readonly';
-    document.getElementById('adm-mtg-count').textContent=m.length;
+    const f=getMtgFilters();
+    const m=gdfMtg().filter(r=>f.status==='All'||r.status===f.status||(f.status==='Pending'&&!r.status));
+    const countEl=document.getElementById('mf-count');
+    if(countEl)countEl.textContent=m.length+' transfer'+(m.length!==1?'s':'');
     const wrap=document.getElementById('adm-mtg-list');
-    if(!m.length){wrap.innerHTML='<div class="empty-state">No mortgage transfers in this date range.</div>';return;}
+    if(!m.length){wrap.innerHTML='<div class="empty-state">No mortgage transfers match the current filters.</div>';return;}
     wrap.innerHTML=m.map(r=>{
       const isPending=!r.status||r.status==='Pending';
       const isDeclined=r.status==='Declined';
@@ -1392,7 +1419,7 @@
             <div class="status-badge ${r.status==='Approved'?'badge-green':isDeclined?'badge-red':'badge-amber'}">${r.status||'Pending'}</div>
             <span class="ar-name">${displayName(r.agent)||'—'} — ${r.phone||'—'}</span>
           </div>
-          <div class="ar-top-right"><span class="ar-date">${fmtDate(r.date||r.createdAt)}</span>${buildDeleteBtn('mortgage',r.id,(r.agent?`${displayName(r.agent)}'s record`:'this record'))}</div>
+          <div class="ar-top-right"><span class="ar-date">${fmtDate(r.date||r.createdAt)}</span>${buildEditBtn('mortgage',r.id)}${buildDeleteBtn('mortgage',r.id,(r.agent?`${displayName(r.agent)}'s record`:'this record'))}</div>
         </div>
         <div class="ar-grid">
           <div class="ar-field"><span class="ar-key">Agent</span><span class="ar-val">${displayName(r.agent)||'—'}</span></div>
@@ -1401,7 +1428,6 @@
           <div class="ar-field"><span class="ar-key">Seq #</span><span class="ar-val">${r.seq||'—'}</span></div>
         </div>
         ${!isPending ? `<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${r.comm||0}</strong> <span class="ar-status-text">(${r.status}${r.seq?` · #${r.seq}`:''})</span></div>` : ''}
-        ${isReadOnly?'':`<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ ${isPending?'Approve':'Re-Approve'}</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`}
       </div>`;
     }).join('');
   }
@@ -1430,7 +1456,7 @@
 
   function buildEditBtn(kind,id){
     if(currentUser?.role==='readonly') return '';
-    const fn = kind==='deal' ? `openEditDeal('${id}')` : `openEditTransfer('${id}')`;
+    const fn = kind==='deal' ? `openEditDeal('${id}')` : kind==='mortgage' ? `openEditMortgage('${id}')` : `openEditTransfer('${id}')`;
     return `<button type="button" class="edit-button" title="Edit" onclick="event.stopPropagation();${fn}">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
     </button>`;
@@ -2202,6 +2228,49 @@
     btn.disabled=false; btn.textContent='Save Changes';
   };
 
+  // ── Edit Mortgage Record modal ──
+  // Agent and Seq # are NOT editable here — Agent is fixed at submission
+  // (same rule as Opener on a deal / Name on a transfer), and Seq # is
+  // system-generated by the tiered mortgage commission engine, so it's
+  // shown read-only for reference only.
+  window._editingMtgId=null;
+  window.openEditMortgage=function(id){
+    const r=mtgRecords.find(x=>x.id===id); if(!r) return;
+    window._editingMtgId=id;
+    document.getElementById('em-agent').value=displayName(r.agent)||'';
+    document.getElementById('em-date').value=(r.date||r.createdAt||'').slice(0,10);
+    document.getElementById('em-phone').value=r.phone||'';
+    document.getElementById('em-seq').value=r.seq||'—';
+    document.getElementById('em-comm').value=r.comm||0;
+    document.getElementById('em-modal-error').style.display='none';
+    const emActions=document.getElementById('em-actions-container');
+    if(emActions){
+      const isReadOnly=currentUser?.role==='readonly';
+      emActions.innerHTML = `<div style="margin-top:6px"><div class="panel-card-title" style="margin-bottom:8px">Review</div>${mtgActionsHtml(r,isReadOnly)}</div>`;
+    }
+    document.getElementById('em-modal-overlay').classList.add('open');
+  };
+  window.closeEditMortgageModal=function(){
+    document.getElementById('em-modal-overlay').classList.remove('open');
+    const emActions=document.getElementById('em-actions-container'); if(emActions) emActions.innerHTML='';
+    window._editingMtgId=null;
+  };
+  window.saveEditMortgage=async function(){
+    const id=window._editingMtgId; if(!id) return;
+    const phone=document.getElementById('em-phone').value.trim();
+    const date=document.getElementById('em-date').value;
+    const comm=Number(document.getElementById('em-comm').value)||0;
+    const errEl=document.getElementById('em-modal-error');
+    if(!date){ showError(errEl,'Transfer date is required.'); return; }
+    const btn=document.getElementById('em-save-btn'); btn.disabled=true; btn.textContent='Saving…';
+    try{
+      await updateDoc(doc(db,'mortgage_transfers',id),{phone,date,comm});
+      closeEditMortgageModal();
+      toast('Mortgage record updated!','success');
+    }catch(e){ showError(errEl,'Failed to save changes. Please try again.'); console.error(e); }
+    btn.disabled=false; btn.textContent='Save Changes';
+  };
+
   // ── ADMIN RECORDS VIEW ──
   window.onRoleTypeChange=function(){
     const role=document.getElementById('f-role-type').value,dw=document.getElementById('f-deal-type-wrap'),ds=document.getElementById('f-deal-type'),sw=document.getElementById('f-status-wrap');
@@ -2239,6 +2308,20 @@
     if(t.status==='Approved') return `<div class="ar-actions"><div class="ar-btns"><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`;
     if(t.status==='Declined') return `<div class="ar-actions"><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ Approve</button></div></div>`;
     return `<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-t-${t.id}" value="${t.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`;
+  }
+  // Mortgage's Review section (Approve/Decline + editable commission) — lives
+  // ONLY inside the Edit Mortgage Record modal now, never inline on the
+  // list card, matching how Deals & Transfers already work. This is purely
+  // a UI relocation: adminMtgAction (and its tiered-commission recompute
+  // via mtgComputeApprovedCommissions) is unchanged — same function, same
+  // #comm-m-{id} input class/value contract, just rendered in a different
+  // place in the DOM.
+  function mtgActionsHtml(r,isReadOnly){
+    if(isReadOnly) return '';
+    const isPending=!r.status||r.status==='Pending';
+    if(r.status==='Approved') return `<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Re-Approve</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`;
+    if(r.status==='Declined') return `<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Approve</button></div></div>`;
+    return `<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ ${isPending?'Approve':'Re-Approve'}</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`;
   }
 
   function renderAdminResults(){
@@ -2304,7 +2387,8 @@
   };
 
   window.exportMtgCSV=function(){
-    const m=gdfMtg();
+    const f=getMtgFilters();
+    const m=gdfMtg().filter(r=>f.status==='All'||r.status===f.status||(f.status==='Pending'&&!r.status));
     if(!m.length){toast('No mortgage records to export.','error');return;}
     const rows=[
       ['Agent','Phone','Date','Seq #','Commission','Status','Submitted'],
@@ -2449,7 +2533,7 @@
     clearPhoneAlert('op-phone');
     if(!name||!type||!date||!phone){toast('Please complete all required fields.','error');return;}
     if(CLOSED_TYPES.includes(type)&&!closer){toast('Please select a closer for this transfer type.','error');return;}
-    if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
+    if(!isValidPhoneFormat(phone)){toast('Phone must be 10 digits (dashes optional). No +1 prefix.','error');return;}
     if(phoneExistsInCategory(phone,'opener')){showPhoneAlert('op-phone');return;}
     const comm=openerCommForNext(type);
     const btn=document.getElementById('op-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
@@ -2474,7 +2558,7 @@
     const name=document.getElementById('cl-name').value,opener=document.getElementById('cl-opener').value,dealType=document.getElementById('cl-deal-type').value,client=document.getElementById('cl-client').value.trim(),phone=document.getElementById('cl-phone').value.trim(),debt=document.getElementById('cl-debt').value,monthly=document.getElementById('cl-monthly').value,firstpay=document.getElementById('cl-firstpay').value,closing=document.getElementById('cl-closing').value;
     clearPhoneAlert('cl-phone');
     if(!name||!opener||!dealType||!client||!phone||!debt||!monthly){toast('Please complete all required fields.','error');return;}
-    if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
+    if(!isValidPhoneFormat(phone)){toast('Phone must be 10 digits (dashes optional). No +1 prefix.','error');return;}
     if(phoneExistsInCategory(phone,'closer')){showPhoneAlert('cl-phone');return;}
     const base=closerBaseComm(monthly),dateStr=closing?closing.split('T')[0]:egyptTodayDateStr();
     const existing=countCloserDealsInShift(name,closing),mult=existing>=1?2:1,comm=base*mult;
@@ -2521,7 +2605,7 @@
     const agent=document.getElementById('mtg-agent').value,phone=document.getElementById('mtg-phone').value.trim(),date=document.getElementById('mtg-date').value;
     clearPhoneAlert('mtg-phone');
     if(!agent||!phone||!date){toast('Please complete all fields.','error');return;}
-    if(!isValidPhoneFormat(phone)){toast('Phone must be in format 423-482-1384.','error');return;}
+    if(!isValidPhoneFormat(phone)){toast('Phone must be 10 digits (dashes optional). No +1 prefix.','error');return;}
     if(phoneExistsInCategory(phone,'mortgage')){showPhoneAlert('mtg-phone');return;}
     const btn=document.getElementById('mtg-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
     // Mortgage agents submit only qualified transfers — no admin review
@@ -2557,7 +2641,8 @@
 
   window.adminMtgAction=async function(id,action){
     const r=mtgRecords.find(x=>x.id===id);if(!r){toast('Record not found.','error');return;}
-    const editEl=document.getElementById('comm-m-'+id);
+    const card=(typeof event!=='undefined'&&event?.target)?event.target.closest('.task-card,.admin-record,.ap-box'):null;
+    const editEl=card?card.querySelector('.ar-comm-input'):document.getElementById('comm-m-'+id);
     const finalComm=editEl?(Number(editEl.value)||0):(r.comm||0);
     if(action==='Declined'){
       window._pendingDecline={id,kind:'mortgage',finalComm};
@@ -4023,17 +4108,38 @@ table.ref-table{width:100%;border-collapse:collapse;}
         </div>
       </div>
 
+      <!-- ══ EDIT MORTGAGE RECORD MODAL ══ -->
+      <div id="em-modal-overlay" class="ap-overlay">
+        <div class="ap-box" style="max-width:480px">
+          <button class="ap-close" onclick="closeEditMortgageModal()">✕</button>
+          <div class="form-card-title">Edit Mortgage Record</div>
+          <div class="field"><label>Agent</label><input type="text" id="em-agent" readonly/></div>
+          <div class="field-row"><div class="field"><label>Transfer Date</label><input type="date" id="em-date"/></div><div class="field"><label>Client Phone</label><input type="text" id="em-phone" placeholder="423-482-1384"/></div></div>
+          <div class="field-row"><div class="field"><label>Seq # (system-generated)</label><input type="text" id="em-seq" readonly/></div><div class="field"><label>Commission ($)</label><input type="number" id="em-comm" placeholder="0.00"/></div></div>
+          <div class="login-error" id="em-modal-error" style="display:none"></div>
+          <button class="btn-form" id="em-save-btn" onclick="saveEditMortgage()">Save Changes</button>
+          <div id="em-actions-container"></div>
+        </div>
+      </div>
+
       <!-- ══ ADMIN MORTGAGE ══ -->
       <div class="view" id="view-admin-mortgage">
         <div class="view-header"><div class="view-title">Mortgage Records</div><div class="view-sub">Full detail and commission for every submitted transfer.</div></div>
-        <div class="mtg-stat-banner"><div class="mtg-stat-item"><div class="mtg-stat-val" id="adm-mtg-count">0</div><div class="mtg-stat-lbl">Transfers (filtered)</div></div></div>
         <div class="action-bar">
-          <button class="btn-csv" onclick="exportMtgCSV()">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Export CSV
-          </button>
+          <button class="btn-refresh" onclick="renderAdminMortgage()"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Refresh</button>
+          <button class="btn-csv" onclick="exportMtgCSV()"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export CSV</button>
         </div>
-        <div id="adm-mtg-list"><div class="empty-state">No mortgage transfers in this date range.</div></div>
+        <div class="filter-panel">
+          <div class="filter-panel-title">Additional filters <span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0"> — date range applies from the top bar</span></div>
+          <div class="filter-grid">
+            <div class="filter-field"><label>Status</label><select id="mf-status" onchange="applyMtgFilters()"><option value="All">All Statuses</option><option value="Pending">Pending</option><option value="Approved">Approved</option><option value="Declined">Declined</option></select></div>
+          </div>
+          <div class="filter-actions">
+            <div class="filter-count" id="mf-count"></div>
+            <div class="filter-btns"><button class="btn-filter-clear" onclick="clearMtgFilters()">Clear filters</button></div>
+          </div>
+        </div>
+        <div id="mtg-section"><div class="section-heading">Mortgage Transfers</div><div id="adm-mtg-list"><div class="empty-state">No mortgage transfers in this date range.</div></div></div>
       </div>
 
       <!-- ══ ADMIN COMMISSION STRUCTURE ══ -->
