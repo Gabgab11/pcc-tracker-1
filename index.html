@@ -127,13 +127,14 @@
     }
   }
 
-  // ── Agent profile photo upload (Firebase Storage) ──
+  // ── Agent profile photo upload (via Vercel Blob + /api/upload-agent-photo) ──
   // Self-service: click your own sidebar avatar. Admin: "Upload Photo" in
   // the Edit Agent modal, on someone else's behalf. Both funnel through
-  // this one modal + uploadAgentPhoto(), which writes to Storage at
-  // agent-photos/{agentId}/{timestamp}.{ext} and saves the download URL on
-  // agents/{agentId}.photoURL — from there it's picked up everywhere via
-  // avatarHTML()/applyAvatarToEl() automatically (no other state to sync).
+  // this one modal + uploadAgentPhoto(), which POSTs the file to the
+  // serverless function, which verifies the caller (self or admin), stores
+  // it in Vercel Blob at agent-photos/{agentId}/{timestamp}.{ext}, and
+  // saves the resulting URL on agents/{agentId}.photoURL — from there it's
+  // picked up everywhere via avatarHTML()/applyAvatarToEl() automatically.
   window._photoUploadAgentId=null;
   window.openOwnPhotoUpload=function(explicitAgentId){
     const agentId = explicitAgentId || currentUser?.docId;
@@ -166,13 +167,17 @@
     const btn=document.getElementById('pu-upload-btn'); btn.disabled=true; btn.textContent='Uploading…';
     try{
       const ext=(file.name.split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'')||'jpg';
-      const sRef=storageRef(storage, `agent-photos/${agentId}/${Date.now()}.${ext}`);
-      await uploadBytes(sRef, file);
-      const url=await getDownloadURL(sRef);
-      await updateDoc(doc(db,'agents',agentId),{photoURL:url});
+      const idToken = await auth.currentUser.getIdToken();
+      const resp = await fetch(`/api/upload-agent-photo?targetAgentId=${encodeURIComponent(agentId)}&ext=${encodeURIComponent(ext)}`, {
+        method:'POST',
+        headers:{ 'Content-Type': file.type, 'Authorization':`Bearer ${idToken}` },
+        body: file
+      });
+      const data = await resp.json().catch(()=>({}));
+      if(!resp.ok) throw new Error(data.error||`Request failed (${resp.status})`);
       toast('Photo updated!','success');
       closePhotoUpload();
-    }catch(e){ showError(errEl,'Upload failed. Please try again.'); console.error(e); }
+    }catch(e){ showError(errEl,'Upload failed: '+e.message); console.error(e); }
     btn.disabled=false; btn.textContent='Upload Photo';
   };
 
