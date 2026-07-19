@@ -9,7 +9,7 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-  import { getFirestore, doc, getDoc, setDoc, collection, addDoc, query, where, getDocs, updateDoc, deleteDoc, orderBy, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, doc, getDoc, setDoc, collection, addDoc, query, where, getDocs, updateDoc, deleteDoc, orderBy, onSnapshot, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
   import { getDatabase, ref, set, onDisconnect, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
   import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
 
@@ -1720,6 +1720,73 @@
   // since every mortgage record is the same agent-type and record-type),
   // mirroring the pattern getFilters()/applyFilters()/clearFilters() use
   // for Deals & Transfers.
+  // ── DELETE ALL MORTGAGE DATA (Admin-only, irreversible) ──
+  // Every mortgage record — transfers, statuses, commissions, sequence
+  // numbers — lives in exactly one Firestore collection: mortgage_transfers.
+  // Deleting every document in it removes Mortgage data completely while
+  // leaving Closer/Opener deals, transfers, and commissions untouched.
+  // Reassigning an agent off Mortgage doesn't need anything new — the
+  // existing Edit Agent modal's Role dropdown already does that (same
+  // email/doc id, so their login is unaffected) — this modal just surfaces
+  // that shortcut inline so nobody has to go hunt for it separately.
+  window.openDeleteMortgageModal=function(){
+    if(currentUser?.role!=='admin') return;
+    document.getElementById('dmm-count').textContent = mtgRecords.length.toLocaleString();
+    const listWrap=document.getElementById('dmm-agent-list-wrap');
+    const list=document.getElementById('dmm-agent-list');
+    const mtgAgents = ALL_AGENTS.filter(a=>a.role==='mortgage');
+    if(mtgAgents.length){
+      listWrap.style.display='block';
+      list.innerHTML = mtgAgents.map(a=>`
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--border2);border-radius:8px">
+          <span style="display:flex;align-items:center;gap:8px;font-size:13px">${avatarHTML(a.name,'avatar-xs')} ${displayName(a.name)} <span style="color:var(--text3);font-size:11px">${a.email}</span></span>
+          <button class="btn-filter-clear" onclick="closeDeleteMortgageModal();openEditAgent('${a.id}')">Reassign →</button>
+        </div>`).join('');
+    } else {
+      listWrap.style.display='none';
+    }
+    document.getElementById('dmm-confirm-input').value='';
+    document.getElementById('dmm-error').style.display='none';
+    checkDeleteMortgageConfirm();
+    document.getElementById('dmm-overlay').classList.add('open');
+  };
+  window.closeDeleteMortgageModal=function(){
+    document.getElementById('dmm-overlay').classList.remove('open');
+  };
+  window.checkDeleteMortgageConfirm=function(){
+    const val=document.getElementById('dmm-confirm-input').value;
+    const btn=document.getElementById('dmm-confirm-btn');
+    const ok = val==='DELETE MORTGAGE DATA';
+    btn.disabled=!ok;
+    btn.style.opacity = ok?'1':'.5';
+  };
+  window.executeDeleteMortgageData=async function(){
+    if(currentUser?.role!=='admin') return;
+    const val=document.getElementById('dmm-confirm-input').value;
+    if(val!=='DELETE MORTGAGE DATA') return;
+    const btn=document.getElementById('dmm-confirm-btn');
+    const errEl=document.getElementById('dmm-error');
+    errEl.style.display='none';
+    btn.disabled=true; btn.textContent='Deleting…';
+    try{
+      const snap = await getDocs(collection(db,'mortgage_transfers'));
+      const docs = snap.docs;
+      for(let i=0;i<docs.length;i+=450){
+        const batch=writeBatch(db);
+        docs.slice(i,i+450).forEach(d=>batch.delete(d.ref));
+        await batch.commit();
+        btn.textContent = `Deleting… (${Math.min(i+450,docs.length)}/${docs.length})`;
+      }
+      toast(`Deleted ${docs.length.toLocaleString()} mortgage record(s) permanently.`,'success');
+      closeDeleteMortgageModal();
+    }catch(e){
+      showError(errEl,'Failed to delete mortgage data. Please try again.');
+      console.error(e);
+    }
+    btn.textContent='Permanently Delete Mortgage Data';
+    checkDeleteMortgageConfirm();
+  };
+
   function getMtgFilters(){ return { status: document.getElementById('mf-status')?.value || 'All' }; }
   window.applyMtgFilters=function(){ renderAdminMortgage(); };
   window.clearMtgFilters=function(){
@@ -1729,6 +1796,8 @@
   };
 
   function renderAdminMortgage(){
+    const dmmBtn=document.getElementById('dmm-open-btn');
+    if(dmmBtn) dmmBtn.style.display = currentUser?.role==='admin' ? 'inline-flex' : 'none';
     const f=getMtgFilters();
     const m=gdfMtg().filter(r=>f.status==='All'||r.status===f.status||(f.status==='Pending'&&!r.status));
     const countEl=document.getElementById('mf-count');
@@ -3440,29 +3509,48 @@
   const DSC_CFG = { nameField:'name', dateField:'closingDate', debtField:'debt', typeField:'dealType' };
   const DSO_CFG = { nameField:'name', dateField:'date',        debtField:null,   typeField:null       };
 
-  // ── Agent filter state ── { scope:'all'|'opener'|'closer', name:'' } ──
-  window._dsFilter = window._dsFilter || { scope:'all', name:'' };
+  // ── Filter state ── this page now reads scope from the SAME master
+  // filter used everywhere else in the app (the "Filter Scope" row inside
+  // the Date Range dropdown in the top bar) instead of a page-local
+  // control, so it behaves consistently with Overview / Commission
+  // Structure / everywhere else. The only thing local to this page is
+  // which single agent (within that scope) to drill into. ──
+  window._dsFilter = window._dsFilter || { name:'' };
+
+  // Maps the shared master filter's roleScope onto what this page can
+  // actually show: 'all' and 'closer' both default to the Closer-side view
+  // (Debt Settlement Convergent's primary dataset — the `deals` records),
+  // 'opener' shows the Opener-side view (Debt Settlement In-House
+  // transfers), and 'mortgage' has no Debt Settlement data at all.
+  function dsResolveScope(){
+    const s=window._gdf.roleScope;
+    return s==='opener' ? 'opener' : s==='mortgage' ? 'mortgage' : 'closer';
+  }
 
   // Records + date field + which "kind" of agent (opener/closer) they
-  // belong to, honoring the current scope AND the selected agent name.
+  // belong to, honoring the shared master filter's scope AND the selected
+  // agent name (local to this page).
   function dsGetFilteredRecords(){
-    const {scope,name}=window._dsFilter;
-    if(scope==='opener'){
+    const kind=dsResolveScope();
+    const {name}=window._dsFilter;
+    if(kind==='mortgage') return { records:[], dateField:'date', kind };
+    if(kind==='opener'){
       let recs=dsRangeXfers();
       if(name) recs=recs.filter(t=>t.name===name);
-      return { records:recs, dateField:'date', kind:'opener' };
+      return { records:recs, dateField:'date', kind };
     }
     let recs=dsRangeDeals();
-    if(scope==='closer' && name) recs=recs.filter(d=>d.name===name);
-    return { records:recs, dateField:'closingDate', kind:'closer' };
+    if(name) recs=recs.filter(d=>d.name===name);
+    return { records:recs, dateField:'closingDate', kind };
   }
   // Same as above but ALWAYS ignoring the selected name — used for the
   // "Top Performing Agents" chart and the comparison leaderboards/table so
   // they keep showing everyone even while one agent is drilled into.
   function dsGetScopeRecords(){
-    const {scope}=window._dsFilter;
-    if(scope==='opener') return { records:dsRangeXfers(), dateField:'date', kind:'opener' };
-    return { records:dsRangeDeals(), dateField:'closingDate', kind:'closer' };
+    const kind=dsResolveScope();
+    if(kind==='mortgage') return { records:[], dateField:'date', kind };
+    if(kind==='opener') return { records:dsRangeXfers(), dateField:'date', kind };
+    return { records:dsRangeDeals(), dateField:'closingDate', kind };
   }
 
   // Builds every per-agent figure the dashboard, leaderboards, and agent
@@ -3511,22 +3599,23 @@
     return window._dsCharts[id];
   }
 
-  // ── Filter panel wiring ──
+  // ── Filter panel wiring — the Agent name list is local to this page,
+  // but WHICH list (Closers vs Openers) is entirely driven by the shared
+  // master filter's Filter Scope, same as everywhere else in the app. ──
   function dsPopulateFilterNames(){
     const sel=document.getElementById('dsp-filter-name'); if(!sel) return;
-    const {scope,name}=window._dsFilter;
-    const names = scope==='opener' ? ACTIVE_OPENER_NAMES : scope==='closer' ? ACTIVE_CLOSER_NAMES : [];
-    sel.innerHTML = `<option value="">All ${scope==='opener'?'Openers':'Closers'}</option>` +
+    const nameWrap=document.getElementById('dsp-filter-name-wrap');
+    const kind=dsResolveScope();
+    if(kind==='mortgage'){ if(nameWrap) nameWrap.style.display='none'; return; }
+    if(nameWrap) nameWrap.style.display='block';
+    const lbl=document.getElementById('dsp-filter-name-label');
+    if(lbl) lbl.textContent = kind==='opener' ? 'Agent (Opener)' : 'Agent (Closer)';
+    const names = kind==='opener' ? ACTIVE_OPENER_NAMES : ACTIVE_CLOSER_NAMES;
+    const {name}=window._dsFilter;
+    sel.innerHTML = `<option value="">All ${kind==='opener'?'Openers':'Closers'}</option>` +
       names.map(n=>`<option value="${String(n).replace(/"/g,'&quot;')}">${displayName(n)}</option>`).join('');
     if(name && names.includes(name)) sel.value=name; else window._dsFilter.name='';
   }
-  window.dsFilterScopeChange=function(){
-    const scope=document.getElementById('dsp-filter-scope').value;
-    window._dsFilter={scope,name:''};
-    const nameWrap=document.getElementById('dsp-filter-name-wrap');
-    if(nameWrap) nameWrap.style.display = scope==='all' ? 'none' : 'block';
-    renderDsConvergentPage();
-  };
   window.dsFilterNameChange=function(){
     window._dsFilter.name=document.getElementById('dsp-filter-name').value||'';
     renderDsConvergentPage();
@@ -3535,6 +3624,21 @@
   function renderDsConvergentPage(){
     const view=document.getElementById('view-ds-convergent'); if(!view) return;
     dsPopulateFilterNames();
+
+    const noticeBox=document.getElementById('dsp-scope-notice');
+    const contentBox=document.getElementById('dsp-dashboard-content');
+    const kindNow=dsResolveScope();
+    if(kindNow==='mortgage'){
+      if(noticeBox) noticeBox.style.display='block';
+      if(contentBox) contentBox.style.display='none';
+      const set0=(id,val)=>{const el=document.getElementById(id); if(el) el.textContent=val;};
+      set0('dsp-stat-total','0'); set0('dsp-stat-closed','0'); set0('dsp-stat-pending','0');
+      set0('dsp-stat-declined','0'); set0('dsp-stat-closerate','0%'); set0('dsp-stat-avgpcc','$0');
+      return;
+    }
+    if(noticeBox) noticeBox.style.display='none';
+    if(contentBox) contentBox.style.display='block';
+
     const {records,dateField,kind}=dsGetFilteredRecords();
     const {name}=window._dsFilter;
     const approved=records.filter(r=>r.status==='Approved');
@@ -4378,6 +4482,8 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .dsp-agent-row{cursor:pointer;transition:background .15s;}
 .dsp-agent-row:hover{background:rgba(79,126,255,.06);}
 table.dsp-table th,table.dsp-table td{white-space:nowrap;}
+.dsp-scope-hint{font-size:12px;color:var(--text3);line-height:1.5;padding-top:6px;}
+.dsp-scope-hint b{color:var(--text2);}
 .btn-refresh:hover{background:rgba(79,126,255,.14);}
 
 /* RECORD CARDS */
@@ -5007,6 +5113,7 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
         <div class="action-bar">
           <button class="btn-refresh" onclick="renderAdminMortgage()"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Refresh</button>
           <button class="btn-csv" onclick="exportMtgCSV()"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export CSV</button>
+          <button class="btn-decline" id="dmm-open-btn" style="margin-left:auto;display:none" onclick="openDeleteMortgageModal()">🗑 Delete All Mortgage Data</button>
         </div>
         <div class="filter-panel">
           <div class="filter-panel-title">Additional filters <span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0"> — date range applies from the top bar</span></div>
@@ -5021,27 +5128,48 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
         <div id="mtg-section"><div class="section-heading">Mortgage Transfers</div><div id="adm-mtg-list"><div class="empty-state">No mortgage transfers in this date range.</div></div></div>
       </div>
 
+      <!-- ══ DELETE ALL MORTGAGE DATA — Admin-only, irreversible ══ -->
+      <div id="dmm-overlay" class="ap-overlay">
+        <div class="ap-box" style="max-width:520px">
+          <button class="ap-close" onclick="closeDeleteMortgageModal()">✕</button>
+          <div class="form-card-title" style="color:var(--red)">🗑 Delete All Mortgage Data</div>
+          <div style="font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:16px">
+            This permanently deletes <b id="dmm-count">—</b> mortgage record(s) — every mortgage transfer, commission, and status entry in the system.
+            <b>This cannot be undone.</b> Deals, transfers, and commissions for Closers and Openers are completely unaffected.
+          </div>
+
+          <div id="dmm-agent-list-wrap" style="display:none;margin-bottom:16px">
+            <div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3);margin-bottom:8px">Agents currently on Mortgage — reassign them here before or after deleting</div>
+            <div id="dmm-agent-list" style="display:flex;flex-direction:column;gap:8px"></div>
+          </div>
+
+          <div class="field">
+            <label>Type <code>DELETE MORTGAGE DATA</code> to confirm</label>
+            <input type="text" id="dmm-confirm-input" placeholder="DELETE MORTGAGE DATA" oninput="checkDeleteMortgageConfirm()" autocomplete="off"/>
+          </div>
+          <div class="login-error" id="dmm-error" style="display:none"></div>
+          <button class="btn-decline" id="dmm-confirm-btn" style="width:100%;padding:12px 0;opacity:.5" disabled onclick="executeDeleteMortgageData()">Permanently Delete Mortgage Data</button>
+        </div>
+      </div>
+
       <!-- ══ DEBT SETTLEMENT CONVERGENT ══ Dedicated executive analytics
            page. Uses the EXISTING Debt Settlement In-House deals (deals
            collection, dealType 'Debt Settlement' / 'Debt Validation') as
            its sole data source — no new collection, nothing duplicated.
            Respects the shared master date-range filter in the top bar. ══ -->
       <div class="view" id="view-ds-convergent">
-        <div class="view-header"><div class="view-title">💠 Debt Settlement Convergent</div><div class="view-sub">Executive performance analytics for Debt Settlement In-House deals · use the master filter above to change the date range.</div></div>
+        <div class="view-header"><div class="view-title">💠 Debt Settlement Convergent</div><div class="view-sub">Executive performance analytics for Debt Settlement In-House deals · use the master filter above to change the date range and scope.</div></div>
 
         <div class="filter-panel">
           <div class="filter-panel-title">Filter by Agent</div>
           <div class="filter-grid">
-            <div class="filter-field"><label>View</label>
-              <select id="dsp-filter-scope" onchange="dsFilterScopeChange()">
-                <option value="all">Company-wide (All)</option>
-                <option value="opener">Openers</option>
-                <option value="closer">Closers</option>
-              </select>
-            </div>
             <div class="filter-field" id="dsp-filter-name-wrap" style="display:none">
-              <label>Agent</label>
+              <label id="dsp-filter-name-label">Agent</label>
               <select id="dsp-filter-name" onchange="dsFilterNameChange()"></select>
+            </div>
+            <div class="filter-field" id="dsp-filter-hint-wrap">
+              <label>Scope</label>
+              <div class="dsp-scope-hint" id="dsp-scope-hint">Use the <b>Filter Scope</b> in the master filter above (Closers / Openers) to switch who this page shows, and drill into one agent here.</div>
             </div>
           </div>
         </div>
@@ -5055,6 +5183,17 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
           <div class="stat-card teal"><div class="stat-label">Average PCC</div><div class="stat-value" id="dsp-stat-avgpcc">$0</div></div>
         </div>
 
+        <!-- Shown when the master filter's Filter Scope is set to Mortgage —
+             Debt Settlement Convergent has no mortgage data (it's sourced
+             entirely from Debt Settlement In-House deals/transfers), so we
+             say so plainly instead of showing misleading zeros everywhere. -->
+        <div class="panel-card" id="dsp-scope-notice" style="display:none;margin-bottom:16px;text-align:center;padding:40px 24px">
+          <div style="font-size:28px;margin-bottom:10px">🏠</div>
+          <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:6px">Mortgage isn't part of Debt Settlement Convergent</div>
+          <div style="font-size:13px;color:var(--text3);max-width:440px;margin:0 auto">This page only covers Debt Settlement In-House performance. Switch the <b>Filter Scope</b> in the master filter above to Closers or Openers (or All) to see data here.</div>
+        </div>
+
+        <div id="dsp-dashboard-content">
         <div class="dsp-charts-grid">
           <div class="dsp-chart-card"><div class="panel-card-title">Closed vs Pending vs Declined</div><div class="dsp-chart-wrap"><canvas id="dsp-chart-status"></canvas></div></div>
           <div class="dsp-chart-card"><div class="panel-card-title">Daily Closures · last 14 days</div><div class="dsp-chart-wrap"><canvas id="dsp-chart-daily"></canvas></div></div>
@@ -5077,6 +5216,7 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
             <div class="panel-card-title"><span id="dsp-table-title">Agent Analytics</span><span style="color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">· click an agent for full profile</span></div>
             <div id="dsp-agent-table" style="overflow-x:auto"><div class="empty-state">Loading…</div></div>
           </div>
+        </div>
         </div>
       </div>
 
