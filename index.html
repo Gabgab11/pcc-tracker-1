@@ -30,7 +30,7 @@
   const storage = getStorage(app);
 
   // ── AGENT REGISTRY (Firebase-driven) ──
-  // ROLE_MAP, CLOSER_NAMES, OPENER_NAMES, and MTG_AGENTS used to be hardcoded.
+  // ROLE_MAP, CLOSER_NAMES, and OPENER_NAMES used to be hardcoded.
   // They are now DERIVED LIVE from the `agents` Firestore collection via
   // onSnapshot in setupAgentRegistryListener() below. Adding, editing,
   // deactivating, or removing an agent in Admin → Agent Management
@@ -41,17 +41,15 @@
   let ROLE_MAP       = {};   // { emailLower: { role, name, active, docId } }
   let CLOSER_NAMES   = [];
   let OPENER_NAMES   = [];
-  let MTG_AGENTS     = [];
   // ACTIVE_* are subsets excluding archived (active===false) agents — used
   // everywhere a NEW assignment/selection happens (submit forms, reassign,
   // rankings) so departed agents can no longer receive new work or clutter
-  // live leaderboards. The full CLOSER_NAMES/OPENER_NAMES/MTG_AGENTS above
-  // still include archived agents, since historical deals/transfers/records
+  // live leaderboards. The full CLOSER_NAMES/OPENER_NAMES above still
+  // include archived agents, since historical deals/transfers/records
   // tied to their name must remain fully resolvable (profiles, CSV export,
   // search-by-name) forever.
   let ACTIVE_CLOSER_NAMES = [];
   let ACTIVE_OPENER_NAMES = [];
-  let ACTIVE_MTG_AGENTS   = [];
   let ALL_AGENTS     = [];   // full agent docs, every role, active + inactive
   let DISPLAY_ALIAS  = {};   // { name: aliasName } — built from agent.alias field
   let agentsUnsub    = null;
@@ -77,12 +75,12 @@
     { email:'sean@pcc.com',          name:'Sean',     role:'opener',   department:'Openers', commissionStructure:'Standard Opener Tiers' },
     { email:'emmanuel@pcc.com',      name:'Emmanuel', role:'opener',   department:'Openers', commissionStructure:'Standard Opener Tiers', alias:'John Peter' },
     { email:'tom@pcc.com',           name:'Tom',      role:'opener',   department:'Openers', commissionStructure:'Standard Opener Tiers', alias:'Tommy Eager' },
-    { email:'paul@ucc.com',          name:'Paul',     role:'mortgage', department:'Mortgage', commissionStructure:'Mortgage Tiered Engine' },
-    { email:'liam@ucc.com',          name:'Liam',     role:'mortgage', department:'Mortgage', commissionStructure:'Mortgage Tiered Engine' },
-    { email:'hidie@ucc.com',         name:'Hidie',    role:'mortgage', department:'Mortgage', commissionStructure:'Mortgage Tiered Engine' },
-    { email:'wells@ucc.com',         name:'Wells',    role:'mortgage', department:'Mortgage', commissionStructure:'Mortgage Tiered Engine', alias:'Wills Adams' },
-    { email:'jacobtheguy@ucc.com',   name:'Jacob',    role:'mortgage', department:'Mortgage', commissionStructure:'Mortgage Tiered Engine' },
   ];
+  // NOTE: Mortgage was removed as a role/department entirely. Agents who
+  // were previously seeded as Mortgage (Paul, Liam, Hidie, Wells/Wills,
+  // Jacob) are untouched here if they already exist in Firestore under a
+  // different role — this list is only ever consulted to auto-create
+  // agents that are completely missing from the `agents` collection.
 
   function displayName(name){ return DISPLAY_ALIAS[name] || name || '—'; }
   window.displayName = displayName;
@@ -187,25 +185,23 @@
   function rebuildAgentRegistry(agentDocs){
     ALL_AGENTS = agentDocs;
     const newRoleMap={}, newAlias={};
-    const closers=[], openers=[], mtg=[];
+    const closers=[], openers=[];
     agentDocs.forEach(a=>{
       if(!a.email||!a.name||!a.role) return;
       const emailLower=a.email.toLowerCase();
       // Inactive agents are removed from ROLE_MAP so they can no longer log
       // in, but their name stays in the role arrays below so their
-      // historical deals/transfers/mortgage records remain fully visible
-      // on dashboards, leaderboards, and reports.
+      // historical deals/transfers records remain fully visible on
+      // dashboards, leaderboards, and reports.
       if(a.active!==false){ newRoleMap[emailLower]={ role:a.role, name:a.name, docId:a.id, uid:a.uid||null, active:true }; }
       if(a.alias) newAlias[a.name]=a.alias;
       if(a.role==='closer')   closers.push(a.name);
       if(a.role==='opener')   openers.push(a.name);
-      if(a.role==='mortgage') mtg.push(a.name);
     });
     ROLE_MAP=newRoleMap; DISPLAY_ALIAS=newAlias;
-    CLOSER_NAMES=closers; OPENER_NAMES=openers; MTG_AGENTS=mtg;
+    CLOSER_NAMES=closers; OPENER_NAMES=openers;
     ACTIVE_CLOSER_NAMES = closers.filter(n=>{const a=agentDocs.find(x=>x.name===n); return !a||a.active!==false;});
     ACTIVE_OPENER_NAMES = openers.filter(n=>{const a=agentDocs.find(x=>x.name===n); return !a||a.active!==false;});
-    ACTIVE_MTG_AGENTS   = mtg.filter(n=>{const a=agentDocs.find(x=>x.name===n); return !a||a.active!==false;});
     window._allAgents=ALL_AGENTS;
     agentRegistryReady=true;
     while(agentRegistryWaiters.length) agentRegistryWaiters.shift()();
@@ -267,76 +263,31 @@
   const CLOSED_TYPES  = ['Debt Settlement In-House'];
   const FLAT_COMM     = { PccSub10:1, PccAbove10:2.5, TaxAbove10:5, TaxBelow10:1, 'Student Loan':2 };
 
-  // ── MORTGAGE COMMISSION ENGINE ──
-  // Tiers (cumulative position in an agent's lifetime APPROVED transfer
-  // sequence, oldest first):
-  //   #1–35   → $3 each
-  //   Once the agent's approved total reaches 36, transfers #1–50 are ALL
-  //            recalculated to $5 each (the $5 rate only switches on once
-  //            #36 is reached — below 36 they stay at $3).
-  //   #51–80  → ONLY those specific transfers earn $6 each. #1–50 are never
-  //            touched again once the agent passes 50.
-  //   #81+    → ONLY transfers from #81 onward earn $7 each. #1–80 are never
-  //            recalculated again.
-  // ── MORTGAGE COMMISSION TIERS (updated) ──
-  // #1–40   → $3 each (unless total ≥ 41, which bumps #1-40 retroactively to $5, etc.)
-  // #41–60  → $5 each
-  // #61–89  → $6 each
-  // #90+    → $6 each (same rate; top tier is $6 — no higher tier above this)
-  // This is a pure function of (seq, totalApprovedCount) — fully dynamic,
-  // re-derived from scratch on every read, so there is never any stored
-  // "stale" rate and never any double-counting.
-  function mtgRateForSeq(seq, totalApprovedCount){
-    if(seq<=40)              return totalApprovedCount>=41 ? 5 : 3;
-    if(seq>=41 && seq<=60)  return 5;
-    if(seq>=61 && seq<=89)  return 6;
-    return 6; // seq >= 90
-  }
-  // Given an agent's APPROVED mortgage records (any order), returns a Map
-  // of recordId → { seq, comm } reflecting the fully-recalculated, current
-  // tier for every record. Pass the full approved set for the agent —
-  // never a filtered subset — or the sequence numbers will be wrong.
-  function mtgComputeApprovedCommissions(approvedRecordsForAgent){
-    const ordered=[...approvedRecordsForAgent].sort((a,b)=>
-      (a.date||a.createdAt||'').localeCompare(b.date||b.createdAt||'') ||
-      (a.createdAt||'').localeCompare(b.createdAt||''));
-    const total=ordered.length;
-    const out=new Map();
-    ordered.forEach((r,i)=>{
-      const seq=i+1;
-      out.set(r.id, { seq, comm:mtgRateForSeq(seq,total) });
-    });
-    return out;
-  }
-
   let currentUser = null;
   let deals       = [];
   let transfers   = [];
-  let mtgRecords  = [];
   let presenceRef = null;
   let dealsUnsub  = null;
   let xferUnsub   = null;
-  let mtgUnsub    = null;
 
   // ── GLOBAL MASTER FILTER ──
   // Single source of truth for the entire app: a date preset (today / thismonth / all / custom)
-  // crossed with a role scope (all / closer / opener / mortgage). EVERY dashboard card, stat,
-  // chart, leaderboard, ranking, and agent profile reads through gdfDeals()/gdfXfers()/gdfMtg()
+  // crossed with a role scope (all / closer / opener). EVERY dashboard card, stat,
+  // chart, leaderboard, ranking, and agent profile reads through gdfDeals()/gdfXfers()
   // below, so changing this filter changes everything at once with no exceptions.
   window._gdf = { from:null, to:null, preset:'all', roleScope:'all' };
 
   function syncGlobals(){
     window._deals      = deals;
     window._transfers  = transfers;
-    window._mtgRecords = mtgRecords;
     window._currentRole= currentUser ? currentUser.role : null;
   }
 
   // ── GDF FILTER HELPERS ──
   // `role` tells the filter which team's shift schedule to use for the
-  // Today/Yesterday presets ('closer'/'opener' → standard 5PM–2AM,
-  // 'mortgage' → 4PM–1AM). This Month/Custom/All stay plain calendar-date
-  // range comparisons, unchanged.
+  // Today/Yesterday presets ('closer'/'opener' → standard 5PM–2AM).
+  // This Month/Custom/All stay plain calendar-date range comparisons,
+  // unchanged.
   function gdfFilterArr(arr, role){
     const {preset,from,to} = window._gdf;
     if(preset==='today' || preset==='yesterday'){
@@ -352,18 +303,17 @@
     });
   }
   // Scope-aware getters: when roleScope is restricted to one team, the OTHER
-  // teams' arrays return empty so every consumer (stats, leaderboards, feeds,
-  // commission structure) automatically shows zero/blank for excluded teams —
-  // there is no separate "scope filter" to forget to apply somewhere.
+  // team's array returns empty so every consumer (stats, leaderboards, feeds,
+  // commission structure) automatically shows zero/blank for the excluded
+  // team — there is no separate "scope filter" to forget to apply somewhere.
   function gdfDeals()  { const s=window._gdf.roleScope; if(s!=='all'&&s!=='closer')   return []; return gdfFilterArr(deals,'closer');        }
   function gdfXfers()  { const s=window._gdf.roleScope; if(s!=='all'&&s!=='opener')   return []; return gdfFilterArr(transfers,'opener');    }
-  function gdfMtg()    { const s=window._gdf.roleScope; if(s!=='all'&&s!=='mortgage') return []; return gdfFilterArr(mtgRecords,'mortgage'); }
 
 
   function updateGdfBadge(){
     const {preset,roleScope} = window._gdf;
     const presetLbls = {today:'Today',yesterday:'Yesterday',thisweek:'This Week',thismonth:'This Month',all:'All Time',custom:'Custom'};
-    const scopeLbls  = {all:'All',closer:'Closers',opener:'Openers',mortgage:'Mortgage'};
+    const scopeLbls  = {all:'All',closer:'Closers',opener:'Openers'};
     const lbl  = document.getElementById('gdf-label');
     const btn  = document.getElementById('gdf-btn');
     const scLbl= document.getElementById('gdf-scope-label');
@@ -403,9 +353,9 @@
     const todayStr=fmt(today);
     let from=null,to=null;
     // 'today'/'yesterday' are resolved PER TEAM at filter time (see
-    // gdfFilterArr) since each team's shift-day boundary sits at a
-    // different hour — there is no single calendar date that means "today"
-    // for both Mortgage and Openers/Closers near the shift boundary.
+    // gdfFilterArr) since the shift-day boundary sits at a specific hour —
+    // there is no single calendar date that means "today" near that
+    // boundary.
     if      (preset==='today')     { from=null; to=null; }
     else if (preset==='yesterday') { from=null; to=null; }
     else if (preset==='thismonth') { from=fmt(new Date(today.getFullYear(),today.getMonth(),1)); to=todayStr; }
@@ -430,13 +380,13 @@
   };
 
   // ── GLOBAL SMART SEARCH (admin & read-only) ──
-  // Searches the raw, unfiltered deals/transfers/mtgRecords/agents arrays —
+  // Searches the raw, unfiltered deals/transfers/agents arrays —
   // deliberately ignores window._gdf so a record can be found regardless of
   // the active date filter. See full implementation below (after
   // normPhone), which supports free-text search across phone numbers,
-  // client/agent/opener/closer/mortgage-agent names, deal types, and record
+  // client/agent/opener/closer names, deal types, and record
   // IDs (full or partial match), plus keyword searches ("Openers",
-  // "Closers", "Mortgage", "Pending", "Approved", "Declined") that return a
+  // "Closers", "Pending", "Approved", "Declined") that return a
   // clean grouped grid/list.
   window.openGlobalSearch=function(){
     const panel=document.getElementById('gsearch-panel');
@@ -480,7 +430,7 @@
     return PHONE_FORMAT_RE.test(p);
   }
 
-  // category: 'opener' -> transfers, 'closer' -> deals, 'mortgage' -> mtgRecords.
+  // category: 'opener' -> transfers, 'closer' -> deals.
   // A duplicate only blocks submission if the exact same phone number already
   // exists within that same category's collection. The same number is fine
   // across different categories (e.g. an opener transfer and the closer deal
@@ -488,7 +438,7 @@
   function phoneExistsInCategory(phone, category){
     const target=normPhone(phone);
     if(!target) return false;
-    const source = category==='opener' ? transfers : category==='closer' ? deals : mtgRecords;
+    const source = category==='opener' ? transfers : deals;
     return source.some(r=>normPhone(r.phone)===target);
   }
   function showPhoneAlert(inputId){
@@ -509,7 +459,6 @@
     closeGlobalSearch();
     if(kind==='deal') openEditDeal(id);
     else if(kind==='transfer') openEditTransfer(id);
-    else if(kind==='mortgage') openEditMortgage(id);
     else if(kind==='agent') openEditAgent(id);
   };
   // Edit is admin-only, everywhere in search results — readonly and every
@@ -522,7 +471,7 @@
   }
   window.gsGoToProfile=function(kind,name){
     closeGlobalSearch();
-    if(kind==='opener'||kind==='closer'||kind==='mortgage') openAgentProfile(kind,name);
+    if(kind==='opener'||kind==='closer') openAgentProfile(kind,name);
   };
 
   // Build a lowercase, alias-aware search blob (+ phone-digit string where
@@ -536,10 +485,6 @@
   function gsXferBlob(t){
     const fields=[t.id,t.name,displayName(t.name),t.phone,t.closer,displayName(t.closer),t.type,t.status];
     return { blob:fields.filter(Boolean).join(' ').toLowerCase(), phoneDigits:normPhone(t.phone) };
-  }
-  function gsMtgBlob(r){
-    const fields=[r.id,r.agent,displayName(r.agent),r.phone,r.status];
-    return { blob:fields.filter(Boolean).join(' ').toLowerCase(), phoneDigits:normPhone(r.phone) };
   }
   function gsAgentBlob(a){
     const fields=[a.id,a.name,displayName(a.name),a.alias,a.email,a.role,a.department];
@@ -580,24 +525,12 @@
       </div>
     </div>`;
   }
-  function gsMtgCard(r){
-    return `<div class="admin-record">
-      <div class="admin-record-top">
-        <div class="ar-left"><div class="status-badge ${gsStatusBadgeClass(r.status)}">${r.status||'Pending'}</div><span class="ar-name">${displayName(r.agent)||'—'} — ${r.phone||'—'}</span></div>
-        <div class="ar-top-right"><span class="gsearch-kind-tag">Mortgage</span><span class="ar-date">${fmtDate(r.date||r.createdAt)}</span>${gsEditBtn('mortgage',r.id)}</div>
-      </div>
-      <div class="ar-grid">
-        <div class="ar-field"><span class="ar-key">Seq #</span><span class="ar-val">${r.seq||'—'}</span></div>
-        <div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${r.comm||0}</span></div>
-      </div>
-    </div>`;
-  }
   function gsAgentCard(a){
     const dn=displayName(a.name);
-    const roleLabels={admin:'Admin',closer:'Closer',opener:'Opener',mortgage:'Mortgage',readonly:'Read-Only'};
-    const roleColors={admin:'badge-blue',closer:'badge-teal',opener:'badge-green',mortgage:'badge-amber',readonly:'badge-teal'};
+    const roleLabels={admin:'Admin',closer:'Closer',opener:'Opener',readonly:'Read-Only'};
+    const roleColors={admin:'badge-blue',closer:'badge-teal',opener:'badge-green',readonly:'badge-teal'};
     const inactive=a.active===false;
-    const canOpenProfile=['opener','closer','mortgage'].includes(a.role);
+    const canOpenProfile=['opener','closer'].includes(a.role);
     return `<div class="gsearch-agent-card" ${canOpenProfile?`onclick="gsGoToProfile('${a.role}','${a.name.replace(/'/g,"\\'")}')"`:''}>
       <div class="gsearch-agent-top">
         ${avatarHTML(a.name,'gsearch-avatar')}
@@ -616,7 +549,6 @@
   const GS_KEYWORD_GROUPS=[
     { keys:['opener','openers'],     type:'role',     role:'opener' },
     { keys:['closer','closers'],     type:'role',     role:'closer' },
-    { keys:['mortgage','mortgages'], type:'mortgage' },
     { keys:['pending'],              type:'status',   status:'Pending'  },
     { keys:['approved'],             type:'status',   status:'Approved' },
     { keys:['declined'],             type:'status',   status:'Declined' },
@@ -630,7 +562,7 @@
 
   function renderGsearchIdle(){
     const box=document.getElementById('gsearch-results');
-    if(box) box.innerHTML=`<div class="empty-state" style="padding:20px 2px">Start typing to search deals, transfers, mortgage records &amp; agents by name, phone, or ID — or try a keyword like <b>Openers</b>, <b>Closers</b>, <b>Mortgage</b>, <b>Pending</b>, <b>Approved</b>, or <b>Declined</b>.</div>`;
+    if(box) box.innerHTML=`<div class="empty-state" style="padding:20px 2px">Start typing to search deals, transfers &amp; agents by name, phone, or ID — or try a keyword like <b>Openers</b>, <b>Closers</b>, <b>Pending</b>, <b>Approved</b>, or <b>Declined</b>.</div>`;
   }
 
   window.runGlobalSearch=function(){
@@ -658,31 +590,18 @@
            <div class="gsearch-grid">${agents.map(gsAgentCard).join('')}</div>`;
       return;
     }
-    if(group.type==='mortgage'){
-      const agents=ALL_AGENTS.filter(a=>a.role==='mortgage')
-        .sort((a,b)=>(a.active===false?1:0)-(b.active===false?1:0)||displayName(a.name).localeCompare(displayName(b.name)));
-      const records=[...mtgRecords].sort((a,b)=>(b.date||b.createdAt||'').localeCompare(a.date||a.createdAt||''));
-      const MAX=30, shown=records.slice(0,MAX);
-      let html=`<div class="gsearch-section-label"><span>Mortgage Agents</span><span class="gsearch-count-pill">${agents.length}</span></div>`;
-      html+= agents.length ? `<div class="gsearch-grid">${agents.map(gsAgentCard).join('')}</div>` : `<div class="empty-state" style="padding:10px 2px">No mortgage agents found.</div>`;
-      html+=`<div class="gsearch-divider"></div><div class="gsearch-section-label"><span>Mortgage Records</span><span class="gsearch-count-pill">${records.length}</span></div>`;
-      html+= shown.length ? shown.map(gsMtgCard).join('') : `<div class="empty-state" style="padding:10px 2px">No mortgage records found.</div>`;
-      if(records.length>MAX) html+=`<div class="gsearch-more-note">Showing ${MAX} most recent of ${records.length} — refine your search to narrow it down.</div>`;
-      box.innerHTML=html;
-      return;
-    }
     if(group.type==='status'){
       const st=group.status;
       const isMatch=v=>st==='Pending'?(!v||v==='Pending'):v===st;
-      const d=deals.filter(x=>isMatch(x.status)), t=transfers.filter(x=>isMatch(x.status)), m=mtgRecords.filter(x=>isMatch(x.status));
-      const total=d.length+t.length+m.length;
+      const d=deals.filter(x=>isMatch(x.status)), t=transfers.filter(x=>isMatch(x.status));
+      const total=d.length+t.length;
       if(!total){ box.innerHTML=`<div class="empty-state" style="padding:20px 2px">No ${st.toLowerCase()} records found.</div>`; return; }
       const MAX=40;
-      const all=[...d.map(x=>({t:'deal',x,date:x.createdAt})),...t.map(x=>({t:'transfer',x,date:x.date||x.createdAt})),...m.map(x=>({t:'mortgage',x,date:x.date||x.createdAt}))]
+      const all=[...d.map(x=>({t:'deal',x,date:x.createdAt})),...t.map(x=>({t:'transfer',x,date:x.date||x.createdAt}))]
         .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
       const shown=all.slice(0,MAX);
       box.innerHTML = `<div class="gsearch-section-label"><span>${st} Records</span><span class="gsearch-count-pill">${total}</span></div>`
-        + shown.map(e=>e.t==='deal'?gsDealCard(e.x):e.t==='transfer'?gsXferCard(e.x):gsMtgCard(e.x)).join('')
+        + shown.map(e=>e.t==='deal'?gsDealCard(e.x):gsXferCard(e.x)).join('')
         + (all.length>MAX ? `<div class="gsearch-more-note">Showing ${MAX} most recent of ${all.length} — refine your search to narrow it down.</div>` : '');
       return;
     }
@@ -693,12 +612,11 @@
     const needleDigits=normPhone(raw);
     const dealHits=deals.filter(d=>gsMatches(gsDealBlob(d),lower,needleDigits));
     const xferHits=transfers.filter(t=>gsMatches(gsXferBlob(t),lower,needleDigits));
-    const mtgHits=mtgRecords.filter(r=>gsMatches(gsMtgBlob(r),lower,needleDigits));
     const agentHits=ALL_AGENTS.filter(a=>gsMatches(gsAgentBlob(a),lower,null));
-    const total=dealHits.length+xferHits.length+mtgHits.length+agentHits.length;
+    const total=dealHits.length+xferHits.length+agentHits.length;
     if(!total){ box.innerHTML=`<div class="empty-state" style="padding:20px 2px">No matches found for "${raw.replace(/[<>]/g,'')}".</div>`; return; }
     const MAX=40;
-    const recordEntries=[...dealHits.map(x=>({t:'deal',x,date:x.createdAt})),...xferHits.map(x=>({t:'transfer',x,date:x.date||x.createdAt})),...mtgHits.map(x=>({t:'mortgage',x,date:x.date||x.createdAt}))]
+    const recordEntries=[...dealHits.map(x=>({t:'deal',x,date:x.createdAt})),...xferHits.map(x=>({t:'transfer',x,date:x.date||x.createdAt}))]
       .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
     let html='';
     if(agentHits.length){
@@ -706,8 +624,8 @@
       if(recordEntries.length) html+=`<div class="gsearch-divider"></div>`;
     }
     if(recordEntries.length){
-      html+=`<div class="gsearch-section-label"><span>Deals, Transfers &amp; Mortgage Records</span><span class="gsearch-count-pill">${recordEntries.length}</span></div>`;
-      html+=recordEntries.slice(0,MAX).map(e=>e.t==='deal'?gsDealCard(e.x):e.t==='transfer'?gsXferCard(e.x):gsMtgCard(e.x)).join('');
+      html+=`<div class="gsearch-section-label"><span>Deals &amp; Transfers</span><span class="gsearch-count-pill">${recordEntries.length}</span></div>`;
+      html+=recordEntries.slice(0,MAX).map(e=>e.t==='deal'?gsDealCard(e.x):gsXferCard(e.x)).join('');
       if(recordEntries.length>MAX) html+=`<div class="gsearch-more-note">Showing ${MAX} most recent of ${recordEntries.length} — refine your search to narrow it down.</div>`;
     }
     box.innerHTML=html;
@@ -726,18 +644,16 @@
   // every "today"/"yesterday"/daily stat, tier reset, leaderboard, and
   // report in the app) ──
   // Openers + Closers share one shift window ("standard"): 5:00 PM – 2:00 AM
-  // Egypt time. Mortgage runs on its own, separate window: 4:00 PM – 1:00 AM
   // Egypt time. A team's BUSINESS DAY runs from that team's shift-start hour
   // to the same hour the next calendar day — so a record created after
   // midnight, while the shift is still running, is always grouped with the
   // day the shift STARTED on. The business day only rolls over when the
-  // next shift starts (4PM for Mortgage, 5PM for Openers/Closers) — never
-  // at the literal midnight calendar boundary.
+  // next shift starts (5PM for Openers/Closers) — never at the literal
+  // midnight calendar boundary.
   const SHIFT_DEFS = {
     standard: { start:17, end:2, dur:9*3600, label:'Egypt: 5PM – 2AM · Mon–Fri', nextLabel:'Next shift: 5PM Egypt' },
-    mortgage: { start:16, end:1, dur:9*3600, label:'Egypt: 4PM – 1AM · Mon–Fri', nextLabel:'Next shift: 4PM Egypt' },
   };
-  function shiftTeamForRole(role){ return role==='mortgage' ? 'mortgage' : 'standard'; }
+  function shiftTeamForRole(role){ return 'standard'; }
   function shiftPad2(n){ return String(n).padStart(2,'0'); }
   function shiftYmd(y,mo,d){ return `${y}-${shiftPad2(mo)}-${shiftPad2(d)}`; }
   // Reinterprets a real timestamp (Date, or an ISO string with a 'Z'/offset)
@@ -777,7 +693,7 @@
   //  • a "bare" local string with no timezone designator — either a
   //    datetime-local value (e.g. the closer's "Closing Date & Time" field,
   //    "2026-07-14T00:15") or a plain "YYYY-MM-DD" date-only field (Transfer
-  //    Date / mortgage Date) — read literally by component, since those
+  //    Date) — read literally by component, since those
   //    values already represent Egypt wall-clock time exactly as entered;
   //    running them through a timezone conversion would silently shift them
   //    by the browser's own offset from Cairo. A bare date with NO time
@@ -875,8 +791,8 @@
 
   // ── DYNAMIC AGENT DROPDOWNS ──
   // Every <select> that lists agent names (Opener Name, Assign-to-Closer,
-  // Closer Name, Opener-of-record, Mortgage Agent) is rebuilt here from the
-  // live CLOSER_NAMES/OPENER_NAMES/MTG_AGENTS arrays instead of static
+  // Closer Name, Opener-of-record) is rebuilt here from the
+  // live CLOSER_NAMES/OPENER_NAMES arrays instead of static
   // <option> tags. Called once right after the agent registry first loads,
   // and again every time it changes (new agent added, name edited,
   // someone deactivated/reactivated) — so the whole CRM reflects roster
@@ -896,7 +812,6 @@
   function refreshAgentDrivenUI(){
     rebuildSelectOptions('op-name',   ACTIVE_OPENER_NAMES);
     rebuildSelectOptions('cl-name',   ACTIVE_CLOSER_NAMES);
-    rebuildSelectOptions('mtg-agent', ACTIVE_MTG_AGENTS);
     rebuildSelectOptions('op-closer', ACTIVE_CLOSER_NAMES, { extraOptionsHTML:'<option value="Outsource">Outsource</option>', alsoAllow:['Outsource'] });
     rebuildSelectOptions('cl-opener', ACTIVE_OPENER_NAMES, { extraOptionsHTML:'<option value="N/A">N/A</option>', alsoAllow:['N/A'] });
     // If the signed-in agent's own name dropdown needs re-locking after a
@@ -904,7 +819,6 @@
     // auto-fill + disabled state for their own submit form.
     if(currentUser?.role==='opener') window.autoFillOpenerName?.();
     if(currentUser?.role==='closer') window.autoFillCloserName?.();
-    if(currentUser?.role==='mortgage') window.autoFillMtgAgent?.();
     // Re-render any admin views that list agents directly, only if they're
     // currently visible — so a roster change (new agent, edit, deactivate)
     // shows up immediately with zero manual refresh.
@@ -977,7 +891,7 @@
 
   window.selectRole=function(role){
     selectedLoginRole=role;
-    ['opener','closer','mortgage','admin','readonly'].forEach(r=>document.getElementById('rs-'+r)?.classList.toggle('active',r===role));
+    ['opener','closer','admin','readonly'].forEach(r=>document.getElementById('rs-'+r)?.classList.toggle('active',r===role));
   };
 
   window.doLogin=async function(){
@@ -1031,14 +945,14 @@
 
   window.doLogout=async function(){
     stopPresence();teardownListeners();await signOut(auth);
-    deals=[];transfers=[];mtgRecords=[];syncGlobals();
+    deals=[];transfers=[];syncGlobals();
     document.getElementById('app').style.display='none';
     ['li-email','li-pass'].forEach(id=>document.getElementById(id).value='');
     document.getElementById('li-btn').textContent='Sign In';
     document.getElementById('li-btn').disabled=false;
     document.getElementById('li-error').style.display='none';
     selectedLoginRole='';
-    ['opener','closer','mortgage','admin','readonly'].forEach(r=>document.getElementById('rs-'+r)?.classList.remove('active'));
+    ['opener','closer','admin','readonly'].forEach(r=>document.getElementById('rs-'+r)?.classList.remove('active'));
     showScreen('login');
   };
 
@@ -1070,7 +984,6 @@
     if(role==='readonly') switchView('admin-overview');
     if(role==='closer')   switchView('closer-dashboard');
     if(role==='opener')   switchView('opener-dashboard');
-    if(role==='mortgage') switchView('mtg-dashboard');
     syncGlobals();startPresence();
     setupRealtimeListeners();
   }
@@ -1078,18 +991,16 @@
   function teardownListeners(){
     if(dealsUnsub){dealsUnsub();dealsUnsub=null;}
     if(xferUnsub) {xferUnsub(); xferUnsub=null; }
-    if(mtgUnsub)  {mtgUnsub();  mtgUnsub=null;  }
     if(queueUnsub){queueUnsub();queueUnsub=null;}
     clearQueueCountdown();
   }
 
-  // FIX 6: Mortgage role ONLY gets mortgage_transfers — zero access to deals or transfers collections
   function setupRealtimeListeners(){
     if(!currentUser)return;
     teardownListeners();
     const role=currentUser.role;
 
-    // Closer deals — admin/readonly and closer only, mortgage explicitly excluded
+    // Closer deals — admin/readonly and closer only
     if(role==='admin'||role==='readonly'||role==='closer'){
       const q=(role==='admin'||role==='readonly')
         ?query(collection(db,'deals'),orderBy('createdAt','desc'))
@@ -1097,35 +1008,12 @@
       dealsUnsub=onSnapshot(q,snap=>{deals=[];snap.forEach(d=>deals.push({id:d.id,...d.data()}));syncGlobals();renderCurrentView();if(window.refreshEOD)window.refreshEOD();},err=>console.error(err));
     }
 
-    // Opener transfers — admin/readonly and opener only, mortgage explicitly excluded
+    // Opener transfers — admin/readonly and opener only
     if(role==='admin'||role==='readonly'||role==='opener'){
       const q=(role==='admin'||role==='readonly')
         ?query(collection(db,'transfers'),orderBy('createdAt','desc'))
         :query(collection(db,'transfers'),where('openerEmail','==',currentUser.email),orderBy('createdAt','desc'));
       xferUnsub=onSnapshot(q,snap=>{transfers=[];snap.forEach(t=>transfers.push({id:t.id,...t.data()}));syncGlobals();renderCurrentView();if(window.refreshEOD)window.refreshEOD();if(role==='opener')updateOpenerCommPreview();},err=>console.error(err));
-    }
-
-    // Mortgage transfers — admin/readonly and mortgage only
-    if(role==='admin'||role==='readonly'||role==='mortgage'){
-      const q=(role==='admin'||role==='readonly')
-        ?query(collection(db,'mortgage_transfers'),orderBy('createdAt','desc'))
-        :query(collection(db,'mortgage_transfers'),where('agentEmail','==',currentUser.email),orderBy('createdAt','desc'));
-      mtgUnsub=onSnapshot(q,snap=>{
-        mtgRecords=[];
-        snap.forEach(t=>{
-          const data=t.data();
-          // Some older records were saved with `clientNumber` instead of
-          // `phone` (pre-dates the current submit form). Every render
-          // function in the app reads `r.phone` — rather than touch the
-          // database or chase down every read site, normalize it once
-          // right here: if `phone` is missing, fall back to
-          // `clientNumber` so old records display correctly too. New
-          // records already save as `phone` and are unaffected.
-          if(!data.phone && data.clientNumber) data.phone=data.clientNumber;
-          mtgRecords.push({id:t.id,...data});
-        });
-        syncGlobals();renderCurrentView();
-      },err=>console.error(err));
     }
 
     // teardownListeners() above also kills the manager-queue listener, so
@@ -1148,9 +1036,6 @@
       <div class="sb-nav-item" data-view="admin-deals" onclick="switchView('admin-deals')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Deals &amp; Transfers
       </div>
-      <div class="sb-nav-item" data-view="admin-mortgage" onclick="switchView('admin-mortgage')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Mortgage Records
-      </div>
       <div class="sb-nav-item" data-view="ds-convergent" onclick="switchView('ds-convergent')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="M18.5 8.5 13 14l-3-3-4.5 4.5"/></svg>Debt Settlement Convergent
       </div>
@@ -1167,9 +1052,6 @@
       </div>
       <div class="sb-nav-item" data-view="admin-deals" onclick="switchView('admin-deals')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Deals &amp; Transfers
-      </div>
-      <div class="sb-nav-item" data-view="admin-mortgage" onclick="switchView('admin-mortgage')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Mortgage Records
       </div>
       <div class="sb-nav-item" data-view="ds-convergent" onclick="switchView('ds-convergent')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="M18.5 8.5 13 14l-3-3-4.5 4.5"/></svg>Debt Settlement Convergent
@@ -1200,36 +1082,26 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="12 8 12 12 14 14"/><path d="M3.05 11a9 9 0 1 1 .5 4"/><polyline points="3 16 3 11 8 11"/></svg>My Transfers
       </div>`;
     } else {
-      // mortgage — only mortgage views
-      nav.innerHTML=`
-      <div class="sb-nav-item active" data-view="mtg-dashboard" onclick="switchView('mtg-dashboard')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Dashboard
-      </div>
-      <div class="sb-nav-item" data-view="mtg-submit" onclick="switchView('mtg-submit')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>Submit Transfer
-      </div>
-      <div class="sb-nav-item" data-view="mtg-records" onclick="switchView('mtg-records')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>My Records
-      </div>`;
+      // Unrecognized/legacy role (e.g. Mortgage was removed) — no nav to show.
+      nav.innerHTML='';
     }
   }
 
-  // FIX 7: switchView enforces role-based allowed views — mortgage cannot reach opener/closer/admin views
+  // FIX 7: switchView enforces role-based allowed views
   window.switchView=function(viewName){
     const role=currentUser?.role;
     const allowed={
-      admin:   ['admin-overview','admin-deals','admin-mortgage','ds-convergent','admin-commission','admin-agents'],
-      readonly:['admin-overview','admin-deals','admin-mortgage','ds-convergent','admin-commission'],
+      admin:   ['admin-overview','admin-deals','ds-convergent','admin-commission','admin-agents'],
+      readonly:['admin-overview','admin-deals','ds-convergent','admin-commission'],
       closer:  ['closer-dashboard','closer-submit','closer-history'],
       opener:  ['opener-dashboard','opener-submit','opener-history'],
-      mortgage:['mtg-dashboard','mtg-submit','mtg-records'],
     };
     if(!allowed[role]?.includes(viewName))return;
     document.querySelectorAll('.view').forEach(v=>v.style.display='none');
     const el=document.getElementById('view-'+viewName);
     if(el)el.style.display='block';
     document.querySelectorAll('.sb-nav-item').forEach(n=>n.classList.toggle('active',n.dataset.view===viewName));
-    const crumbs={'admin-overview':'Overview','admin-deals':'Deals & Transfers','admin-mortgage':'Mortgage Records','ds-convergent':'Debt Settlement Convergent','admin-commission':'Commission Structure','admin-agents':'Agent Management','closer-dashboard':'Dashboard','closer-submit':'Submit Deal','closer-history':'My Deals','opener-dashboard':'Dashboard','opener-submit':'Submit Transfer','opener-history':'My Transfers','mtg-dashboard':'Dashboard','mtg-submit':'Submit Transfer','mtg-records':'My Records'};
+    const crumbs={'admin-overview':'Overview','admin-deals':'Deals & Transfers','ds-convergent':'Debt Settlement Convergent','admin-commission':'Commission Structure','admin-agents':'Agent Management','closer-dashboard':'Dashboard','closer-submit':'Submit Deal','closer-history':'My Deals','opener-dashboard':'Dashboard','opener-submit':'Submit Transfer','opener-history':'My Transfers'};
     document.getElementById('breadcrumb').textContent=crumbs[viewName]||viewName;
     if(viewName==='opener-submit'){autoFillOpenerName();updateOpenerCommPreview();}
     if(viewName==='closer-submit')autoFillCloserName();
@@ -1237,13 +1109,9 @@
     if(viewName==='closer-history')renderCloserHistory();
     if(viewName==='admin-deals')renderAdminResults();
     if(viewName==='admin-overview')renderAdminOverview();
-    if(viewName==='admin-mortgage')renderAdminMortgage();
     if(viewName==='ds-convergent')renderDsConvergentPage();
     if(viewName==='admin-commission')renderAdminCommission();
     if(viewName==='admin-agents')renderAdminAgents();
-    if(viewName==='mtg-dashboard'){renderMtgDashboard();renderQueueForCurrentUser();}
-    if(viewName==='mtg-records')renderMtgRecords();
-    if(viewName==='mtg-submit')autoFillMtgAgent();
     if(viewName==='opener-dashboard')renderQueueForCurrentUser();
     if(viewName==='closer-dashboard')renderQueueForCurrentUser();
   };
@@ -1254,8 +1122,6 @@
       renderAdminOverview();
       const ad=document.getElementById('view-admin-deals');
       if(ad&&ad.style.display!=='none')renderAdminResults();
-      const am=document.getElementById('view-admin-mortgage');
-      if(am&&am.style.display!=='none')renderAdminMortgage();
       const dc=document.getElementById('view-ds-convergent');
       if(dc&&dc.style.display!=='none')renderDsConvergentPage();
       const ac=document.getElementById('view-admin-commission');
@@ -1263,20 +1129,20 @@
     }
     if(role==='closer'){renderCloserDashboard();renderCloserHistory();renderQueueForCurrentUser();}
     if(role==='opener'){renderOpenerDashboard();renderOpenerHistory();renderQueueForCurrentUser();}
-    if(role==='mortgage'){renderMtgDashboard();renderMtgRecords();renderQueueForCurrentUser();}
   }
 
   // ── ADMIN OVERVIEW ──
-  // gdfDeals()/gdfXfers()/gdfMtg() already collapse to [] for any team
+  // gdfDeals()/gdfXfers() already collapse to [] for any team
   // excluded by the active roleScope. That alone fixed the NUMBERS, but the
-  // CARD WRAPPERS still always rendered — so e.g. picking "Mortgage" used to
-  // correctly zero out Closer Comm. while still showing a "$0" card for it.
+  // CARD WRAPPERS still always rendered — so picking a single scope used to
+  // correctly zero out the other team's Comm. while still showing a "$0"
+  // card for it.
   // This now also hides every card that doesn't belong to the active scope,
   // and computes each visible number from ONLY that scope's own records
   // (no more blending all three departments into one "Approved (All)").
   function renderAdminOverview(){
-    const d=gdfDeals(),t=gdfXfers(),m=gdfMtg();
-    const scope=window._gdf.roleScope; // 'all' | 'closer' | 'opener' | 'mortgage'
+    const d=gdfDeals(),t=gdfXfers();
+    const scope=window._gdf.roleScope; // 'all' | 'closer' | 'opener'
 
     // Show/hide each card per its declared scope list.
     document.querySelectorAll('#adm-stats-row .stat-card[data-scope]').forEach(card=>{
@@ -1284,14 +1150,7 @@
       card.style.display = scopes.includes(scope) ? '' : 'none';
     });
 
-    if(scope==='mortgage'){
-      // Mortgage-only: no Pending/Declined concept (every submission counts
-      // immediately), so only Total Submissions + Mortgage Comm. are shown
-      // — Approved/Pending/Declined cards are hidden above, not zeroed.
-      document.getElementById('adm-stat-total').textContent=m.length;
-      document.getElementById('adm-stat-total-sub').textContent='Mortgage transfers';
-      document.getElementById('adm-stat-mtg').textContent='$'+m.reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
-    } else if(scope==='closer'){
+    if(scope==='closer'){
       document.getElementById('adm-stat-total').textContent=d.length;
       document.getElementById('adm-stat-total-sub').textContent='Closer deals';
       document.getElementById('adm-stat-approved-lbl').textContent='Approved';
@@ -1312,10 +1171,10 @@
       document.getElementById('adm-stat-declined').textContent=t.filter(x=>x.status==='Declined').length;
       document.getElementById('adm-stat-ocomm').textContent='$'+t.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
     } else {
-      // 'all' — every department blended together, same as before.
-      const allRecords=[...d,...t,...m];
-      document.getElementById('adm-stat-total').textContent=d.length+t.length+m.length;
-      document.getElementById('adm-stat-total-sub').textContent='Deals + Xfers + Mortgage';
+      // 'all' — both departments blended together, same as before.
+      const allRecords=[...d,...t];
+      document.getElementById('adm-stat-total').textContent=d.length+t.length;
+      document.getElementById('adm-stat-total-sub').textContent='Deals + Xfers';
       document.getElementById('adm-stat-approved-lbl').textContent='Approved (All)';
       document.getElementById('adm-stat-pending-lbl').textContent='Pending (All)';
       document.getElementById('adm-stat-declined-lbl').textContent='Declined (All)';
@@ -1324,7 +1183,6 @@
       document.getElementById('adm-stat-declined').textContent=allRecords.filter(x=>x.status==='Declined').length;
       document.getElementById('adm-stat-comm').textContent ='$'+d.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
       document.getElementById('adm-stat-ocomm').textContent='$'+t.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
-      document.getElementById('adm-stat-mtg').textContent  ='$'+m.reduce((s,x)=>s+(x.comm||0),0).toLocaleString();
     }
 
     // Recent activity feed — merges whichever team(s) are in scope, newest first.
@@ -1332,15 +1190,13 @@
     const tagged=[
       ...d.map(x=>({...x,_kind:'deal'})),
       ...t.map(x=>({...x,_kind:'transfer'})),
-      ...m.map(x=>({...x,_kind:'mortgage'})),
     ].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
     const recent=tagged.slice(0,5);
     feed.innerHTML=recent.length?recent.map(x=>{
       const label = x._kind==='deal' ? `${displayName(x.name)} <span class="feed-sep">·</span> ${x.client||'—'}`
-                  : x._kind==='transfer' ? `${displayName(x.name)||'—'} <span class="feed-sep">·</span> ${x.type||'—'}`
-                  : `${displayName(x.agent)||'—'} <span class="feed-sep">·</span> ${x.phone||'—'}`;
-      const sub = x._kind==='deal' ? (x.dealType||'—') : x._kind==='transfer' ? (x.closer?'→ '+displayName(x.closer):'Opener transfer') : 'Mortgage transfer';
-      const feedAgentName = x._kind==='mortgage' ? x.agent : x.name;
+                  : `${displayName(x.name)||'—'} <span class="feed-sep">·</span> ${x.type||'—'}`;
+      const sub = x._kind==='deal' ? (x.dealType||'—') : (x.closer?'→ '+displayName(x.closer):'Opener transfer');
+      const feedAgentName = x.name;
       return `<div class="feed-row">
         <div class="feed-dot ${x.status==='Approved'?'green':x.status==='Declined'?'red':'amber'}"></div>
         ${avatarHTML(feedAgentName,'avatar-xs')}
@@ -1363,21 +1219,18 @@
   };
 
   function refreshTaskCounts(){
-    const d=gdfDeals(),t=gdfXfers(),m=gdfMtg();
+    const d=gdfDeals(),t=gdfXfers();
     const dealPend =d.filter(x=>x.status==='Pending').length;
     const xferPend =t.filter(x=>x.status==='Pending').length;
-    const mtgPend  =m.filter(x=>!x.status||x.status==='Pending').length;
     const dealAppr =d.filter(x=>x.status==='Approved').length;
     const xferAppr =t.filter(x=>x.status==='Approved').length;
-    const mtgAppr  =m.filter(x=>x.status==='Approved').length;
     const dealDecl =d.filter(x=>x.status==='Declined').length;
     const xferDecl =t.filter(x=>x.status==='Declined').length;
-    const mtgDecl  =m.filter(x=>x.status==='Declined').length;
     const tc=document.getElementById('tasks-count-badge');
-    if(tc)tc.textContent=dealPend+xferPend+mtgPend;
-    const tt=document.querySelector('.tasks-tab[data-tab="pending"]  .tab-count'); if(tt)tt.textContent=dealPend+xferPend+mtgPend;
-    const ta=document.querySelector('.tasks-tab[data-tab="approved"] .tab-count'); if(ta)ta.textContent=dealAppr+xferAppr+mtgAppr;
-    const td=document.querySelector('.tasks-tab[data-tab="declined"] .tab-count'); if(td)td.textContent=dealDecl+xferDecl+mtgDecl;
+    if(tc)tc.textContent=dealPend+xferPend;
+    const tt=document.querySelector('.tasks-tab[data-tab="pending"]  .tab-count'); if(tt)tt.textContent=dealPend+xferPend;
+    const ta=document.querySelector('.tasks-tab[data-tab="approved"] .tab-count'); if(ta)ta.textContent=dealAppr+xferAppr;
+    const td=document.querySelector('.tasks-tab[data-tab="declined"] .tab-count'); if(td)td.textContent=dealDecl+xferDecl;
     const activeTab=document.querySelector('.tasks-tab.active')?.dataset.tab||'pending';
     renderTasksPane(activeTab);
   }
@@ -1388,33 +1241,27 @@
   };
 
   function renderTasksPane(tab){
-    const d=gdfDeals(),t=gdfXfers(),m=gdfMtg();
+    const d=gdfDeals(),t=gdfXfers();
     const wrap=document.getElementById('tasks-pane');if(!wrap)return;
     let html='';
     if(tab==='pending'){
       const dp=d.filter(x=>x.status==='Pending');
       const tp=t.filter(x=>x.status==='Pending');
-      const mp=m.filter(x=>!x.status||x.status==='Pending');
-      if(!dp.length&&!tp.length&&!mp.length){wrap.innerHTML='<div class="empty-state">All clear — no pending items ✅</div>';return;}
+      if(!dp.length&&!tp.length){wrap.innerHTML='<div class="empty-state">All clear — no pending items ✅</div>';return;}
       if(dp.length){html+=`<div class="tasks-section-label">Closer Deals</div>`+dp.map(x=>buildDealTaskCard(x,'pending')).join('');}
       if(tp.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Opener Transfers</div>`+tp.map(x=>buildXferTaskCard(x,'pending')).join('');}
-      if(mp.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+mp.map(x=>buildMtgTaskCard(x,'pending')).join('');}
     } else if(tab==='approved'){
       const da=d.filter(x=>x.status==='Approved');
       const ta=t.filter(x=>x.status==='Approved');
-      const ma=m.filter(x=>x.status==='Approved');
-      if(!da.length&&!ta.length&&!ma.length){wrap.innerHTML='<div class="empty-state">No approved items.</div>';return;}
+      if(!da.length&&!ta.length){wrap.innerHTML='<div class="empty-state">No approved items.</div>';return;}
       if(da.length){html+=`<div class="tasks-section-label">Closer Deals</div>`+da.map(x=>buildDealTaskCard(x,'approved')).join('');}
       if(ta.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Opener Transfers</div>`+ta.map(x=>buildXferTaskCard(x,'approved')).join('');}
-      if(ma.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+ma.map(x=>buildMtgTaskCard(x,'approved')).join('');}
     } else {
       const dd=d.filter(x=>x.status==='Declined');
       const td=t.filter(x=>x.status==='Declined');
-      const md=m.filter(x=>x.status==='Declined');
-      if(!dd.length&&!td.length&&!md.length){wrap.innerHTML='<div class="empty-state">No declined items.</div>';return;}
+      if(!dd.length&&!td.length){wrap.innerHTML='<div class="empty-state">No declined items.</div>';return;}
       if(dd.length){html+=`<div class="tasks-section-label">Closer Deals</div>`+dd.map(x=>buildDealTaskCard(x,'declined')).join('');}
       if(td.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Opener Transfers</div>`+td.map(x=>buildXferTaskCard(x,'declined')).join('');}
-      if(md.length){html+=`<div class="tasks-section-label" style="margin-top:12px">Mortgage Transfers</div>`+md.map(x=>buildMtgTaskCard(x,'declined')).join('');}
     }
     wrap.innerHTML=html;
   }
@@ -1455,26 +1302,6 @@
       ${isPending&&currentUser?.role!=='readonly'?`<div class="task-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-t-${t.id}" value="${t.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`
       :isPending?`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:var(--amber)">⏳ Pending</b> · Commission: <b style="color:var(--green)">$${t.comm||0}</b></div>`
       :`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:${tab==='approved'?'var(--green)':'var(--red)'}">${tab==='approved'?'✅ Approved':'❌ Declined'}</b> · Commission: <b style="color:var(--green)">$${t.comm||0}</b></div>`}
-    </div>`;
-  }
-
-  function buildMtgTaskCard(r,tab){
-    const isPending=tab==='pending';
-    return`<div class="task-card ${tab||'approved'}" style="border-left-color:var(--teal)">
-      <div class="task-card-header">
-        <div><span class="task-client">${displayName(r.agent)||'—'}</span><span class="task-meta">${r.phone||'—'}</span></div>
-        <span class="task-date">${fmtDate(r.createdAt)}</span>
-      </div>
-      <div class="task-details">
-        <div class="task-detail-item"><span class="task-detail-label">Phone</span><span>${r.phone||'—'}</span></div>
-        <div class="task-detail-item"><span class="task-detail-label">Date</span><span>${fmtDate(r.date)}</span></div>
-        <div class="task-detail-item"><span class="task-detail-label">Commission</span><span class="task-comm">$${r.comm||0}</span></div>
-      </div>
-      ${isPending&&currentUser?.role!=='readonly'
-        ?`<div class="task-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`
-        :isPending?`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:var(--amber)">⏳ Pending</b> · Commission: <b style="color:var(--green)">$${r.comm||0}</b></div>`
-        :`<div style="padding:7px 0 0;font-size:12px;color:var(--text2)">Status: <b style="color:${tab==='approved'?'var(--green)':'var(--red)'}">${tab==='approved'?'✅ Approved':'❌ Declined'}</b> · Commission: <b style="color:var(--green)">$${r.comm||0}</b></div>`
-      }
     </div>`;
   }
 
@@ -1540,29 +1367,9 @@
     if(!reason){errEl.textContent='Please enter a reason before declining.';errEl.style.display='block';return;}
     const p=window._pendingDecline; if(!p){closeDeclineConfirm();return;}
     const btn=document.getElementById('decline-submit-btn');btn.disabled=true;btn.textContent='Declining…';
-    const coll=p.kind==='deal'?'deals':p.kind==='mortgage'?'mortgage_transfers':'transfers';
+    const coll=p.kind==='deal'?'deals':'transfers';
     try{
-      // If declining a mortgage record that was previously Approved (an
-      // admin correcting an earlier approval, not just a fresh Pending
-      // decline), removing it from the agent's approved sequence can shift
-      // everyone after it down a slot — recompute and fix up their
-      // seq/comm so tiers stay correct. No-op for a Pending decline since
-      // agentApproved simply won't include this record either way.
-      let fixups=[];
-      if(p.kind==='mortgage'){
-        const r=mtgRecords.find(x=>x.id===p.id);
-        if(r && r.status==='Approved'){
-          const agentApproved=mtgRecords.filter(x=>x.agent===r.agent && x.status==='Approved' && x.id!==p.id);
-          const recompute=mtgComputeApprovedCommissions(agentApproved);
-          agentApproved.forEach(rec=>{
-            const t=recompute.get(rec.id);
-            if(t && ((rec.comm||0)!==t.comm || rec.seq!==t.seq))
-              fixups.push(updateDoc(doc(db,'mortgage_transfers',rec.id),{comm:t.comm,seq:t.seq}));
-          });
-        }
-      }
       await updateDoc(doc(db,coll,p.id),{status:'Declined',comm:0,declineReason:reason,resolvedAt:new Date().toISOString()});
-      if(fixups.length) await Promise.all(fixups);
       toast('Declined — reason saved and visible to the agent.','error');
       closeDeclineConfirm();
     }catch(e){toast('Failed to decline.','error');console.error(e);}
@@ -1582,10 +1389,8 @@
     document.getElementById('adm-submit-overlay').classList.add('open');
     document.getElementById('adm-submit-op-form').style.display  = kind==='opener'  ?'':'none';
     document.getElementById('adm-submit-cl-form').style.display  = kind==='closer'  ?'':'none';
-    document.getElementById('adm-submit-mtg-form').style.display = kind==='mortgage'?'':'none';
     document.getElementById('adm-submit-title').textContent =
       kind==='opener'  ?'Submit Transfer (on behalf of Opener)':
-      kind==='mortgage'?'Submit Mortgage Transfer (on behalf of Agent)':
                         'Submit Deal (on behalf of Closer)';
     if(kind==='opener'){
       const nameEl=document.getElementById('adm-op-name');
@@ -1597,10 +1402,6 @@
       document.getElementById('adm-op-phone').value='';
       document.getElementById('adm-op-closer-wrap').style.display='none';
       document.getElementById('adm-op-comm-preview').textContent='—';
-    } else if(kind==='mortgage'){
-      const nameEl=document.getElementById('adm-mtg-name');
-      nameEl.innerHTML='<option value="">Select agent…</option>'+ACTIVE_MTG_AGENTS.map(n=>`<option value="${n}">${displayName(n)}</option>`).join('');
-      ['adm-mtg-sub-phone','adm-mtg-sub-date'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
     } else {
       const nameEl=document.getElementById('adm-cl-name');
       nameEl.innerHTML='<option value="">Select closer…</option>'+ACTIVE_CLOSER_NAMES.map(n=>`<option value="${n}">${displayName(n)}</option>`).join('');
@@ -1613,27 +1414,6 @@
   };
   window.closeAdminSubmit=function(){
     document.getElementById('adm-submit-overlay').classList.remove('open');
-  };
-
-  // Admin submits on behalf of a mortgage agent — lands as Pending for review,
-  // same as deals/transfers submitted by admin. Commission computed at approval.
-  window.adminSubmitMortgage=async function(){
-    const agent=document.getElementById('adm-mtg-name').value;
-    const phone=document.getElementById('adm-mtg-sub-phone').value.trim();
-    const date =document.getElementById('adm-mtg-sub-date').value;
-    clearPhoneAlert('adm-mtg-sub-phone');
-    if(!agent||!phone||!date){toast('Please complete all required fields.','error');return;}
-    if(!isValidPhoneFormat(phone)){toast('Phone must be 10 digits (dashes optional). No +1 prefix.','error');return;}
-    if(phoneExistsInCategory(phone,'mortgage')){showPhoneAlert('adm-mtg-sub-phone');return;}
-    const agentDoc=ALL_AGENTS.find(a=>a.name===agent && a.role==='mortgage');
-    const agentEmail=agentDoc?.email||agent.toLowerCase()+'@ucc.com';
-    const btn=document.getElementById('adm-mtg-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
-    try{
-      await addDoc(collection(db,'mortgage_transfers'),{agent,agentEmail,phone,date,comm:0,seq:0,status:'Pending',submittedByAdmin:true,createdAt:new Date().toISOString()});
-      toast(`Mortgage transfer submitted for ${displayName(agent)}!`,'success');
-      closeAdminSubmit();
-    }catch(e){toast('Failed to submit.','error');console.error(e);}
-    btn.disabled=false;btn.textContent='Submit Transfer';
   };
 
   window.handleAdmTransferType=function(){
@@ -1711,132 +1491,16 @@
     btn.disabled=false;btn.textContent='Submit Deal';
   };
 
-  // ── ADMIN MORTGAGE VIEW ──
-  // Mortgage agents can self-submit (auto-Approved with tier commission), OR
-  // admin can submit on their behalf (lands as Pending for admin to approve).
-  // This view handles both cases: pending records show approve/decline;
-  // approved records are read-only; declined records are dimmed.
-  // Mortgage's own filter state — Status only (no role-type/deal-type split
-  // since every mortgage record is the same agent-type and record-type),
-  // mirroring the pattern getFilters()/applyFilters()/clearFilters() use
-  // for Deals & Transfers.
-  // ── DELETE ALL MORTGAGE DATA (Admin-only, irreversible) ──
-  // Every mortgage record — transfers, statuses, commissions, sequence
-  // numbers — lives in exactly one Firestore collection: mortgage_transfers.
-  // Deleting every document in it removes Mortgage data completely while
-  // leaving Closer/Opener deals, transfers, and commissions untouched.
-  // Reassigning an agent off Mortgage doesn't need anything new — the
-  // existing Edit Agent modal's Role dropdown already does that (same
-  // email/doc id, so their login is unaffected) — this modal just surfaces
-  // that shortcut inline so nobody has to go hunt for it separately.
-  window.openDeleteMortgageModal=function(){
-    if(currentUser?.role!=='admin') return;
-    document.getElementById('dmm-count').textContent = mtgRecords.length.toLocaleString();
-    const listWrap=document.getElementById('dmm-agent-list-wrap');
-    const list=document.getElementById('dmm-agent-list');
-    const mtgAgents = ALL_AGENTS.filter(a=>a.role==='mortgage');
-    if(mtgAgents.length){
-      listWrap.style.display='block';
-      list.innerHTML = mtgAgents.map(a=>`
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--border2);border-radius:8px">
-          <span style="display:flex;align-items:center;gap:8px;font-size:13px">${avatarHTML(a.name,'avatar-xs')} ${displayName(a.name)} <span style="color:var(--text3);font-size:11px">${a.email}</span></span>
-          <button class="btn-filter-clear" onclick="closeDeleteMortgageModal();openEditAgent('${a.id}')">Reassign →</button>
-        </div>`).join('');
-    } else {
-      listWrap.style.display='none';
-    }
-    document.getElementById('dmm-confirm-input').value='';
-    document.getElementById('dmm-error').style.display='none';
-    checkDeleteMortgageConfirm();
-    document.getElementById('dmm-overlay').classList.add('open');
-  };
-  window.closeDeleteMortgageModal=function(){
-    document.getElementById('dmm-overlay').classList.remove('open');
-  };
-  window.checkDeleteMortgageConfirm=function(){
-    const val=document.getElementById('dmm-confirm-input').value;
-    const btn=document.getElementById('dmm-confirm-btn');
-    const ok = val==='DELETE MORTGAGE DATA';
-    btn.disabled=!ok;
-    btn.style.opacity = ok?'1':'.5';
-  };
-  window.executeDeleteMortgageData=async function(){
-    if(currentUser?.role!=='admin') return;
-    const val=document.getElementById('dmm-confirm-input').value;
-    if(val!=='DELETE MORTGAGE DATA') return;
-    const btn=document.getElementById('dmm-confirm-btn');
-    const errEl=document.getElementById('dmm-error');
-    errEl.style.display='none';
-    btn.disabled=true; btn.textContent='Deleting…';
-    try{
-      const snap = await getDocs(collection(db,'mortgage_transfers'));
-      const docs = snap.docs;
-      for(let i=0;i<docs.length;i+=450){
-        const batch=writeBatch(db);
-        docs.slice(i,i+450).forEach(d=>batch.delete(d.ref));
-        await batch.commit();
-        btn.textContent = `Deleting… (${Math.min(i+450,docs.length)}/${docs.length})`;
-      }
-      toast(`Deleted ${docs.length.toLocaleString()} mortgage record(s) permanently.`,'success');
-      closeDeleteMortgageModal();
-    }catch(e){
-      showError(errEl,'Failed to delete mortgage data. Please try again.');
-      console.error(e);
-    }
-    btn.textContent='Permanently Delete Mortgage Data';
-    checkDeleteMortgageConfirm();
-  };
-
-  function getMtgFilters(){ return { status: document.getElementById('mf-status')?.value || 'All' }; }
-  window.applyMtgFilters=function(){ renderAdminMortgage(); };
-  window.clearMtgFilters=function(){
-    const s=document.getElementById('mf-status'); if(s)s.value='All';
-    const c=document.getElementById('mf-count'); if(c)c.textContent='';
-    renderAdminMortgage();
-  };
-
-  function renderAdminMortgage(){
-    const dmmBtn=document.getElementById('dmm-open-btn');
-    if(dmmBtn) dmmBtn.style.display = currentUser?.role==='admin' ? 'inline-flex' : 'none';
-    const f=getMtgFilters();
-    const m=gdfMtg().filter(r=>f.status==='All'||r.status===f.status||(f.status==='Pending'&&!r.status));
-    const countEl=document.getElementById('mf-count');
-    if(countEl)countEl.textContent=m.length+' transfer'+(m.length!==1?'s':'');
-    const wrap=document.getElementById('adm-mtg-list');
-    if(!m.length){wrap.innerHTML='<div class="empty-state">No mortgage transfers match the current filters.</div>';return;}
-    wrap.innerHTML=m.map(r=>{
-      const isPending=!r.status||r.status==='Pending';
-      const isDeclined=r.status==='Declined';
-      return `<div class="admin-record">
-        <div class="admin-record-top">
-          <div class="ar-left">
-            ${avatarHTML(r.agent,'avatar-sm')}
-            <div class="status-badge ${r.status==='Approved'?'badge-green':isDeclined?'badge-red':'badge-amber'}">${r.status||'Pending'}</div>
-            <span class="ar-name">${displayName(r.agent)||'—'} — ${r.phone||'—'}</span>
-          </div>
-          <div class="ar-top-right"><span class="ar-date">${fmtDate(r.date||r.createdAt)}</span>${buildEditBtn('mortgage',r.id)}${buildDeleteBtn('mortgage',r.id,(r.agent?`${displayName(r.agent)}'s record`:'this record'))}</div>
-        </div>
-        <div class="ar-grid">
-          <div class="ar-field"><span class="ar-key">Agent</span><span class="ar-val">${displayName(r.agent)||'—'}</span></div>
-          <div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${r.phone||'—'}</span></div>
-          <div class="ar-field"><span class="ar-key">Date</span><span class="ar-val">${fmtDate(r.date||r.createdAt)}</span></div>
-          <div class="ar-field"><span class="ar-key">Seq #</span><span class="ar-val">${r.seq||'—'}</span></div>
-        </div>
-        ${!isPending ? `<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${r.comm||0}</strong> <span class="ar-status-text">(${r.status}${r.seq?` · #${r.seq}`:''})</span></div>` : ''}
-      </div>`;
-    }).join('');
-  }
-
-  // ── ADMIN-ONLY DELETE (deals, transfers, mortgage_transfers) ──
+  // ── ADMIN-ONLY DELETE (deals, transfers, agents) ──
   // Deleting a record removes its Firestore document entirely. Because every
   // dashboard, history view, leaderboard, and the Commission Structure tab all
-  // derive their numbers live from the `deals` / `transfers` / `mtgRecords`
+  // derive their numbers live from the `deals` / `transfers` / `agents`
   // arrays (which are kept in sync with Firestore via onSnapshot), a deleted
   // record simply stops existing in those arrays the instant the snapshot
   // listener fires — so every total, filter, export, and commission
   // calculation updates immediately and automatically, with zero chance of a
   // deleted record being counted anywhere again.
-  const COLLECTION_BY_KIND = { deal:'deals', transfer:'transfers', mortgage:'mortgage_transfers', agent:'agents' };
+  const COLLECTION_BY_KIND = { deal:'deals', transfer:'transfers', agent:'agents' };
   window._pendingDelete = null;
 
   function buildDeleteBtn(kind,id,label){
@@ -1851,7 +1515,7 @@
 
   function buildEditBtn(kind,id){
     if(currentUser?.role==='readonly') return '';
-    const fn = kind==='deal' ? `openEditDeal('${id}')` : kind==='mortgage' ? `openEditMortgage('${id}')` : `openEditTransfer('${id}')`;
+    const fn = kind==='deal' ? `openEditDeal('${id}')` : `openEditTransfer('${id}')`;
     return `<button type="button" class="edit-button" title="Edit" onclick="event.stopPropagation();${fn}">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
     </button>`;
@@ -1861,7 +1525,7 @@
     window._pendingDelete={kind,id};
     const msgEl=document.getElementById('del-confirm-msg');
     if(msgEl)msgEl.innerHTML = kind==='agent'
-      ? `This will permanently remove the agent record for <b>${label}</b> and revoke their login. Their historical deals/transfers/commissions are NOT deleted — to keep someone's history while blocking login, use Deactivate instead. This cannot be undone.`
+      ? `This will permanently remove the agent record for <b>${label}</b>, revoke their login, delete every deal/transfer that belongs to them, and scrub their name from any other agent's records that reference them (e.g. as opener or closer). They will no longer appear in any submission list, filter, leaderboard, report, or search anywhere in the app. This cannot be undone. To keep someone's history while blocking login instead, use Deactivate.`
       : `This will permanently remove <b>${label}</b> from every dashboard, report, opener/closer view, and commission total. This cannot be undone.`;
     document.getElementById('del-confirm-overlay').classList.add('open');
   };
@@ -1871,30 +1535,82 @@
     document.getElementById('del-confirm-overlay').classList.remove('open');
   };
 
+  // ── FULL AGENT REFERENCE PURGE ──
+  // Called as part of deleting an agent. Beyond removing the `agents` doc
+  // itself (handled by the caller), this scrubs every trace of the agent's
+  // NAME from the deals/transfers collections so nothing in the app —
+  // filters, dropdowns, leaderboards, CSV exports, search, Debt Settlement
+  // Convergent, admin record lists — can ever surface it again:
+  //   • Deals/transfers that belong TO this agent (name===agentName for a
+  //     closer, or name===agentName for an opener) are deleted outright —
+  //     the record is entirely theirs, so there's nothing else to preserve.
+  //   • Deals/transfers that belong to a DIFFERENT agent but merely
+  //     reference this agent (e.g. a closer's deal with opener===agentName,
+  //     or an opener's transfer with closer===agentName) are NOT deleted —
+  //     that would destroy another agent's own commission history. Instead
+  //     the reference field is cleared (set to null) so the other agent's
+  //     record survives intact, just with no dangling name.
+  // Batched in chunks of 450 writes to stay under Firestore's 500-op limit.
+  async function purgeAgentReferences(agentName){
+    const batches=[];
+    let current=writeBatch(db), opsInCurrent=0;
+    function addOp(fn){
+      fn(current);
+      opsInCurrent++;
+      if(opsInCurrent>=450){ batches.push(current); current=writeBatch(db); opsInCurrent=0; }
+    }
+
+    // Own deals (closer) — delete entirely
+    const ownDealsSnap = await getDocs(query(collection(db,'deals'), where('name','==',agentName)));
+    ownDealsSnap.forEach(d=>addOp(b=>b.delete(d.ref)));
+
+    // Other closers' deals that merely reference this agent as opener — scrub only
+    const refDealsSnap = await getDocs(query(collection(db,'deals'), where('opener','==',agentName)));
+    refDealsSnap.forEach(d=>{ if(d.data().name!==agentName) addOp(b=>b.update(d.ref,{opener:null})); });
+
+    // Own transfers (opener) — delete entirely
+    const ownXfersSnap = await getDocs(query(collection(db,'transfers'), where('name','==',agentName)));
+    ownXfersSnap.forEach(d=>addOp(b=>b.delete(d.ref)));
+
+    // Other openers' transfers that merely reference this agent as closer — scrub only
+    const refXfersSnap = await getDocs(query(collection(db,'transfers'), where('closer','==',agentName)));
+    refXfersSnap.forEach(d=>{ if(d.data().name!==agentName) addOp(b=>b.update(d.ref,{closer:null})); });
+
+    if(opsInCurrent>0) batches.push(current);
+    for(const b of batches) await b.commit();
+
+    // Mirror the purge in local state immediately so the UI updates before
+    // the onSnapshot listeners have a chance to catch up.
+    deals = deals.filter(d=>d.name!==agentName).map(d=>d.opener===agentName?{...d,opener:null}:d);
+    transfers = transfers.filter(t=>t.name!==agentName).map(t=>t.closer===agentName?{...t,closer:null}:t);
+  }
+
   window.confirmDelete=async function(){
     const pending=window._pendingDelete;
     if(!pending){closeDeleteConfirm();return;}
     if(currentUser?.role!=='admin'){toast('Only an admin can delete records.','error');closeDeleteConfirm();return;}
     const collName=COLLECTION_BY_KIND[pending.kind];
     if(!collName){closeDeleteConfirm();return;}
-    const deletedAgentEmail = pending.kind==='agent' ? ALL_AGENTS.find(x=>x.id===pending.id)?.email : null;
+    const deletedAgent = pending.kind==='agent' ? ALL_AGENTS.find(x=>x.id===pending.id) : null;
     const btn=document.getElementById('del-confirm-btn');
-    if(btn){btn.disabled=true;btn.textContent='Deleting…';}
+    if(btn){btn.disabled=true;btn.textContent = pending.kind==='agent' ? 'Purging references…' : 'Deleting…';}
     try{
+      if(pending.kind==='agent' && deletedAgent){
+        await purgeAgentReferences(deletedAgent.name);
+      }
       await deleteDoc(doc(db,collName,pending.id));
       // Immediately strip the record from local state too, so totals/filters/
       // exports update instantly even before the onSnapshot listener fires.
       if(pending.kind==='deal')      deals      = deals.filter(x=>x.id!==pending.id);
       if(pending.kind==='transfer')  transfers  = transfers.filter(x=>x.id!==pending.id);
-      if(pending.kind==='mortgage')  mtgRecords = mtgRecords.filter(x=>x.id!==pending.id);
       if(pending.kind==='agent'){
         ALL_AGENTS = ALL_AGENTS.filter(x=>x.id!==pending.id);
-        if(deletedAgentEmail) deleteDoc(doc(db,'roles',deletedAgentEmail)).catch(()=>{});
+        if(deletedAgent?.email) deleteDoc(doc(db,'roles',deletedAgent.email)).catch(()=>{});
         renderAdminAgents();
       }
       syncGlobals();
       renderCurrentView();
-      toast(pending.kind==='agent'?'Agent record permanently deleted.':'Record permanently deleted.','success');
+      toast(pending.kind==='agent'?'Agent and every reference to them permanently deleted.':'Record permanently deleted.','success');
     }catch(e){
       toast('Failed to delete record.','error');console.error(e);
     }
@@ -1906,9 +1622,9 @@
   // Pay-period cycle: every period runs from the 1st through the last day of
   // the calendar month ("cutoff day" = last day of the month, e.g. Feb 28/29,
   // Mar 31). All totals here are derived fresh from the live `deals` /
-  // `transfers` / `mtgRecords` arrays on every render — nothing is cached or
+  // `transfers` arrays on every render — nothing is cached or
   // accumulated across renders.
-  window._ccCollapsed = window._ccCollapsed || { closer:false, opener:false, mortgage:false };
+  window._ccCollapsed = window._ccCollapsed || { closer:false, opener:false };
 
   function ccPad(n){return String(n).padStart(2,'0');}
   function ccFmt(d){return `${d.getFullYear()}-${ccPad(d.getMonth()+1)}-${ccPad(d.getDate())}`;}
@@ -1933,7 +1649,7 @@
   function ccMonthLabel(key){ const [y,m]=key.split('-').map(Number); return new Date(y,m-1,1).toLocaleDateString('en-US',{month:'long',year:'numeric'}); }
 
   // ── Unified per-agent stat builder ──
-  // Works identically for closer / opener / mortgage by taking the records
+  // Works identically for closer / opener by taking the records
   // array, the field names that vary per role, and the kind label. Produces
   // every figure the agent profile and the leaderboard need from raw records
   // (not pre-aggregated), so it stays correct under ANY combination of the
@@ -1973,7 +1689,7 @@
   }
 
   // NOTE: `names` is a getter, not a static array reference — CLOSER_NAMES /
-  // OPENER_NAMES / MTG_AGENTS are reassigned wholesale every time the agents
+  // OPENER_NAMES are reassigned wholesale every time the agents
   // collection changes (see rebuildAgentRegistry), so a plain object-literal
   // reference here would freeze on whatever was true the moment this file
   // first ran. The getter always reads the CURRENT array, so newly added
@@ -1981,16 +1697,15 @@
   const CC_ROLE_CFG = {
     closer:   { get names(){return CLOSER_NAMES;}, nameField:'name', dateField:'closingDate', debtField:'debt', typeField:'dealType', label:'deal'      },
     opener:   { get names(){return OPENER_NAMES;}, nameField:'name', dateField:'date',        debtField:null,   typeField:'type',     label:'transfer'  },
-    mortgage: { get names(){return MTG_AGENTS;},   nameField:'agent',dateField:'date',        debtField:null,   typeField:null,       label:'transfer'  },
   };
-  function ccRecordsFor(kind){ return kind==='closer'?gdfDeals():kind==='opener'?gdfXfers():gdfMtg(); }
+  function ccRecordsFor(kind){ return kind==='closer'?gdfDeals():gdfXfers(); }
   // Raw, UNFILTERED source per kind — used only by the per-agent profile
   // filter below, which is intentionally independent of the global master
-  // filter (gdfDeals/gdfXfers/gdfMtg). Changing one agent's profile filter
+  // filter (gdfDeals/gdfXfers). Changing one agent's profile filter
   // must never touch any other agent's numbers, the leaderboard, or any
   // dashboard — so this reads straight from the live arrays, not through
   // the GDF scope/date filter at all.
-  function ccRawRecordsFor(kind){ return kind==='closer'?deals:kind==='opener'?transfers:mtgRecords; }
+  function ccRawRecordsFor(kind){ return kind==='closer'?deals:transfers; }
 
   function ccAllAgentStats(kind){
     const cfg=CC_ROLE_CFG[kind];
@@ -2023,7 +1738,7 @@
 
   // Applies the per-agent filter to one agent's RAW (unfiltered) records,
   // by date (createdAt, falling back to the role's own date field).
-  // `role` ('closer'/'opener'/'mortgage') picks which team's shift schedule
+  // `role` ('closer'/'opener') picks which team's shift schedule
   // governs the Today/Yesterday presets.
   function apApplyFilter(records, dateField, role){
     const {preset,from,to}=window._apFilter;
@@ -2051,7 +1766,7 @@
     const ccOrdinal=n=>{const s=['th','st','nd','rd'],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);};
     if(dl)dl.textContent=daysLeft===0?'Cutoff is today — totals finalize tonight':`${daysLeft} day${daysLeft!==1?'s':''} until the ${ccOrdinal(cutoffDay)} cutoff`;
 
-    const scope=window._gdf.roleScope; // 'all' | 'closer' | 'opener' | 'mortgage'
+    const scope=window._gdf.roleScope; // 'all' | 'closer' | 'opener'
 
     // Show only the category section(s) that match the active department
     // scope — out-of-scope sections are fully hidden (header + body), not
@@ -2064,9 +1779,8 @@
 
     const closerStats  = (scope==='all'||scope==='closer')   ? ccAllAgentStats('closer').filter(s=>isActiveAgentName(s.name))     : [];
     const openerStats  = (scope==='all'||scope==='opener')   ? ccAllAgentStats('opener').filter(s=>isActiveAgentName(s.name))     : [];
-    const mtgStats     = (scope==='all'||scope==='mortgage') ? ccAllAgentStats('mortgage').filter(s=>isActiveAgentName(s.name))   : [];
 
-    const periodTotal = [...closerStats,...openerStats,...mtgStats]
+    const periodTotal = [...closerStats,...openerStats]
       .reduce((s,a)=>s+(a.periods[period.key]?.total||0),0);
     const pt=document.getElementById('cc-period-total'); if(pt)pt.textContent='$'+periodTotal.toLocaleString();
 
@@ -2075,15 +1789,14 @@
     // their whole section is hidden anyway.
     if(closerStats.length || scope==='all' || scope==='closer') document.getElementById('cc-closer-list').innerHTML   = ccBuildRoster(closerStats,'closer',period.key);
     if(openerStats.length || scope==='all' || scope==='opener') document.getElementById('cc-opener-list').innerHTML   = ccBuildRoster(openerStats,'opener',period.key);
-    if(mtgStats.length    || scope==='all' || scope==='mortgage') document.getElementById('cc-mortgage-list').innerHTML = ccBuildRoster(mtgStats,'mortgage',period.key);
-    ['closer','opener','mortgage'].forEach(k=>{
+    ['closer','opener'].forEach(k=>{
       const body=document.getElementById('cc-cat-body-'+k), icon=document.getElementById('cc-cat-icon-'+k);
       if(body) body.style.display = window._ccCollapsed[k] ? 'none':'block';
       if(icon) icon.textContent   = window._ccCollapsed[k] ? '▸':'▾';
     });
 
     // ── Dynamic leaderboard — driven entirely by the master filter's roleScope ──
-    renderDynamicLeaderboard(closerStats,openerStats,mtgStats);
+    renderDynamicLeaderboard(closerStats,openerStats);
   }
 
   window.toggleCcCategory=function(kind){
@@ -2098,7 +1811,7 @@
   // Reactivate/Remove all write to the `agents` Firestore collection; the
   // onSnapshot listener in setupAgentRegistryListener() picks the change up
   // immediately and calls rebuildAgentRegistry(), which regenerates
-  // ROLE_MAP, CLOSER_NAMES, OPENER_NAMES, MTG_AGENTS, and DISPLAY_ALIAS, and
+  // ROLE_MAP, CLOSER_NAMES, OPENER_NAMES, and DISPLAY_ALIAS, and
   // then refreshAgentDrivenUI() re-populates every dropdown and re-renders
   // this view, the Commission Structure leaderboards, and every agent
   // profile — so a brand-new agent shows up everywhere with zero code
@@ -2106,7 +1819,6 @@
   const ROLE_DEPT_DEFAULTS = {
     closer:   { department:'Closers',   commissionStructure:'Standard Closer Tiers'  },
     opener:   { department:'Openers',   commissionStructure:'Standard Opener Tiers'  },
-    mortgage: { department:'Mortgage',  commissionStructure:'Mortgage Tiered Engine' },
     admin:    { department:'Administration', commissionStructure:'N/A' },
     readonly: { department:'Read-Only Access', commissionStructure:'N/A' },
   };
@@ -2135,7 +1847,7 @@
     wrap.innerHTML=list.map(a=>{
       const inactive=a.active===false;
       const dn=displayName(a.name);
-      const roleColors={admin:'badge-blue',closer:'badge-teal',opener:'badge-green',mortgage:'badge-amber',readonly:'badge-teal'};
+      const roleColors={admin:'badge-blue',closer:'badge-teal',opener:'badge-green',readonly:'badge-teal'};
       return `<div class="admin-record ${inactive?'resolved':''}" style="${inactive?'opacity:.6':''}">
         <div class="admin-record-top">
           <div class="ar-left">
@@ -2226,7 +1938,7 @@
       // Keep the roles/{email} lookup doc in sync — this is a small,
       // separate collection that ONLY Firestore security rules consult (via
       // a direct-path get()) to grant read-only accounts broad read access
-      // across deals/transfers/mortgage_transfers, since rules can't query
+      // across deals/transfers, since rules can't query
       // the `agents` collection by field. Never affects write permissions —
       // read-only accounts never get any write/update/delete rule.
       if(role==='readonly'){
@@ -2242,7 +1954,7 @@
   };
 
   // Deactivate: disables login (removed from ROLE_MAP) but the Firestore
-  // agent document — and every historical deal/transfer/mortgage record
+  // agent document — and every historical deal/transfer record
   // tied to their name — is fully preserved. Reactivate simply flips the
   // flag back, restoring login instantly with all history intact.
   window.deactivateAgent=async function(id){
@@ -2266,7 +1978,7 @@
   // the Firebase Console with the same email + a new password. Everything
   // else is automatic:
   //   • The agent's Firestore doc is keyed by docId/email, never uid, so no
-  //     historical deals/transfers/mortgage records are touched.
+  //     historical deals/transfers records are touched.
   //   • The moment they log in with the new account, handleAuthState's
   //     existing uid auto-heal (`mapped.uid!==fbUser.uid` → updateDoc)
   //     re-links their agents doc to the new uid automatically.
@@ -2360,15 +2072,14 @@
   }
 
   // ── Single dynamic leaderboard — automatically swaps based on roleScope ──
-  function renderDynamicLeaderboard(closerStats,openerStats,mtgStats){
+  function renderDynamicLeaderboard(closerStats,openerStats){
     const wrap=document.getElementById('cc-leaderboard'); if(!wrap)return;
     const titleEl=document.getElementById('cc-leaderboard-title');
     const scope=window._gdf.roleScope;
     let rows=[], title='';
     if(scope==='closer'){ rows=closerStats.map(r=>({...r,kind:'closer'})); title='Top Closers'; }
     else if(scope==='opener'){ rows=openerStats.map(r=>({...r,kind:'opener'})); title='Top Openers'; }
-    else if(scope==='mortgage'){ rows=mtgStats.map(r=>({...r,kind:'mortgage'})); title='Top Mortgage Agents'; }
-    else { rows=[...closerStats,...openerStats,...mtgStats]; title='Company-wide Rankings'; }
+    else { rows=[...closerStats,...openerStats]; title='Company-wide Rankings'; }
     rows=rows.sort((a,b)=>b.totalComm-a.totalComm);
     if(titleEl) titleEl.textContent=title;
     if(!rows.length){ wrap.innerHTML='<div class="empty-state">No team members configured.</div>'; return; }
@@ -2514,9 +2225,9 @@
       </div>
       <div class="ap-stats-grid">
         <div class="ap-stat"><div class="ap-stat-val">${r.submissions}</div><div class="ap-stat-lbl">Total Submissions</div></div>
-        <div class="ap-stat green"><div class="ap-stat-val">${r.approved}</div><div class="ap-stat-lbl">${kind==='mortgage'?'Counted':'Approved'}</div></div>
-        ${kind!=='mortgage'?`<div class="ap-stat amber"><div class="ap-stat-val">${r.pending}</div><div class="ap-stat-lbl">Pending</div></div>
-        <div class="ap-stat red"><div class="ap-stat-val">${r.declined}</div><div class="ap-stat-lbl">Declined</div></div>`:''}
+        <div class="ap-stat green"><div class="ap-stat-val">${r.approved}</div><div class="ap-stat-lbl">Approved</div></div>
+        <div class="ap-stat amber"><div class="ap-stat-val">${r.pending}</div><div class="ap-stat-lbl">Pending</div></div>
+        <div class="ap-stat red"><div class="ap-stat-val">${r.declined}</div><div class="ap-stat-lbl">Declined</div></div>
         <div class="ap-stat purple"><div class="ap-stat-val">$${r.totalComm.toLocaleString()}</div><div class="ap-stat-lbl">Total Commission</div></div>
         <div class="ap-stat teal"><div class="ap-stat-val">$${r.avgComm.toFixed(2)}</div><div class="ap-stat-lbl">Avg Commission</div></div>
         ${r.totalDebt!==null?`<div class="ap-stat indigo"><div class="ap-stat-val">$${r.totalDebt.toLocaleString()}</div><div class="ap-stat-lbl">Total Debt Enrolled</div></div>`:''}
@@ -2658,49 +2369,6 @@
     btn.disabled=false; btn.textContent='Save Changes';
   };
 
-  // ── Edit Mortgage Record modal ──
-  // Agent and Seq # are NOT editable here — Agent is fixed at submission
-  // (same rule as Opener on a deal / Name on a transfer), and Seq # is
-  // system-generated by the tiered mortgage commission engine, so it's
-  // shown read-only for reference only.
-  window._editingMtgId=null;
-  window.openEditMortgage=function(id){
-    const r=mtgRecords.find(x=>x.id===id); if(!r) return;
-    window._editingMtgId=id;
-    document.getElementById('em-agent').value=displayName(r.agent)||'';
-    document.getElementById('em-date').value=(r.date||r.createdAt||'').slice(0,10);
-    document.getElementById('em-phone').value=r.phone||'';
-    document.getElementById('em-seq').value=r.seq||'—';
-    document.getElementById('em-comm').value=r.comm||0;
-    document.getElementById('em-modal-error').style.display='none';
-    const emActions=document.getElementById('em-actions-container');
-    if(emActions){
-      const isReadOnly=currentUser?.role==='readonly';
-      emActions.innerHTML = `<div style="margin-top:6px"><div class="panel-card-title" style="margin-bottom:8px">Review</div>${mtgActionsHtml(r,isReadOnly)}</div>`;
-    }
-    document.getElementById('em-modal-overlay').classList.add('open');
-  };
-  window.closeEditMortgageModal=function(){
-    document.getElementById('em-modal-overlay').classList.remove('open');
-    const emActions=document.getElementById('em-actions-container'); if(emActions) emActions.innerHTML='';
-    window._editingMtgId=null;
-  };
-  window.saveEditMortgage=async function(){
-    const id=window._editingMtgId; if(!id) return;
-    const phone=document.getElementById('em-phone').value.trim();
-    const date=document.getElementById('em-date').value;
-    const comm=Number(document.getElementById('em-comm').value)||0;
-    const errEl=document.getElementById('em-modal-error');
-    if(!date){ showError(errEl,'Transfer date is required.'); return; }
-    const btn=document.getElementById('em-save-btn'); btn.disabled=true; btn.textContent='Saving…';
-    try{
-      await updateDoc(doc(db,'mortgage_transfers',id),{phone,date,comm});
-      closeEditMortgageModal();
-      toast('Mortgage record updated!','success');
-    }catch(e){ showError(errEl,'Failed to save changes. Please try again.'); console.error(e); }
-    btn.disabled=false; btn.textContent='Save Changes';
-  };
-
   // ── ADMIN RECORDS VIEW ──
   window.onRoleTypeChange=function(){
     const role=document.getElementById('f-role-type').value,dw=document.getElementById('f-deal-type-wrap'),ds=document.getElementById('f-deal-type');
@@ -2762,20 +2430,6 @@
     if(t.status==='Approved') return `<div class="ar-actions"><div class="ar-btns"><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`;
     if(t.status==='Declined') return `<div class="ar-actions"><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ Approve</button></div></div>`;
     return `<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-t-${t.id}" value="${t.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminXferAction('${t.id}','Approved')">✓ Approve</button><button class="btn-decline" onclick="adminXferAction('${t.id}','Declined')">✗ Decline</button></div></div>`;
-  }
-  // Mortgage's Review section (Approve/Decline + editable commission) — lives
-  // ONLY inside the Edit Mortgage Record modal now, never inline on the
-  // list card, matching how Deals & Transfers already work. This is purely
-  // a UI relocation: adminMtgAction (and its tiered-commission recompute
-  // via mtgComputeApprovedCommissions) is unchanged — same function, same
-  // #comm-m-{id} input class/value contract, just rendered in a different
-  // place in the DOM.
-  function mtgActionsHtml(r,isReadOnly){
-    if(isReadOnly) return '';
-    const isPending=!r.status||r.status==='Pending';
-    if(r.status==='Approved') return `<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Re-Approve</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`;
-    if(r.status==='Declined') return `<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ Approve</button></div></div>`;
-    return `<div class="ar-actions"><div class="ar-comm-edit-wrap"><label class="ar-edit-label">Edit Commission ($)</label><input class="ar-comm-input" type="number" id="comm-m-${r.id}" value="${r.comm||0}"/></div><div class="ar-btns"><button class="btn-approve" onclick="adminMtgAction('${r.id}','Approved')">✓ ${isPending?'Approve':'Re-Approve'}</button><button class="btn-decline" onclick="adminMtgAction('${r.id}','Declined')">✗ Decline</button></div></div>`;
   }
 
   function renderAdminResults(){
@@ -2848,27 +2502,6 @@
     toast('CSV exported!','success');
   };
 
-  window.exportMtgCSV=function(){
-    const f=getMtgFilters();
-    const m=gdfMtg().filter(r=>f.status==='All'||r.status===f.status||(f.status==='Pending'&&!r.status));
-    if(!m.length){toast('No mortgage records to export.','error');return;}
-    const rows=[
-      ['Agent','Phone','Date','Seq #','Commission','Status','Submitted'],
-      ...m.map(r=>[
-        displayName(r.agent)||'',
-        r.phone||'',
-        (r.date||r.createdAt||'').slice(0,10),
-        r.seq||'',
-        r.comm||0,
-        r.status||'Approved',
-        (r.createdAt||'').slice(0,10)
-      ])
-    ];
-    const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
-    const blob=new Blob([csv],{type:'text/csv'}),url=URL.createObjectURL(blob),a=document.createElement('a');
-    a.href=url;a.download=`ucc-mortgage-${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url);
-    toast('Mortgage CSV exported!','success');
-  };
   function renderOpenerDashboard(){
     const t=gdfXfers();
     document.getElementById('op-stat-total').textContent='$'+t.reduce((s,x)=>s+(x.comm||0),0);
@@ -3031,112 +2664,6 @@
     btn.disabled=false;btn.textContent='Submit Deal';
   };
 
-  // ── MORTGAGE ──
-  window.autoFillMtgAgent=function(){if(currentUser?.role==='mortgage'){const s=document.getElementById('mtg-agent');if(s){s.value=currentUser.name;s.disabled=true;}}};
-  function renderMtgDashboard(){
-    const m=gdfMtg();
-    document.getElementById('mtg-stat-total').textContent=m.length;
-    const todayKey=shiftTodayKey('mortgage',0);
-    document.getElementById('mtg-stat-today').textContent=mtgRecords.filter(x=>shiftDayKeyFor(x.createdAt,'mortgage')===todayKey).length;
-    document.getElementById('mtg-stat-alltime').textContent=mtgRecords.length;
-    const feed=document.getElementById('mtg-recent-feed');
-    const recent=m.slice(0,5);
-    feed.innerHTML=recent.length?recent.map(r=>`<div class="feed-row"><div class="feed-dot ${r.status==='Approved'?'green':r.status==='Declined'?'red':'amber'}"></div><div class="feed-info"><div class="feed-name">${r.phone||'—'}</div><div class="feed-sub">${displayName(r.agent)||'—'} · ${fmtDate(r.date)}</div></div><div class="feed-right"><div class="feed-comm">$${r.comm||0}</div><div class="status-badge ${r.status==='Approved'?'badge-green':r.status==='Declined'?'badge-red':'badge-amber'}">${r.status||'Pending'}</div></div></div>`).join(''):'<div class="empty-state">No transfers yet.</div>';
-  }
-  function renderMtgRecords(){
-    const m=gdfMtg();
-    document.getElementById('mtg-records-count').textContent=m.length+' record'+(m.length!==1?'s':'');
-    const wrap=document.getElementById('mtg-records-list');
-    if(!m.length){wrap.innerHTML='<div class="empty-state">No transfers in this date range.</div>';return;}
-    // Every transfer counts immediately on submission — no review states,
-    // no grouping by status. Newest first.
-    const sorted=[...m].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
-    wrap.innerHTML=sorted.map(r=>`<div class="mtg-rec-card mtg-status-approved">
-          <div class="mtg-rec-row"><span class="mtg-rec-label">Phone</span><span>${r.phone||'—'}</span></div>
-          <div class="mtg-rec-row"><span class="mtg-rec-label">Date</span><span>${fmtDate(r.date||r.createdAt)}</span></div>
-          <div class="mtg-rec-row"><span class="mtg-rec-label">Commission</span><span class="comm-val">$${r.comm||0}</span></div>
-        </div>`).join('');
-  }
-  window.toggleMtgGroup=function(id){
-    const el=document.getElementById(id),ic=document.getElementById(id+'-icon');
-    if(!el)return;
-    const open=el.style.display!=='none';
-    el.style.display=open?'none':'block';
-    if(ic)ic.textContent=open?'▸':'▾';
-  };
-  window.submitMtgTransfer=async function(){
-    const agent=document.getElementById('mtg-agent').value,phone=document.getElementById('mtg-phone').value.trim(),date=document.getElementById('mtg-date').value;
-    clearPhoneAlert('mtg-phone');
-    if(!agent||!phone||!date){toast('Please complete all fields.','error');return;}
-    if(!isValidPhoneFormat(phone)){toast('Phone must be 10 digits (dashes optional). No +1 prefix.','error');return;}
-    if(phoneExistsInCategory(phone,'mortgage')){showPhoneAlert('mtg-phone');return;}
-    const btn=document.getElementById('mtg-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
-    // Mortgage agents submit only qualified transfers — no admin review
-    // step. The transfer counts the instant it's submitted: it's written
-    // as Approved immediately, and the tiered engine computes this agent's
-    // correct commission right away from their full approved history
-    // (including this new one) — same exact tier math as before, just
-    // applied at submission instead of at a separate approval click.
-    try{
-      const priorApproved=mtgRecords.filter(x=>x.agent===agent && x.status==='Approved');
-      const nowIso=new Date().toISOString();
-      // Compute the full, correct sequence as if this new transfer already
-      // existed alongside the agent's prior approved ones — this is what
-      // lets a submission that crosses a tier threshold (e.g. their 36th)
-      // retroactively correct their earlier records, with no double count.
-      const recompute=mtgComputeApprovedCommissions([...priorApproved,{id:'__new__',date,createdAt:nowIso}]);
-      const newTier=recompute.get('__new__');
-      await addDoc(collection(db,'mortgage_transfers'),{agent,agentEmail:currentUser.email,phone,date,comm:newTier.comm,seq:newTier.seq,status:'Approved',createdAt:nowIso});
-      const fixups=[];
-      priorApproved.forEach(rec=>{
-        const t=recompute.get(rec.id);
-        if(t && ((rec.comm||0)!==t.comm || rec.seq!==t.seq)){
-          fixups.push(updateDoc(doc(db,'mortgage_transfers',rec.id),{comm:t.comm,seq:t.seq}));
-        }
-      });
-      if(fixups.length) await Promise.all(fixups);
-      document.getElementById('mtg-phone').value='';document.getElementById('mtg-date').value='';
-      toast(`Transfer submitted — $${newTier.comm} earned!`,'success');
-    }
-    catch(e){toast('Failed to submit.','error');console.error(e);}
-    btn.disabled=false;btn.textContent='Submit Transfer';
-  };
-
-  window.adminMtgAction=async function(id,action){
-    const r=mtgRecords.find(x=>x.id===id);if(!r){toast('Record not found.','error');return;}
-    const card=(typeof event!=='undefined'&&event?.target)?event.target.closest('.task-card,.admin-record,.ap-box'):null;
-    const editEl=card?card.querySelector('.ar-comm-input'):document.getElementById('comm-m-'+id);
-    const finalComm=editEl?(Number(editEl.value)||0):(r.comm||0);
-    if(action==='Declined'){
-      window._pendingDecline={id,kind:'mortgage',finalComm};
-      openDeclineConfirm();
-      return;
-    }
-    // On admin approval: recompute full sequence so this record gets the
-    // correct tier commission in context of the agent's other approved
-    // records. Excludes this record's own id from the "already approved"
-    // set so re-approving an already-Approved record never double-counts it.
-    try{
-      const agentApproved=mtgRecords.filter(x=>x.agent===r.agent && x.status==='Approved' && x.id!==id);
-      const recompute=mtgComputeApprovedCommissions([...agentApproved,{...r,id,status:'Approved'}]);
-      const tier=recompute.get(id);
-      const commToSave=editEl && editEl.value!=='' ? finalComm : (tier?.comm ?? r.comm ?? 0);
-      await updateDoc(doc(db,'mortgage_transfers',id),{status:'Approved',comm:commToSave,seq:tier?.seq??r.seq??1,resolvedAt:new Date().toISOString()});
-      const fixups=[];
-      agentApproved.forEach(rec=>{
-        const t=recompute.get(rec.id);
-        if(t && ((rec.comm||0)!==t.comm || rec.seq!==t.seq))
-          fixups.push(updateDoc(doc(db,'mortgage_transfers',rec.id),{comm:t.comm,seq:t.seq}));
-      });
-      if(fixups.length) await Promise.all(fixups);
-      toast(`Mortgage transfer approved — $${commToSave}`,'success');
-    }catch(e){toast('Failed to update.','error');console.error(e);}
-  };
-
-  // Mortgage records submitted by agents auto-approve with tier commission.
-  // Records submitted by admin on behalf of agents land as Pending and go
-  // through the adminMtgAction approve/decline flow above.
-
   // ── MANAGER QUEUE ──
   // Firestore collection: `manager_queue`
   // Each document: { agentName, agentEmail, role, requestedAt (ISO), status: 'active'|'waiting'|'done' }
@@ -3249,7 +2776,7 @@
   // ── AGENT QUEUE UI ──
   function agentQueueWrap(){
     const role=currentUser?.role;
-    const id=role==='closer'?'agent-queue-wrap-closer':role==='mortgage'?'agent-queue-wrap-mtg':'agent-queue-wrap-opener';
+    const id=role==='closer'?'agent-queue-wrap-closer':'agent-queue-wrap-opener';
     return document.getElementById(id);
   }
 
@@ -3521,10 +3048,10 @@
   // actually show: 'all' and 'closer' both default to the Closer-side view
   // (Debt Settlement Convergent's primary dataset — the `deals` records),
   // 'opener' shows the Opener-side view (Debt Settlement In-House
-  // transfers), and 'mortgage' has no Debt Settlement data at all.
+  // transfers).
   function dsResolveScope(){
     const s=window._gdf.roleScope;
-    return s==='opener' ? 'opener' : s==='mortgage' ? 'mortgage' : 'closer';
+    return s==='opener' ? 'opener' : 'closer';
   }
 
   // Records + date field + which "kind" of agent (opener/closer) they
@@ -3533,7 +3060,6 @@
   function dsGetFilteredRecords(){
     const kind=dsResolveScope();
     const {name}=window._dsFilter;
-    if(kind==='mortgage') return { records:[], dateField:'date', kind };
     if(kind==='opener'){
       let recs=dsRangeXfers();
       if(name) recs=recs.filter(t=>t.name===name);
@@ -3548,7 +3074,6 @@
   // they keep showing everyone even while one agent is drilled into.
   function dsGetScopeRecords(){
     const kind=dsResolveScope();
-    if(kind==='mortgage') return { records:[], dateField:'date', kind };
     if(kind==='opener') return { records:dsRangeXfers(), dateField:'date', kind };
     return { records:dsRangeDeals(), dateField:'closingDate', kind };
   }
@@ -3606,7 +3131,6 @@
     const sel=document.getElementById('dsp-filter-name'); if(!sel) return;
     const nameWrap=document.getElementById('dsp-filter-name-wrap');
     const kind=dsResolveScope();
-    if(kind==='mortgage'){ if(nameWrap) nameWrap.style.display='none'; return; }
     if(nameWrap) nameWrap.style.display='block';
     const lbl=document.getElementById('dsp-filter-name-label');
     if(lbl) lbl.textContent = kind==='opener' ? 'Agent (Opener)' : 'Agent (Closer)';
@@ -3625,20 +3149,6 @@
     const view=document.getElementById('view-ds-convergent'); if(!view) return;
     dsPopulateFilterNames();
 
-    const noticeBox=document.getElementById('dsp-scope-notice');
-    const contentBox=document.getElementById('dsp-dashboard-content');
-    const kindNow=dsResolveScope();
-    if(kindNow==='mortgage'){
-      if(noticeBox) noticeBox.style.display='block';
-      if(contentBox) contentBox.style.display='none';
-      const set0=(id,val)=>{const el=document.getElementById(id); if(el) el.textContent=val;};
-      set0('dsp-stat-total','0'); set0('dsp-stat-closed','0'); set0('dsp-stat-pending','0');
-      set0('dsp-stat-declined','0'); set0('dsp-stat-closerate','0%'); set0('dsp-stat-avgpcc','$0');
-      return;
-    }
-    if(noticeBox) noticeBox.style.display='none';
-    if(contentBox) contentBox.style.display='block';
-
     const {records,dateField,kind}=dsGetFilteredRecords();
     const {name}=window._dsFilter;
     const approved=records.filter(r=>r.status==='Approved');
@@ -3647,6 +3157,11 @@
     const totalComm=approved.reduce((s,r)=>s+(Number(r.comm)||0),0);
     const avgComm=approved.length?totalComm/approved.length:0;
     const closeRate=records.length?Math.round((approved.length/records.length)*1000)/10:0;
+
+    // Stash the current record set on window so the clickable stat cards
+    // (see dsShowStatBreakdown below) can build their breakdown list from
+    // exactly what's on screen right now, without re-deriving filters.
+    window._dsCurrentRecords = { records, approved, pending, declined, dateField, kind };
 
     const set=(id,val)=>{const el=document.getElementById(id); if(el) el.textContent=val;};
     set('dsp-stat-total', records.length);
@@ -3902,6 +3417,58 @@
       <td class="ref-amt">$${d.comm||0}</td></tr>`).join('');
     return `<table class="ref-table"><thead><tr><th>Date</th><th>Client</th><th>Type</th><th>Status</th><th>PCC</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
+
+  // ── CLICKABLE STAT CARDS ──
+  // Clicking any of the six headline stat cards on the Debt Settlement
+  // Convergent page (Total DS Deals / Total Closed / Total Pending /
+  // Total Declined / Close Rate / Average PCC) opens a modal listing the
+  // exact records behind that number — built from window._dsCurrentRecords,
+  // which renderDsConvergentPage() refreshes on every render, so the
+  // breakdown always matches whatever's currently on screen (active date
+  // range, scope, and agent filter).
+  window.dsShowStatBreakdown=function(statType){
+    const cur=window._dsCurrentRecords;
+    if(!cur || !cur.records.length && !cur.approved.length && !cur.pending.length && !cur.declined.length){
+      toast('No Debt Settlement records in the current filters.','error');
+      return;
+    }
+    const { kind } = cur;
+    let list, title;
+    if(statType==='total')                       { list=cur.records;  title='All Debt Settlement Records'; }
+    else if(statType==='closed'||statType==='closerate') { list=cur.approved; title=statType==='closerate' ? 'Close Rate — Closed Records' : 'Closed / Approved Records'; }
+    else if(statType==='pending')                 { list=cur.pending;  title='Pending Records'; }
+    else if(statType==='declined')                { list=cur.declined; title='Declined Records'; }
+    else if(statType==='avgpcc')                  { list=cur.approved; title='Average PCC — Approved Records'; }
+    else                                           { list=cur.records;  title='Records'; }
+
+    if(!list.length){
+      toast('No records match this stat in the current filters.','error');
+      return;
+    }
+
+    const sorted=[...list].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+    const rows = sorted.map(r=>{
+      const dateVal = kind==='opener' ? (r.date||r.createdAt) : (r.closingDate||r.createdAt);
+      const nameVal = displayName(r.name);
+      const labelVal = kind==='opener' ? (r.type||'—') : (r.client||'—');
+      return `<tr><td>${fmtDate(dateVal)}</td><td>${nameVal}</td><td>${labelVal}</td>
+        <td><span class="status-badge ${r.status==='Approved'?'badge-green':r.status==='Declined'?'badge-red':'badge-amber'}">${r.status||'Pending'}</span></td>
+        <td class="ref-amt">$${r.comm||0}</td></tr>`;
+    }).join('');
+
+    const totalComm=list.reduce((s,r)=>s+(Number(r.comm)||0),0);
+    const modalTitle=document.getElementById('dsp-stat-modal-title');
+    const modalSub=document.getElementById('dsp-stat-modal-sub');
+    const modalBody=document.getElementById('dsp-stat-modal-body');
+    if(modalTitle) modalTitle.textContent=title;
+    if(modalSub) modalSub.textContent=`${list.length} record${list.length!==1?'s':''} · $${totalComm.toLocaleString()} total commission`;
+    if(modalBody) modalBody.innerHTML=
+      `<table class="ref-table"><thead><tr><th>Date</th><th>${kind==='opener'?'Opener':'Closer'}</th><th>${kind==='opener'?'Lead Type':'Client'}</th><th>Status</th><th>PCC</th></tr></thead><tbody>${rows}</tbody></table>`;
+    document.getElementById('dsp-stat-modal-overlay')?.classList.add('open');
+  };
+  window.closeDsStatModal=function(){
+    document.getElementById('dsp-stat-modal-overlay')?.classList.remove('open');
+  };
 
   function renderDsAgentCharts(dealsForAgent){
     const textColor=dsChartColor('--text2','#8a93a6'), gridColor='rgba(128,128,128,.12)',
@@ -4471,6 +4038,8 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .dsp-chart-wrap{position:relative;height:230px;}
 .dsp-chart-wrap.dsp-chart-tall{height:260px;}
 .dsp-lb-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px;}
+.dsp-stat-clickable{cursor:pointer;transition:transform .15s,border-color .15s;}
+.dsp-stat-clickable:hover{transform:translateY(-2px);border-color:var(--accent2);}
 .dsp-lb-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;gap:10px;align-items:flex-start;cursor:pointer;transition:transform .15s,border-color .15s;}
 .dsp-lb-card:hover{transform:translateY(-2px);border-color:var(--accent2);}
 .dsp-lb-card.dsp-lb-empty{cursor:default;}
@@ -4510,16 +4079,6 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
 .btn-cancel-edit:hover{border-color:var(--red);color:var(--red);}
 .btn-edit-transfer{display:flex;align-items:center;gap:5px;margin-top:8px;padding:5px 10px;border:1px solid rgba(79,126,255,.3);border-radius:7px;background:rgba(79,126,255,.06);color:var(--accent2);font-family:'Inter',sans-serif;font-size:11px;font-weight:500;cursor:pointer;transition:all .2s;}
 .btn-edit-transfer:hover{background:rgba(79,126,255,.12);}
-
-/* MORTGAGE */
-.mtg-record-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:13px;margin-bottom:7px;border-left:3px solid var(--teal);}
-.mtg-record-top{display:flex;align-items:center;justify-content:space-between;}
-.mtg-agent{font-size:13px;font-weight:600;color:var(--teal);margin-right:8px;}
-.mtg-client-num{font-size:13px;color:var(--text);}
-.mtg-date{font-size:11px;color:var(--text3);}
-.mtg-stat-banner{background:linear-gradient(135deg,rgba(8,145,178,.08),rgba(34,211,160,.05));border:1px solid rgba(8,145,178,.2);border-radius:12px;padding:14px 18px;display:flex;gap:24px;margin-bottom:12px;}
-.mtg-stat-val{font-family:'Bebas Neue',sans-serif;font-size:28px;color:var(--teal);}
-.mtg-stat-lbl{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-top:2px;}
 
 /* TOAST */
 #toast{position:fixed;top:18px;right:18px;padding:12px 16px;border-radius:10px;font-size:13px;font-weight:500;z-index:9999;display:none;max-width:310px;box-shadow:0 8px 32px rgba(0,0,0,.4);}
@@ -4591,23 +4150,6 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
 .btn-del-confirm:disabled{opacity:.5;cursor:not-allowed;}
 
 
-/* MORTGAGE RECORDS — grouped collapsible */
-.mtg-group{border:1px solid var(--border);border-radius:11px;overflow:hidden;margin-bottom:8px;}
-.mtg-group-header{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text);user-select:none;transition:background .15s;}
-.mtg-group-header:hover{background:rgba(255,255,255,.03);}
-.mtg-group-count{font-family:'Bebas Neue',sans-serif;font-size:14px;letter-spacing:1px;background:var(--border2);border-radius:20px;padding:0 7px;margin-left:5px;color:var(--text2);}
-.mtg-group-chevron{font-size:11px;color:var(--text3);}
-.mtg-group-body{padding:10px 12px;display:block;border-top:1px solid var(--border);}
-.mtg-rec-card{background:var(--surface2);border-radius:9px;padding:11px 13px;margin-bottom:7px;border-left:3px solid var(--border2);}
-.mtg-rec-card:last-child{margin-bottom:0;}
-.mtg-rec-card.mtg-status-pending{border-left-color:var(--amber);}
-.mtg-rec-card.mtg-status-approved{border-left-color:var(--green);}
-.mtg-rec-card.mtg-status-declined{border-left-color:var(--red);}
-.mtg-rec-row{display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border);}
-.mtg-rec-row:last-of-type{border-bottom:none;}
-.mtg-rec-label{color:var(--text2);}
-.btn-mtg-resubmit{margin-top:9px;width:100%;padding:7px;border:1px solid rgba(79,126,255,.35);border-radius:7px;background:rgba(79,126,255,.08);color:var(--accent2);font-family:'Inter',sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;}
-.btn-mtg-resubmit:hover{background:rgba(79,126,255,.16);}
 [data-theme="light"] .sidebar{border-right:1px solid rgba(0,0,0,.08);}
 [data-theme="light"] .topbar{background:#fff;border-bottom:1px solid rgba(0,0,0,.08);}
 [data-theme="light"] select option{background:#fff;}
@@ -4718,10 +4260,6 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
       Submit for Closer
     </button>
-    <button class="adm-fab-option" onclick="openAdminSubmit('mortgage')">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-      Submit for Mortgage
-    </button>
   </div>
   <button class="adm-fab-btn" onclick="toggleAdminSubmitMenu(event)" title="Submit deal or transfer">+</button>
 </div>
@@ -4761,15 +4299,6 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
       <div class="field"><label>Estimated Commission</label><input id="adm-cl-commission" readonly placeholder="Fill in monthly payment to calculate"/></div>
       <div class="tier-info-text" id="adm-cl-tier-info"></div>
       <button class="btn-form" id="adm-cl-submit-btn" onclick="adminSubmitCloser()">Submit Deal</button>
-    </div>
-
-    <!-- MORTGAGE FORM -->
-    <div id="adm-submit-mtg-form" style="display:none">
-      <div class="field"><label>Agent Name</label><select id="adm-mtg-name"><option value="">Select agent…</option></select></div>
-      <div class="field"><label>Client Phone</label><input type="text" id="adm-mtg-sub-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('adm-mtg-sub-phone')"/><div id="adm-mtg-sub-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div>
-      <div class="field"><label>Date</label><input type="date" id="adm-mtg-sub-date"/></div>
-      <div class="fp-note" style="margin-top:8px;margin-bottom:12px"><strong>Pending Review</strong>This submission will land as Pending for admin approval. Commission will be calculated at time of approval based on the agent's sequence number.</div>
-      <button class="btn-form btn-form-teal" id="adm-mtg-submit-btn" onclick="adminSubmitMortgage()">Submit Transfer</button>
     </div>
   </div>
 </div>
@@ -4812,10 +4341,9 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
   <div class="login-box">
     <div class="login-wordmark">United Contact Center</div>
     <div class="login-welcome">Welcome Back · Sign In to Continue</div>
-    <div class="role-grid" style="grid-template-columns:repeat(5,1fr)">
+    <div class="role-grid" style="grid-template-columns:repeat(4,1fr)">
       <div class="role-btn-card" id="rs-opener"   onclick="selectRole('opener')"><span class="role-icon">📞</span><span class="role-btn-name">Opener</span></div>
       <div class="role-btn-card" id="rs-closer"   onclick="selectRole('closer')"><span class="role-icon">🤝</span><span class="role-btn-name">Closer</span></div>
-      <div class="role-btn-card" id="rs-mortgage" onclick="selectRole('mortgage')"><span class="role-icon">🏠</span><span class="role-btn-name">Mortgage</span></div>
       <div class="role-btn-card" id="rs-admin"    onclick="selectRole('admin')"><span class="role-icon">⚙️</span><span class="role-btn-name">Admin</span></div>
       <div class="role-btn-card" id="rs-readonly" onclick="selectRole('readonly')"><span class="role-icon">👁️</span><span class="role-btn-name">Read-Only</span></div>
     </div>
@@ -4887,7 +4415,6 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
                 <button class="gdf-scope-btn active" data-scope="all"      onclick="applyGdfScope('all')">All</button>
                 <button class="gdf-scope-btn"        data-scope="closer"   onclick="applyGdfScope('closer')">Closers</button>
                 <button class="gdf-scope-btn"        data-scope="opener"   onclick="applyGdfScope('opener')">Openers</button>
-                <button class="gdf-scope-btn"        data-scope="mortgage" onclick="applyGdfScope('mortgage')">Mortgage</button>
               </div>
             </div>
             <div class="gdf-divider" id="gdf-scope-divider" style="display:none"></div>
@@ -4963,14 +4490,13 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
         <div class="view-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
           <div><div class="view-title" id="topbar-greeting">Overview</div><div class="view-sub">Full team performance · filtered by the master filter above.</div></div>
         </div>
-        <div class="stats-row-7" id="adm-stats-row">
-          <div class="stat-card blue" data-scope="all" id="adm-card-total"><div class="stat-label">Total Submissions</div><div class="stat-value" id="adm-stat-total">0</div><div class="stat-sub" id="adm-stat-total-sub">Deals + Xfers + Mortgage</div></div>
+        <div class="stats-row-6" id="adm-stats-row">
+          <div class="stat-card blue" data-scope="all" id="adm-card-total"><div class="stat-label">Total Submissions</div><div class="stat-value" id="adm-stat-total">0</div><div class="stat-sub" id="adm-stat-total-sub">Deals + Xfers</div></div>
           <div class="stat-card green" data-scope="all,closer,opener" id="adm-card-approved"><div class="stat-label" id="adm-stat-approved-lbl">Approved</div><div class="stat-value" id="adm-stat-approved">0</div></div>
           <div class="stat-card amber" data-scope="all,closer,opener" id="adm-card-pending"><div class="stat-label" id="adm-stat-pending-lbl">Pending</div><div class="stat-value" id="adm-stat-pending">0</div></div>
           <div class="stat-card red" data-scope="all,closer,opener" id="adm-card-declined"><div class="stat-label" id="adm-stat-declined-lbl">Declined</div><div class="stat-value" id="adm-stat-declined">0</div></div>
           <div class="stat-card purple" data-scope="all,closer" id="adm-card-comm"><div class="stat-label">Closer Comm.</div><div class="stat-value" id="adm-stat-comm">$0</div></div>
           <div class="stat-card teal" data-scope="all,opener" id="adm-card-ocomm"><div class="stat-label">Opener Comm.</div><div class="stat-value" id="adm-stat-ocomm">$0</div></div>
-          <div class="stat-card indigo" data-scope="all,mortgage" id="adm-card-mtg"><div class="stat-label">Mortgage Comm.</div><div class="stat-value" id="adm-stat-mtg">$0</div></div>
         </div>
         <div class="panel-card" style="margin-bottom:12px">
           <div class="panel-card-title">Recent activity <span class="panel-card-action" onclick="switchView('admin-commission')">View rankings →</span></div>
@@ -4999,7 +4525,7 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
             <div class="tasks-ch-left">
               <div>
                 <div class="tasks-ch-title">Tasks — Pending Review</div>
-                <div class="tasks-ch-sub">Closer deals + Opener transfers + Mortgage transfers awaiting approval</div>
+                <div class="tasks-ch-sub">Closer deals + Opener transfers awaiting approval</div>
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:8px">
@@ -5020,7 +4546,7 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
 
       <!-- ══ ADMIN DEALS & TRANSFERS ══ -->
       <div class="view" id="view-admin-deals">
-        <div class="view-header"><div class="view-title">Deals &amp; Transfers</div><div class="view-sub">Closer deals and opener transfers. Mortgage records are in the Mortgage tab.</div></div>
+        <div class="view-header"><div class="view-title">Deals &amp; Transfers</div><div class="view-sub">Closer deals and opener transfers.</div></div>
         <div class="action-bar">
           <button class="btn-refresh" onclick="renderAdminResults()"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Refresh</button>
           <button class="btn-csv" onclick="exportCSV()"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export CSV</button>
@@ -5093,65 +4619,6 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
         </div>
       </div>
 
-      <!-- ══ EDIT MORTGAGE RECORD MODAL ══ -->
-      <div id="em-modal-overlay" class="ap-overlay">
-        <div class="ap-box" style="max-width:480px">
-          <button class="ap-close" onclick="closeEditMortgageModal()">✕</button>
-          <div class="form-card-title">Edit Mortgage Record</div>
-          <div class="field"><label>Agent</label><input type="text" id="em-agent" readonly/></div>
-          <div class="field-row"><div class="field"><label>Transfer Date</label><input type="date" id="em-date"/></div><div class="field"><label>Client Phone</label><input type="text" id="em-phone" placeholder="423-482-1384"/></div></div>
-          <div class="field-row"><div class="field"><label>Seq # (system-generated)</label><input type="text" id="em-seq" readonly/></div><div class="field"><label>Commission ($)</label><input type="number" id="em-comm" placeholder="0.00"/></div></div>
-          <div class="login-error" id="em-modal-error" style="display:none"></div>
-          <button class="btn-form" id="em-save-btn" onclick="saveEditMortgage()">Save Changes</button>
-          <div id="em-actions-container"></div>
-        </div>
-      </div>
-
-      <!-- ══ ADMIN MORTGAGE ══ -->
-      <div class="view" id="view-admin-mortgage">
-        <div class="view-header"><div class="view-title">Mortgage Records</div><div class="view-sub">Full detail and commission for every submitted transfer.</div></div>
-        <div class="action-bar">
-          <button class="btn-refresh" onclick="renderAdminMortgage()"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Refresh</button>
-          <button class="btn-csv" onclick="exportMtgCSV()"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export CSV</button>
-          <button class="btn-decline" id="dmm-open-btn" style="margin-left:auto;display:none" onclick="openDeleteMortgageModal()">🗑 Delete All Mortgage Data</button>
-        </div>
-        <div class="filter-panel">
-          <div class="filter-panel-title">Additional filters <span style="font-size:10px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0"> — date range applies from the top bar</span></div>
-          <div class="filter-grid">
-            <div class="filter-field"><label>Status</label><select id="mf-status" onchange="applyMtgFilters()"><option value="All">All Statuses</option><option value="Pending">Pending</option><option value="Approved">Approved</option><option value="Declined">Declined</option></select></div>
-          </div>
-          <div class="filter-actions">
-            <div class="filter-count" id="mf-count"></div>
-            <div class="filter-btns"><button class="btn-filter-clear" onclick="clearMtgFilters()">Clear filters</button></div>
-          </div>
-        </div>
-        <div id="mtg-section"><div class="section-heading">Mortgage Transfers</div><div id="adm-mtg-list"><div class="empty-state">No mortgage transfers in this date range.</div></div></div>
-      </div>
-
-      <!-- ══ DELETE ALL MORTGAGE DATA — Admin-only, irreversible ══ -->
-      <div id="dmm-overlay" class="ap-overlay">
-        <div class="ap-box" style="max-width:520px">
-          <button class="ap-close" onclick="closeDeleteMortgageModal()">✕</button>
-          <div class="form-card-title" style="color:var(--red)">🗑 Delete All Mortgage Data</div>
-          <div style="font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:16px">
-            This permanently deletes <b id="dmm-count">—</b> mortgage record(s) — every mortgage transfer, commission, and status entry in the system.
-            <b>This cannot be undone.</b> Deals, transfers, and commissions for Closers and Openers are completely unaffected.
-          </div>
-
-          <div id="dmm-agent-list-wrap" style="display:none;margin-bottom:16px">
-            <div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3);margin-bottom:8px">Agents currently on Mortgage — reassign them here before or after deleting</div>
-            <div id="dmm-agent-list" style="display:flex;flex-direction:column;gap:8px"></div>
-          </div>
-
-          <div class="field">
-            <label>Type <code>DELETE MORTGAGE DATA</code> to confirm</label>
-            <input type="text" id="dmm-confirm-input" placeholder="DELETE MORTGAGE DATA" oninput="checkDeleteMortgageConfirm()" autocomplete="off"/>
-          </div>
-          <div class="login-error" id="dmm-error" style="display:none"></div>
-          <button class="btn-decline" id="dmm-confirm-btn" style="width:100%;padding:12px 0;opacity:.5" disabled onclick="executeDeleteMortgageData()">Permanently Delete Mortgage Data</button>
-        </div>
-      </div>
-
       <!-- ══ DEBT SETTLEMENT CONVERGENT ══ Dedicated executive analytics
            page. Uses the EXISTING Debt Settlement In-House deals (deals
            collection, dealType 'Debt Settlement' / 'Debt Validation') as
@@ -5175,22 +4642,12 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
         </div>
 
         <div class="stats-row-6">
-          <div class="stat-card blue"><div class="stat-label">Total DS Deals</div><div class="stat-value" id="dsp-stat-total">0</div></div>
-          <div class="stat-card green"><div class="stat-label">Total Closed</div><div class="stat-value" id="dsp-stat-closed">0</div></div>
-          <div class="stat-card amber"><div class="stat-label">Total Pending</div><div class="stat-value" id="dsp-stat-pending">0</div></div>
-          <div class="stat-card red"><div class="stat-label">Total Declined</div><div class="stat-value" id="dsp-stat-declined">0</div></div>
-          <div class="stat-card purple"><div class="stat-label">Close Rate</div><div class="stat-value" id="dsp-stat-closerate">0%</div></div>
-          <div class="stat-card teal"><div class="stat-label">Average PCC</div><div class="stat-value" id="dsp-stat-avgpcc">$0</div></div>
-        </div>
-
-        <!-- Shown when the master filter's Filter Scope is set to Mortgage —
-             Debt Settlement Convergent has no mortgage data (it's sourced
-             entirely from Debt Settlement In-House deals/transfers), so we
-             say so plainly instead of showing misleading zeros everywhere. -->
-        <div class="panel-card" id="dsp-scope-notice" style="display:none;margin-bottom:16px;text-align:center;padding:40px 24px">
-          <div style="font-size:28px;margin-bottom:10px">🏠</div>
-          <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:6px">Mortgage isn't part of Debt Settlement Convergent</div>
-          <div style="font-size:13px;color:var(--text3);max-width:440px;margin:0 auto">This page only covers Debt Settlement In-House performance. Switch the <b>Filter Scope</b> in the master filter above to Closers or Openers (or All) to see data here.</div>
+          <div class="stat-card blue dsp-stat-clickable" onclick="dsShowStatBreakdown('total')" title="Click to see every record"><div class="stat-label">Total DS Deals</div><div class="stat-value" id="dsp-stat-total">0</div></div>
+          <div class="stat-card green dsp-stat-clickable" onclick="dsShowStatBreakdown('closed')" title="Click to see closed/approved records"><div class="stat-label">Total Closed</div><div class="stat-value" id="dsp-stat-closed">0</div></div>
+          <div class="stat-card amber dsp-stat-clickable" onclick="dsShowStatBreakdown('pending')" title="Click to see pending records"><div class="stat-label">Total Pending</div><div class="stat-value" id="dsp-stat-pending">0</div></div>
+          <div class="stat-card red dsp-stat-clickable" onclick="dsShowStatBreakdown('declined')" title="Click to see declined records"><div class="stat-label">Total Declined</div><div class="stat-value" id="dsp-stat-declined">0</div></div>
+          <div class="stat-card purple dsp-stat-clickable" onclick="dsShowStatBreakdown('closerate')" title="Click to see the closed records behind this rate"><div class="stat-label">Close Rate</div><div class="stat-value" id="dsp-stat-closerate">0%</div></div>
+          <div class="stat-card teal dsp-stat-clickable" onclick="dsShowStatBreakdown('avgpcc')" title="Click to see the approved records behind this average"><div class="stat-label">Average PCC</div><div class="stat-value" id="dsp-stat-avgpcc">$0</div></div>
         </div>
 
         <div id="dsp-dashboard-content">
@@ -5228,6 +4685,16 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
         </div>
       </div>
 
+      <!-- ══ DEBT SETTLEMENT CONVERGENT — STAT CARD BREAKDOWN MODAL ══ -->
+      <div id="dsp-stat-modal-overlay" class="ap-overlay">
+        <div class="ap-box" style="max-width:640px">
+          <button class="ap-close" onclick="closeDsStatModal()">✕</button>
+          <div class="form-card-title" id="dsp-stat-modal-title">Records</div>
+          <div class="view-sub" id="dsp-stat-modal-sub" style="margin-bottom:14px">—</div>
+          <div id="dsp-stat-modal-body" style="overflow-x:auto"></div>
+        </div>
+      </div>
+
       <!-- ══ ADMIN COMMISSION STRUCTURE ══ -->
       <div class="view" id="view-admin-commission">
         <div class="view-header"><div class="view-title">Commission Structure</div><div class="view-sub">Single hub for rankings and agent profiles · use the master filter above to change scope and range.</div></div>
@@ -5262,24 +4729,13 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
         </div>
 
         <!-- Openers -->
-        <div class="tasks-collapsible" style="margin-bottom:10px" id="cc-section-opener" data-scope="all,opener">
+        <div class="tasks-collapsible" id="cc-section-opener" data-scope="all,opener">
           <div class="tasks-collapsible-header" onclick="toggleCcCategory('opener')">
             <div class="tasks-ch-left"><div class="tasks-ch-title">Openers</div></div>
             <div class="tasks-toggle-icon" id="cc-cat-icon-opener">▾</div>
           </div>
           <div class="tasks-collapsible-body" id="cc-cat-body-opener">
             <div id="cc-opener-list"><div class="empty-state">Loading…</div></div>
-          </div>
-        </div>
-
-        <!-- Mortgage -->
-        <div class="tasks-collapsible" id="cc-section-mortgage" data-scope="all,mortgage">
-          <div class="tasks-collapsible-header" onclick="toggleCcCategory('mortgage')">
-            <div class="tasks-ch-left"><div class="tasks-ch-title">Mortgage</div></div>
-            <div class="tasks-toggle-icon" id="cc-cat-icon-mortgage">▾</div>
-          </div>
-          <div class="tasks-collapsible-body" id="cc-cat-body-mortgage">
-            <div id="cc-mortgage-list"><div class="empty-state">Loading…</div></div>
           </div>
         </div>
       </div>
@@ -5295,7 +4751,7 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
           <div class="filter-panel-title">Filters</div>
           <div class="filter-grid">
             <div class="filter-field"><label>Search</label><input type="text" id="ag-search" placeholder="Name or email…" oninput="filterAgents()"/></div>
-            <div class="filter-field"><label>Role</label><select id="ag-filter-role" onchange="filterAgents()"><option value="All">All Roles</option><option value="Admin">Admin</option><option value="Closer">Closer</option><option value="Opener">Opener</option><option value="Mortgage">Mortgage</option><option value="Readonly">Read-Only</option></select></div>
+            <div class="filter-field"><label>Role</label><select id="ag-filter-role" onchange="filterAgents()"><option value="All">All Roles</option><option value="Admin">Admin</option><option value="Closer">Closer</option><option value="Opener">Opener</option><option value="Readonly">Read-Only</option></select></div>
           </div>
           <div class="filter-actions">
             <div class="filter-count" id="ag-count"></div>
@@ -5323,7 +4779,6 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
             <option value="">Select role…</option>
             <option value="closer">Closer</option>
             <option value="opener">Opener</option>
-            <option value="mortgage">Mortgage</option>
             <option value="admin">Admin</option>
             <option value="readonly">Read-Only</option>
           </select></div>
@@ -5495,42 +4950,6 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
         <div id="cl-history-list"><div class="empty-state">No deals yet.</div></div>
       </div>
 
-      <!-- ══ MORTGAGE DASHBOARD ══ -->
-      <div class="view" id="view-mtg-dashboard">
-        <div class="view-header"><div class="view-title">Mortgage Dashboard</div><div class="view-sub">Your transfer records and commission.</div></div>
-        <div class="stats-row-3">
-          <div class="stat-card teal"><div class="stat-label">Filtered Transfers</div><div class="stat-value" id="mtg-stat-total">0</div></div>
-          <div class="stat-card blue"><div class="stat-label">Today's Transfers</div><div class="stat-value" id="mtg-stat-today">0</div></div>
-          <div class="stat-card indigo"><div class="stat-label">All Time</div><div class="stat-value" id="mtg-stat-alltime">0</div></div>
-        </div>
-        <div class="shift-card">
-          <div class="shift-top"><div><div class="shift-timer-label">Shift ends in</div><div class="shift-timer-val" id="shift-timer-mtg">—</div></div><div class="shift-right"><div class="shift-pct-label">Progress</div><div class="shift-pct-val" id="shift-pct-mtg">—</div></div></div>
-          <div class="shift-progress"><div class="shift-progress-bar" id="shift-progress-mtg"></div></div>
-          <div class="shift-tag-text" id="shift-tag-mtg">Egypt: 4PM – 1AM · Mon–Fri</div>
-        </div>
-        <div id="agent-queue-wrap-mtg"></div>
-        <div class="panel-card"><div class="panel-card-title">Recent transfers <span class="panel-card-action" onclick="switchView('mtg-records')">View all →</span></div><div id="mtg-recent-feed"><div class="empty-state">No transfers yet.</div></div></div>
-      </div>
-
-      <!-- ══ MORTGAGE SUBMIT ══ -->
-      <div class="view" id="view-mtg-submit">
-        <div class="view-header"><div class="view-title">Submit Transfer</div><div class="view-sub">Submitted for admin review — just like opener and closer submissions.</div></div>
-        <div class="form-card">
-          <div class="form-card-title">Transfer Details</div>
-          <div class="field"><label>Agent Name</label><select id="mtg-agent"><option value="">Select agent…</option></select></div>
-          <div class="field"><label>Client Phone</label><input type="text" id="mtg-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('mtg-phone')"/><div id="mtg-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div>
-          <div class="field"><label>Date</label><input type="date" id="mtg-date"/></div>
-          <button class="btn-form btn-form-teal" id="mtg-submit-btn" onclick="submitMtgTransfer()">Submit Transfer</button>
-        </div>
-      </div>
-
-      <!-- ══ MORTGAGE RECORDS ══ -->
-      <div class="view" id="view-mtg-records">
-        <div class="view-header"><div class="view-title">My Records</div><div class="view-sub">All your logged mortgage transfers.</div></div>
-        <div class="mtg-stat-banner"><div class="mtg-stat-item"><div class="mtg-stat-val" id="mtg-records-count">0 records</div><div class="mtg-stat-lbl">In selected date range</div></div></div>
-        <div id="mtg-records-list"><div class="empty-state">No transfers in this date range.</div></div>
-      </div>
-
     </div><!-- /view-wrap -->
   </div><!-- /main-content -->
 </div><!-- /app -->
@@ -5556,16 +4975,15 @@ function updateStrength(val){
 }
 
 (function initShift(){
-  // ── SHIFT WINDOWS (independent per team) ──
+  // ── SHIFT WINDOW ──
   // Openers + Closers: 5:00 PM – 2:00 AM Egypt time (9h)
-  // Mortgage:          4:00 PM – 1:00 AM Egypt time (9h) — separate window, runs on its own clock
-  // All the actual math (which team's window applies, whether it's
-  // currently active, seconds remaining, and which business/shift day a
-  // record belongs to) lives in ONE shared place — window.computeShiftStatus
-  // / window.shiftDayKeyFor / window.shiftTodayKey, defined earlier in the
-  // module script — so the countdown shown here can never drift out of
-  // sync with the "today" stats, EOD summary, leaderboards, and reports
-  // that use the exact same functions.
+  // All the actual math (whether the shift is currently active, seconds
+  // remaining, and which business/shift day a record belongs to) lives in
+  // ONE shared place — window.computeShiftStatus / window.shiftDayKeyFor /
+  // window.shiftTodayKey, defined earlier in the module script — so the
+  // countdown shown here can never drift out of sync with the "today"
+  // stats, EOD summary, leaderboards, and reports that use the exact same
+  // functions.
   function getNow(){ return window.getNowEgypt(); }
   function isWD(d){const day=d.getDay();return day>=1&&day<=5;}
   function fmt(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;}
@@ -5576,7 +4994,7 @@ function updateStrength(val){
     return`<div class="eod-title">Shift Summary</div><div class="eod-grid"><div class="eod-stat"><div class="eod-val">${tt.length}</div><div class="eod-lbl">Transfers</div></div><div class="eod-stat"><div class="eod-val">${ap.length}</div><div class="eod-lbl">Approved</div></div><div class="eod-stat"><div class="eod-val">$${tc}</div><div class="eod-lbl">Earned</div></div></div><div class="eod-msg">${tt.length>0?'🔥 Solid shift!':'💪 Tomorrow is a fresh start.'}</div>`;
   }
   window.refreshEOD=function(){
-    const role=window._currentRole;if(!role||role==='admin'||role==='mortgage')return;
+    const role=window._currentRole;if(!role||role==='admin')return;
     const eodId=role==='closer'?'eod-closer':'eod-opener',eodEl=document.getElementById(eodId);if(!eodEl)return;
     const team=window.shiftTeamForRole(role),now=getNow(),status=window.computeShiftStatus(now,team);
     if(status.active){
@@ -5598,7 +5016,7 @@ function updateStrength(val){
     } else{
       tEl.textContent=isWD(now)?'Off shift':'Weekend';tEl.className='shift-timer-val off';
       if(pctEl)pctEl.textContent='—';if(pEl)pEl.style.width='0%';
-      if(tagEl)tagEl.textContent=isWD(now)?cfg.nextLabel:'Back Monday '+(role==='mortgage'?'4PM':'5PM');
+      if(tagEl)tagEl.textContent=isWD(now)?cfg.nextLabel:'Back Monday 5PM';
       if(eodEl&&eodEl.style.display==='none'&&(role==='closer'||role==='opener')){eodEl.innerHTML=buildEOD(role);eodEl.style.display='block';}
     }
   }
@@ -5613,7 +5031,6 @@ function updateStrength(val){
     if(dot){dot.style.background=status.active?'var(--green)':'var(--amber)';}
     if(role==='closer')   updateShiftEl('shift-timer-closer','shift-progress-closer','shift-tag-closer','shift-pct-closer','eod-closer','closer');
     if(role==='opener')   updateShiftEl('shift-timer-opener','shift-progress-opener','shift-tag-opener','shift-pct-opener','eod-opener','opener');
-    if(role==='mortgage') updateShiftEl('shift-timer-mtg','shift-progress-mtg','shift-tag-mtg','shift-pct-mtg',null,'mortgage');
   }
   document.addEventListener('DOMContentLoaded',()=>{setInterval(tick,1000);tick();});
 })();
