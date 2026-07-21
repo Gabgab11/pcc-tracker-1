@@ -3194,6 +3194,8 @@
       renderDsLeaderboards(records, kind);
       renderDsAgentTable(records, kind);
     }
+
+    dsRefreshOpenStatModal();
   }
 
   function renderDsCharts(records, approved, dateField){
@@ -3426,6 +3428,19 @@
   // which renderDsConvergentPage() refreshes on every render, so the
   // breakdown always matches whatever's currently on screen (active date
   // range, scope, and agent filter).
+  // From inside that modal, admin can also:
+  //   • click an agent's name to jump straight to their profile (closes
+  //     this modal first, same pattern as Global Search's gsGoToProfile)
+  //   • click the edit icon on any row to open the normal Edit Deal / Edit
+  //     Transfer modal for that exact record — same modal used everywhere
+  //     else in the app, so approve/decline/commission edits all work
+  //     identically from here.
+  // window._dsStatModalType remembers which stat is currently open so the
+  // list can silently re-render itself (via renderDsConvergentPage, which
+  // calls dsRefreshOpenStatModal below) whenever the underlying deals/
+  // transfers change — e.g. right after saving an edit from this same modal.
+  window._dsStatModalType = null;
+
   window.dsShowStatBreakdown=function(statType){
     const cur=window._dsCurrentRecords;
     if(!cur || !cur.records.length && !cur.approved.length && !cur.pending.length && !cur.declined.length){
@@ -3443,17 +3458,32 @@
 
     if(!list.length){
       toast('No records match this stat in the current filters.','error');
+      window._dsStatModalType=null;
+      closeDsStatModal();
       return;
     }
+    window._dsStatModalType=statType;
 
+    const canEdit = currentUser?.role!=='readonly';
     const sorted=[...list].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
     const rows = sorted.map(r=>{
       const dateVal = kind==='opener' ? (r.date||r.createdAt) : (r.closingDate||r.createdAt);
-      const nameVal = displayName(r.name);
+      const dispName = displayName(r.name);
+      const rawName = String(r.name||'').replace(/'/g,"\\'");
       const labelVal = kind==='opener' ? (r.type||'—') : (r.client||'—');
-      return `<tr><td>${fmtDate(dateVal)}</td><td>${nameVal}</td><td>${labelVal}</td>
+      const editBtn = canEdit
+        ? `<button type="button" class="edit-button" title="Edit" onclick="event.stopPropagation();dsStatModalEdit('${kind==='opener'?'transfer':'deal'}','${r.id}')">
+             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+           </button>`
+        : '';
+      return `<tr>
+        <td>${fmtDate(dateVal)}</td>
+        <td><span class="dsp-modal-agent-link" onclick="dsStatModalOpenProfile('${kind}','${rawName}')">${dispName}</span></td>
+        <td>${labelVal}</td>
         <td><span class="status-badge ${r.status==='Approved'?'badge-green':r.status==='Declined'?'badge-red':'badge-amber'}">${r.status||'Pending'}</span></td>
-        <td class="ref-amt">$${r.comm||0}</td></tr>`;
+        <td class="ref-amt">$${r.comm||0}</td>
+        <td style="text-align:right">${editBtn}</td>
+      </tr>`;
     }).join('');
 
     const totalComm=list.reduce((s,r)=>s+(Number(r.comm)||0),0);
@@ -3461,14 +3491,48 @@
     const modalSub=document.getElementById('dsp-stat-modal-sub');
     const modalBody=document.getElementById('dsp-stat-modal-body');
     if(modalTitle) modalTitle.textContent=title;
-    if(modalSub) modalSub.textContent=`${list.length} record${list.length!==1?'s':''} · $${totalComm.toLocaleString()} total commission`;
+    if(modalSub) modalSub.textContent=`${list.length} record${list.length!==1?'s':''} · $${totalComm.toLocaleString()} total commission${canEdit?' · click a name to view their profile, or the edit icon to update a record':''}`;
     if(modalBody) modalBody.innerHTML=
-      `<table class="ref-table"><thead><tr><th>Date</th><th>${kind==='opener'?'Opener':'Closer'}</th><th>${kind==='opener'?'Lead Type':'Client'}</th><th>Status</th><th>PCC</th></tr></thead><tbody>${rows}</tbody></table>`;
+      `<table class="ref-table"><thead><tr><th>Date</th><th>${kind==='opener'?'Opener':'Closer'}</th><th>${kind==='opener'?'Lead Type':'Client'}</th><th>Status</th><th>PCC</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
     document.getElementById('dsp-stat-modal-overlay')?.classList.add('open');
   };
   window.closeDsStatModal=function(){
     document.getElementById('dsp-stat-modal-overlay')?.classList.remove('open');
+    window._dsStatModalType=null;
   };
+  // Jump to an agent's profile from inside the breakdown modal. Closes this
+  // modal first (same pattern as Global Search) so the two overlays never
+  // stack. Closer-kind records open the DS-specific closer profile (same
+  // one the leaderboard/table already link to); opener-kind records open
+  // the general Commission Structure profile, since there's no separate
+  // DS-only opener profile.
+  window.dsStatModalOpenProfile=function(kind,name){
+    closeDsStatModal();
+    if(kind==='opener') openAgentProfile('opener', name);
+    else openDsAgentProfile(name);
+  };
+  // Opens the same Edit Deal / Edit Transfer modal used everywhere else in
+  // the app (approve/decline, commission edit, field edits — all identical
+  // behavior). Closes this breakdown modal first: both are full-screen
+  // .ap-overlay elements, and since this modal's markup sits later in the
+  // DOM than the edit modals, leaving it open would visually cover the
+  // edit modal instead of the other way around.
+  window.dsStatModalEdit=function(kind,id){
+    closeDsStatModal();
+    if(kind==='transfer') openEditTransfer(id);
+    else openEditDeal(id);
+  };
+  // Called at the end of every renderDsConvergentPage() — if the stat
+  // breakdown modal is currently open, silently rebuild its contents from
+  // the freshly-updated window._dsCurrentRecords so an edit made from this
+  // same modal (or anywhere else — approvals, deletes, etc.) is reflected
+  // immediately without the admin needing to close and reopen it.
+  function dsRefreshOpenStatModal(){
+    const overlay=document.getElementById('dsp-stat-modal-overlay');
+    if(overlay && overlay.classList.contains('open') && window._dsStatModalType){
+      dsShowStatBreakdown(window._dsStatModalType);
+    }
+  }
 
   function renderDsAgentCharts(dealsForAgent){
     const textColor=dsChartColor('--text2','#8a93a6'), gridColor='rgba(128,128,128,.12)',
@@ -4049,6 +4113,8 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .dsp-lb-agent{font-size:13px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px;margin-bottom:3px;}
 .dsp-lb-value{font-size:12px;color:var(--accent2);font-weight:600;}
 .dsp-agent-row{cursor:pointer;transition:background .15s;}
+.dsp-modal-agent-link{color:var(--accent2);font-weight:600;cursor:pointer;}
+.dsp-modal-agent-link:hover{text-decoration:underline;}
 .dsp-agent-row:hover{background:rgba(79,126,255,.06);}
 table.dsp-table th,table.dsp-table td{white-space:nowrap;}
 .dsp-scope-hint{font-size:12px;color:var(--text3);line-height:1.5;padding-top:6px;}
