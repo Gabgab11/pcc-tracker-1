@@ -69,18 +69,21 @@
     { email:'eddy@pcc.com',          name:'Eddy',     role:'closer',   department:'Closers', commissionStructure:'Standard Closer Tiers', alias:'Eddy Jackson' },
     { email:'willy@pcc.com',         name:'Willy',    role:'closer',   department:'Closers', commissionStructure:'Standard Closer Tiers' },
     { email:'oscar@unitedfunds.com', name:'Oscar',    role:'opener',   department:'Openers', commissionStructure:'Standard Opener Tiers' },
-    { email:'sara@unitedfunds.com',  name:'Sara',     role:'opener',   department:'Openers', commissionStructure:'Standard Opener Tiers', alias:'Sara Miller' },
-    { email:'kate@unitedfunds.com',  name:'Kate',     role:'opener',   department:'Openers', commissionStructure:'Standard Opener Tiers', alias:'Kate Wilson' },
     { email:'mona@pcc.com',          name:'Mona',     role:'opener',   department:'Openers', commissionStructure:'Standard Opener Tiers', alias:'Clara Williams' },
-    { email:'sean@pcc.com',          name:'Sean',     role:'opener',   department:'Openers', commissionStructure:'Standard Opener Tiers' },
     { email:'emmanuel@pcc.com',      name:'Emmanuel', role:'opener',   department:'Openers', commissionStructure:'Standard Opener Tiers', alias:'John Peter' },
     { email:'tom@pcc.com',           name:'Tom',      role:'opener',   department:'Openers', commissionStructure:'Standard Opener Tiers', alias:'Tommy Eager' },
   ];
-  // NOTE: Mortgage was removed as a role/department entirely. Agents who
+  // NOTE: Kate ('kate@unitedfunds.com'/Kate Wilson), Sara
+  // ('sara@unitedfunds.com'/Sara Miller), and Sean ('sean@pcc.com') were
+  // deliberately removed from this list — they were permanently deleted
+  // from Agent Management and must never be auto-recreated, including in
+  // the (extremely unlikely) event this list is ever consulted again on a
+  // completely empty `agents` collection.
+  // Mortgage was also removed as a role/department entirely. Agents who
   // were previously seeded as Mortgage (Paul, Liam, Hidie, Wells/Wills,
   // Jacob) are untouched here if they already exist in Firestore under a
-  // different role — this list is only ever consulted to auto-create
-  // agents that are completely missing from the `agents` collection.
+  // different role — this list is only ever consulted to bootstrap a
+  // completely empty `agents` collection.
 
   function displayName(name){ return DISPLAY_ALIAS[name] || name || '—'; }
   window.displayName = displayName;
@@ -213,18 +216,21 @@
 
   function onAgentRegistryReady(fn){ if(agentRegistryReady) fn(); else agentRegistryWaiters.push(fn); }
 
-  // Fills in any LEGACY_SEED_AGENTS whose email is missing from the agents
-  // collection — rather than only seeding when the collection is totally
-  // empty. This makes recovery automatic if an earlier seed attempt was
-  // interrupted (e.g. by a permissions error) and only partially wrote
-  // documents: whatever's missing gets added on the next load, and nothing
-  // already present is touched or duplicated.
+  // Seeds LEGACY_SEED_AGENTS ONLY when the `agents` collection is
+  // genuinely empty — i.e. a brand-new Firestore project that has never
+  // had an agent written to it. This is a one-time bootstrap, not a
+  // self-healing mechanism: the previous version of this function re-added
+  // any legacy-seed email that was "missing" from the collection, which
+  // meant permanently DELETING one of these agents through Admin → Agent
+  // Management caused them to silently reappear on the next page load
+  // (as soon as an admin session with write access touched this listener).
+  // Deleting an agent is a deliberate, permanent action — it must never be
+  // undone by a background bootstrap routine that can't tell the
+  // difference between "never created" and "intentionally removed".
   async function seedMissingLegacyAgents(existingDocs){
-    const existingEmails=new Set(existingDocs.map(d=>(d.email||'').toLowerCase()));
-    const missing=LEGACY_SEED_AGENTS.filter(a=>!existingEmails.has(a.email.toLowerCase()));
-    if(!missing.length) return false;
+    if(existingDocs.length>0) return false;
     try{
-      for(const a of missing){
+      for(const a of LEGACY_SEED_AGENTS){
         await setDoc(doc(collection(db,'agents')), {
           name:a.name, email:a.email.toLowerCase(), department:a.department,
           role:a.role, commissionStructure:a.commissionStructure,
@@ -241,9 +247,10 @@
     let seedAttempted=false;
     agentsUnsub=onSnapshot(q,async snap=>{
       const docs=[]; snap.forEach(d=>docs.push({id:d.id,...d.data()}));
-      // Check for and fill in any missing legacy agents at most once per
-      // listener lifetime — avoids a write loop, but still self-heals a
-      // partial seed (e.g. only Admin present) on the very first load.
+      // Only ever attempted once per listener lifetime, and only does
+      // anything at all if the collection came back completely empty —
+      // see seedMissingLegacyAgents above for why this is now an
+      // empty-collection check rather than a per-email one.
       if(!seedAttempted){
         seedAttempted=true;
         const wroteSomething=await seedMissingLegacyAgents(docs);
@@ -2318,7 +2325,7 @@
     }
     closerSel.innerHTML=opts.join('');
     closerSel.value=t.closer||'';
-    document.getElementById('et-date').value=(t.date||'').slice(0,10);
+    document.getElementById('et-date').value=toDatetimeLocalValue(t.date);
     document.getElementById('et-comm').value=t.comm||0;
     document.getElementById('et-modal-error').style.display='none';
     const etActions=document.getElementById('et-actions-container');
@@ -2576,7 +2583,7 @@
               <optgroup label="Closed Deals"><option value="Debt Settlement In-House" ${x.type==='Debt Settlement In-House'?'selected':''}>Debt Settlement In-House</option></optgroup>
               <optgroup label="Flat Rate"><option value="PccSub10" ${x.type==='PccSub10'?'selected':''}>PCC Sub 10K</option><option value="PccAbove10" ${x.type==='PccAbove10'?'selected':''}>PCC Above 10K</option><option value="TaxAbove10" ${x.type==='TaxAbove10'?'selected':''}>Tax Above 10K</option><option value="TaxBelow10" ${x.type==='TaxBelow10'?'selected':''}>Tax Below 10K</option><option value="Student Loan" ${x.type==='Student Loan'?'selected':''}>Student Loan</option></optgroup>
             </select></div>
-            <div class="field-mini"><label>Date</label><input type="date" id="edit-date-${x.id}" value="${x.date||''}"/></div>
+            <div class="field-mini"><label>Date &amp; Time</label><input type="datetime-local" id="edit-date-${x.id}" value="${toDatetimeLocalValue(x.date)}"/></div>
             <div class="field-mini"><label>Phone</label><input type="text" id="edit-phone-${x.id}" value="${x.phone||''}"/></div>
             <div class="field-mini" id="edit-closer-wrap-${x.id}" style="${CLOSED_TYPES.includes(x.type)?'':'display:none'}"><label>Closer</label><select id="edit-closer-${x.id}"><option value="">Select closer…</option>${ACTIVE_CLOSER_NAMES.map(n=>`<option value="${n}" ${x.closer===n?'selected':''}>${displayName(n)}</option>`).join('')}<option value="Outsource" ${x.closer==='Outsource'?'selected':''}>Outsource</option></select></div>
           </div>
@@ -3010,6 +3017,19 @@
   };
 
   function fmtDate(s){if(!s)return'—';const d=new Date(s);return isNaN(d)?s:d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}
+  // Opener transfers historically stored `date` as a plain YYYY-MM-DD value
+  // (the field was a <input type="date">). Now that it's a
+  // <input type="datetime-local">, a bare date-only string has no time
+  // portion to populate the input with — browsers silently reject it and
+  // leave the field blank. This backfills midnight (00:00) for any legacy
+  // value with no 'T', so editing an old transfer still pre-fills its
+  // original date instead of showing empty; new transfers already store a
+  // full YYYY-MM-DDTHH:MM value and pass through unchanged (just trimmed
+  // to the 16 chars a datetime-local input expects).
+  function toDatetimeLocalValue(v){
+    if(!v) return '';
+    return v.includes('T') ? v.slice(0,16) : v.slice(0,10)+'T00:00';
+  }
 
   // ══════════════════════════════════════════════════════════════════════
   // DEBT SETTLEMENT CONVERGENT — dedicated executive analytics page.
@@ -4348,7 +4368,7 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
       </div>
       <div class="comm-preview-card"><div class="comm-preview-label">Commission for this transfer</div><div class="comm-preview-amount" id="adm-op-comm-preview">—</div></div>
       <div class="field" id="adm-op-closer-wrap" style="display:none"><label>Assign to Closer</label><select id="adm-op-closer"><option value="">Select closer…</option><option value="Outsource">Outsource</option></select></div>
-      <div class="field-row"><div class="field"><label>Transfer Date</label><input id="adm-op-date" type="date"/></div><div class="field"><label>Client Phone</label><input id="adm-op-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('adm-op-phone')"/><div id="adm-op-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div></div>
+      <div class="field-row"><div class="field"><label>Transfer Date &amp; Time</label><input id="adm-op-date" type="datetime-local"/></div><div class="field"><label>Client Phone</label><input id="adm-op-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('adm-op-phone')"/><div id="adm-op-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div></div>
       <button class="btn-form" id="adm-op-submit-btn" onclick="adminSubmitOpener()">Submit Transfer</button>
     </div>
 
@@ -4677,7 +4697,7 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
             </div>
             <div class="comm-preview-sub" style="margin-top:5px">Reassign updates only the closer, right away. Changing it here without clicking Reassign still saves normally with Save Changes below.</div>
           </div>
-          <div class="field-row"><div class="field"><label>Transfer Date</label><input type="date" id="et-date"/></div><div class="field"><label>Client Phone</label><input type="text" id="et-phone" placeholder="423-482-1384"/></div></div>
+          <div class="field-row"><div class="field"><label>Transfer Date &amp; Time</label><input type="datetime-local" id="et-date"/></div><div class="field"><label>Client Phone</label><input type="text" id="et-phone" placeholder="423-482-1384"/></div></div>
           <div class="field"><label>Commission ($)</label><input type="number" id="et-comm" placeholder="0.00"/></div>
           <div class="login-error" id="et-modal-error" style="display:none"></div>
           <button class="btn-form" id="et-save-btn" onclick="saveEditTransfer()">Save Changes</button>
@@ -4940,7 +4960,7 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
           </div>
           <div class="comm-preview-card"><div class="comm-preview-label">Commission for this transfer</div><div class="comm-preview-amount" id="op-comm-preview">—</div><div class="comm-preview-sub" id="op-tier-label"></div></div>
           <div class="field" id="op-closer-wrap" style="display:none"><label>Assign to Closer</label><select id="op-closer"><option value="">Select closer…</option><option value="Outsource">Outsource</option></select></div>
-          <div class="field-row"><div class="field"><label>Transfer Date</label><input id="op-date" type="date"/></div><div class="field"><label>Client Phone</label><input id="op-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('op-phone')"/><div id="op-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div></div>
+          <div class="field-row"><div class="field"><label>Transfer Date &amp; Time</label><input id="op-date" type="datetime-local"/></div><div class="field"><label>Client Phone</label><input id="op-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('op-phone')"/><div id="op-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div></div>
           <button class="btn-form" id="op-submit-btn" onclick="submitOpener()">Submit Transfer</button>
         </div>
         <div class="comm-table-card">
