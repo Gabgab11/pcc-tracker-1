@@ -1044,7 +1044,10 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Deals &amp; Transfers
       </div>
       <div class="sb-nav-item" data-view="ds-convergent" onclick="switchView('ds-convergent')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="M18.5 8.5 13 14l-3-3-4.5 4.5"/></svg>Debt Settlement Convergent
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="M18.5 8.5 13 14l-3-3-4.5 4.5"/></svg>Debt Settlement Conversion
+      </div>
+      <div class="sb-nav-item" data-view="ds-clearing" onclick="switchView('ds-clearing')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>DS Clearing
       </div>
       <div class="sb-nav-item" data-view="admin-commission" onclick="switchView('admin-commission')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M15.5 9.5c0-1.6-1.57-2.5-3.5-2.5s-3.5 0.9-3.5 2.5c0 3.4 7 1.6 7 5 0 1.6-1.57 2.5-3.5 2.5s-3.5-0.9-3.5-2.5"/></svg>Commission Structure
@@ -1061,7 +1064,10 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Deals &amp; Transfers
       </div>
       <div class="sb-nav-item" data-view="ds-convergent" onclick="switchView('ds-convergent')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="M18.5 8.5 13 14l-3-3-4.5 4.5"/></svg>Debt Settlement Convergent
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="M18.5 8.5 13 14l-3-3-4.5 4.5"/></svg>Debt Settlement Conversion
+      </div>
+      <div class="sb-nav-item" data-view="ds-clearing" onclick="switchView('ds-clearing')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>DS Clearing
       </div>
       <div class="sb-nav-item" data-view="admin-commission" onclick="switchView('admin-commission')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M12 6v12M15.5 9.5c0-1.6-1.57-2.5-3.5-2.5s-3.5 0.9-3.5 2.5c0 3.4 7 1.6 7 5 0 1.6-1.57 2.5-3.5 2.5s-3.5-0.9-3.5-2.5"/></svg>Commission Structure
@@ -1098,8 +1104,8 @@
   window.switchView=function(viewName){
     const role=currentUser?.role;
     const allowed={
-      admin:   ['admin-overview','admin-deals','ds-convergent','admin-commission','admin-agents'],
-      readonly:['admin-overview','admin-deals','ds-convergent','admin-commission'],
+      admin:   ['admin-overview','admin-deals','ds-convergent','ds-clearing','admin-commission','admin-agents'],
+      readonly:['admin-overview','admin-deals','ds-convergent','ds-clearing','admin-commission'],
       closer:  ['closer-dashboard','closer-submit','closer-history'],
       opener:  ['opener-dashboard','opener-submit','opener-history'],
     };
@@ -1108,7 +1114,7 @@
     const el=document.getElementById('view-'+viewName);
     if(el)el.style.display='block';
     document.querySelectorAll('.sb-nav-item').forEach(n=>n.classList.toggle('active',n.dataset.view===viewName));
-    const crumbs={'admin-overview':'Overview','admin-deals':'Deals & Transfers','ds-convergent':'Debt Settlement Convergent','admin-commission':'Commission Structure','admin-agents':'Agent Management','closer-dashboard':'Dashboard','closer-submit':'Submit Deal','closer-history':'My Deals','opener-dashboard':'Dashboard','opener-submit':'Submit Transfer','opener-history':'My Transfers'};
+    const crumbs={'admin-overview':'Overview','admin-deals':'Deals & Transfers','ds-convergent':'Debt Settlement Conversion','ds-clearing':'DS Clearing','admin-commission':'Commission Structure','admin-agents':'Agent Management','closer-dashboard':'Dashboard','closer-submit':'Submit Deal','closer-history':'My Deals','opener-dashboard':'Dashboard','opener-submit':'Submit Transfer','opener-history':'My Transfers'};
     document.getElementById('breadcrumb').textContent=crumbs[viewName]||viewName;
     if(viewName==='opener-submit'){autoFillOpenerName();updateOpenerCommPreview();}
     if(viewName==='closer-submit')autoFillCloserName();
@@ -1117,6 +1123,7 @@
     if(viewName==='admin-deals')renderAdminResults();
     if(viewName==='admin-overview')renderAdminOverview();
     if(viewName==='ds-convergent')renderDsConvergentPage();
+    if(viewName==='ds-clearing')renderDsClearingPage();
     if(viewName==='admin-commission')renderAdminCommission();
     if(viewName==='admin-agents')renderAdminAgents();
     if(viewName==='opener-dashboard')renderQueueForCurrentUser();
@@ -1131,6 +1138,8 @@
       if(ad&&ad.style.display!=='none')renderAdminResults();
       const dc=document.getElementById('view-ds-convergent');
       if(dc&&dc.style.display!=='none')renderDsConvergentPage();
+      const dcl=document.getElementById('view-ds-clearing');
+      if(dcl&&dcl.style.display!=='none')renderDsClearingPage();
       const ac=document.getElementById('view-admin-commission');
       if(ac&&ac.style.display!=='none')renderAdminCommission();
     }
@@ -1408,6 +1417,8 @@
       document.getElementById('adm-op-date').value='';
       document.getElementById('adm-op-phone').value='';
       document.getElementById('adm-op-closer-wrap').style.display='none';
+      const admFpWrap=document.getElementById('adm-op-firstpay-wrap'); if(admFpWrap) admFpWrap.style.display='none';
+      const admFpEl=document.getElementById('adm-op-firstpay'); if(admFpEl) admFpEl.value='';
       document.getElementById('adm-op-comm-preview').textContent='—';
     } else {
       const nameEl=document.getElementById('adm-cl-name');
@@ -1425,7 +1436,10 @@
 
   window.handleAdmTransferType=function(){
     const type=document.getElementById('adm-op-type').value;
-    document.getElementById('adm-op-closer-wrap').style.display=CLOSED_TYPES.includes(type)?'block':'none';
+    const isClosed=CLOSED_TYPES.includes(type);
+    document.getElementById('adm-op-closer-wrap').style.display=isClosed?'block':'none';
+    const fpWrap=document.getElementById('adm-op-firstpay-wrap');
+    if(fpWrap) fpWrap.style.display=isClosed?'block':'none';
     // Reuse the same commission preview logic as the opener form
     const comm=openerCommForNext(type);
     document.getElementById('adm-op-comm-preview').textContent=type?`$${comm}`:'—';
@@ -1451,6 +1465,7 @@
     const date=document.getElementById('adm-op-date').value;
     const phone=document.getElementById('adm-op-phone').value.trim();
     const closer=document.getElementById('adm-op-closer').value;
+    const firstpay=document.getElementById('adm-op-firstpay')?.value||'';
     clearPhoneAlert('adm-op-phone');
     if(!name||!type||!date||!phone){toast('Please complete all required fields.','error');return;}
     if(CLOSED_TYPES.includes(type)&&!closer){toast('Please select a closer for this transfer type.','error');return;}
@@ -1461,7 +1476,7 @@
     const comm=openerCommForNext(type);
     const btn=document.getElementById('adm-op-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
     try{
-      await addDoc(collection(db,'transfers'),{name,type,date,phone,closer:closer||null,comm,status:'Pending',openerEmail,submittedByAdmin:true,createdAt:new Date().toISOString()});
+      await addDoc(collection(db,'transfers'),{name,type,date,phone,closer:closer||null,firstpay,comm,status:'Pending',openerEmail,submittedByAdmin:true,createdAt:new Date().toISOString()});
       toast(`Transfer submitted for ${displayName(name)}!`,'success');
       closeAdminSubmit();
     }catch(e){toast('Failed to submit.','error');console.error(e);}
@@ -1525,6 +1540,28 @@
     const fn = kind==='deal' ? `openEditDeal('${id}')` : `openEditTransfer('${id}')`;
     return `<button type="button" class="edit-button" title="Edit" onclick="event.stopPropagation();${fn}">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+    </button>`;
+  }
+
+  // Small "DS Clearing" icon-button shown beside Edit on the Deals &
+  // Transfers page for any Approved DS deal/transfer that hasn't cleared
+  // yet — keeps the list clean instead of a large inline queue section.
+  // Opens the compact dscp popup (openDsClearPopup) to mark Cleared / Not
+  // Cleared / Restore. Highlighted (ds-clear-due) once the record has
+  // actually entered the automatic 2-day queue window.
+  function buildDsClearBtn(kind,id,record){
+    if(currentUser?.role==='readonly') return '';
+    if(!record || record.status!=='Approved') return '';
+    if(record.clearStatus==='Cleared') return '';
+    const isDsType = kind==='deal' ? DS_DEAL_TYPES.includes(record.dealType) : record.type==='Debt Settlement In-House';
+    if(!isDsType) return '';
+    const scopeKind = kind==='deal' ? 'closer' : 'opener';
+    const due = dsInClearingQueue(record);
+    const archived = !!record.dsArchived;
+    const cls = 'ds-clear-button' + (due?' ds-clear-due':'') + (archived?' ds-clear-archived':'');
+    const title = archived ? 'DS Clearing — archived (Not Cleared)' : due ? 'DS Clearing — due for review' : 'DS Clearing';
+    return `<button type="button" class="${cls}" title="${title}" onclick="event.stopPropagation();openDsClearPopup('${scopeKind}','${id}')">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
     </button>`;
   }
 
@@ -2327,6 +2364,7 @@
     closerSel.value=t.closer||'';
     document.getElementById('et-date').value=toDatetimeLocalValue(t.date);
     document.getElementById('et-comm').value=t.comm||0;
+    const etFirstpay=document.getElementById('et-firstpay'); if(etFirstpay) etFirstpay.value=t.firstpay||'';
     document.getElementById('et-modal-error').style.display='none';
     const etActions=document.getElementById('et-actions-container');
     if(etActions){
@@ -2365,11 +2403,12 @@
     const closer=document.getElementById('et-closer').value.trim();
     const date=document.getElementById('et-date').value;
     const comm=Number(document.getElementById('et-comm').value)||0;
+    const firstpay=document.getElementById('et-firstpay')?.value||'';
     const errEl=document.getElementById('et-modal-error');
     if(!type){ showError(errEl,'Lead source / transfer type is required.'); return; }
     const btn=document.getElementById('et-save-btn'); btn.disabled=true; btn.textContent='Saving…';
     try{
-      await updateDoc(doc(db,'transfers',id),{type,phone,closer:closer||null,date,comm});
+      await updateDoc(doc(db,'transfers',id),{type,phone,closer:closer||null,date,comm,firstpay});
       closeEditTransferModal();
       toast('Transfer updated!','success');
     }catch(e){ showError(errEl,'Failed to save changes. Please try again.'); console.error(e); }
@@ -2471,7 +2510,7 @@
     else{dSec.style.display='block';tSec.style.display='block';}
     if(role!=='Opener'){
       dWrap.innerHTML=!baseDeal.length?'<div class="empty-state">No deals match the current filters.</div>':baseDeal.map(d=>`<div class="admin-record">
-        <div class="admin-record-top"><div class="ar-left">${avatarHTML(d.name,'avatar-sm')}<span class="ar-name">${displayName(d.name)} → ${d.client||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(d.createdAt)}</span>${buildEditBtn('deal',d.id)}${buildDeleteBtn('deal',d.id,(d.client||displayName(d.name)||'this deal'))}</div></div>
+        <div class="admin-record-top"><div class="ar-left">${avatarHTML(d.name,'avatar-sm')}<span class="ar-name">${displayName(d.name)} → ${d.client||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(d.createdAt)}</span>${buildDsClearBtn('deal',d.id,d)}${buildEditBtn('deal',d.id)}${buildDeleteBtn('deal',d.id,(d.client||displayName(d.name)||'this deal'))}</div></div>
         <div class="ar-grid"><div class="ar-field"><span class="ar-key">Opener</span><span class="ar-val">${d.opener?displayName(d.opener):'—'}</span></div><div class="ar-field"><span class="ar-key">Deal Type</span><span class="ar-val">${d.dealType||'—'}</span></div><div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${d.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Monthly</span><span class="ar-val">$${d.monthly||'—'}</span></div><div class="ar-field"><span class="ar-key">First Pay</span><span class="ar-val">${fmtDate(d.firstpay)}</span></div><div class="ar-field"><span class="ar-key">Closing</span><span class="ar-val">${fmtDate(d.closing)}</span></div><div class="ar-field"><span class="ar-key">Debt</span><span class="ar-val">$${Number(d.debt||0).toLocaleString()}</span></div></div>
         ${d.status!=='Pending'?`<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${d.comm||0}</strong></div>`:''}
       </div>`).join('');
@@ -2479,7 +2518,7 @@
     }
     if(role!=='Closer'){
       tWrap.innerHTML=!baseXfer.length?'<div class="empty-state">No transfers match the current filters.</div>':baseXfer.map(t=>`<div class="admin-record">
-        <div class="admin-record-top"><div class="ar-left">${avatarHTML(t.name,'avatar-sm')}<span class="ar-name">${displayName(t.name)||'—'} — ${t.type||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(t.date||t.createdAt)}</span>${buildEditBtn('transfer',t.id)}${buildDeleteBtn('transfer',t.id,(displayName(t.name)||'this transfer'))}</div></div>
+        <div class="admin-record-top"><div class="ar-left">${avatarHTML(t.name,'avatar-sm')}<span class="ar-name">${displayName(t.name)||'—'} — ${t.type||'—'}</span></div><div class="ar-top-right"><span class="ar-date">${fmtDate(t.date||t.createdAt)}</span>${buildDsClearBtn('transfer',t.id,t)}${buildEditBtn('transfer',t.id)}${buildDeleteBtn('transfer',t.id,(displayName(t.name)||'this transfer'))}</div></div>
         <div class="ar-grid"><div class="ar-field"><span class="ar-key">Lead Source</span><span class="ar-val">${t.type||'—'}</span></div>${t.closer?`<div class="ar-field"><span class="ar-key">Closer</span><span class="ar-val">${displayName(t.closer)}</span></div>`:''}<div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${t.phone||'—'}</span></div><div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${t.comm||0}</span></div></div>
         ${t.status!=='Pending'?`<div class="ar-comm-resolved" style="margin-bottom:8px">Commission: <strong>$${t.comm||0}</strong></div>`:''}
       </div>`).join('');
@@ -2509,9 +2548,25 @@
     toast('CSV exported!','success');
   };
 
+  // Cleared DS commission is admin-only until a deal actually clears —
+  // once at least one of this agent's DS records is marked Cleared, this
+  // panel appears on their own dashboard with their Cleared Commission
+  // total (never shown pre-clear; no "estimated" preview for agents).
+  function renderAgentDsClearedPanel(kind, panelId, amountId, countId){
+    const panel=document.getElementById(panelId); if(!panel) return;
+    const name=currentUser?.name;
+    if(!name){ panel.style.display='none'; return; }
+    const mine=dsAgentClearingStats(kind).find(a=>a.name===name);
+    if(!mine || mine.cleared===0){ panel.style.display='none'; return; }
+    panel.style.display='block';
+    const amountEl=document.getElementById(amountId); if(amountEl) amountEl.textContent='$'+mine.clearedComm.toLocaleString();
+    const countEl=document.getElementById(countId); if(countEl) countEl.textContent=mine.cleared+' cleared DS deal'+(mine.cleared===1?'':'s');
+  }
+
   function renderOpenerDashboard(){
     const t=gdfXfers();
     document.getElementById('op-stat-total').textContent='$'+t.reduce((s,x)=>s+(x.comm||0),0);
+    renderAgentDsClearedPanel('opener','op-ds-cleared-panel','op-ds-cleared-amount','op-ds-cleared-count');
     const todayKey=shiftTodayKey('opener',0);
     const todayAll=transfers.filter(x=>shiftDayKeyFor(x.createdAt,'opener')===todayKey);
     document.getElementById('op-stat-today').textContent=todayAll.length;
@@ -2548,6 +2603,7 @@
   function renderCloserDashboard(){
     const d=gdfDeals();
     document.getElementById('cl-stat-total').textContent='$'+d.filter(x=>x.status==='Approved').reduce((s,x)=>s+(x.comm||0),0);
+    renderAgentDsClearedPanel('closer','cl-ds-cleared-panel','cl-ds-cleared-amount','cl-ds-cleared-count');
     const todayKey=shiftTodayKey('closer',0);
     const todayD=deals.filter(x=>shiftDayKeyFor(x.createdAt,'closer')===todayKey);
     document.getElementById('cl-stat-today').textContent=todayD.length;
@@ -2630,9 +2686,10 @@
 
   // ── OPENER SUBMIT ──
   window.autoFillOpenerName=function(){if(currentUser?.role==='opener'){const s=document.getElementById('op-name');s.value=currentUser.name;s.disabled=true;}};
-  window.handleTransferType=function(){const type=document.getElementById('op-type').value;document.getElementById('op-closer-wrap').style.display=CLOSED_TYPES.includes(type)?'block':'none';updateOpenerCommPreview();};
+  window.handleTransferType=function(){const type=document.getElementById('op-type').value;const isClosed=CLOSED_TYPES.includes(type);document.getElementById('op-closer-wrap').style.display=isClosed?'block':'none';const fpWrap=document.getElementById('op-firstpay-wrap');if(fpWrap)fpWrap.style.display=isClosed?'block':'none';updateOpenerCommPreview();};
   window.submitOpener=async function(){
     const name=document.getElementById('op-name').value,type=document.getElementById('op-type').value,date=document.getElementById('op-date').value,phone=document.getElementById('op-phone').value.trim(),closer=document.getElementById('op-closer').value;
+    const firstpay=document.getElementById('op-firstpay')?.value||'';
     clearPhoneAlert('op-phone');
     if(!name||!type||!date||!phone){toast('Please complete all required fields.','error');return;}
     if(CLOSED_TYPES.includes(type)&&!closer){toast('Please select a closer for this transfer type.','error');return;}
@@ -2640,7 +2697,7 @@
     if(phoneExistsInCategory(phone,'opener')){showPhoneAlert('op-phone');return;}
     const comm=openerCommForNext(type);
     const btn=document.getElementById('op-submit-btn');btn.disabled=true;btn.textContent='Submitting…';
-    try{await addDoc(collection(db,'transfers'),{name,type,date,phone,closer:closer||null,comm,status:'Pending',openerEmail:currentUser.email,createdAt:new Date().toISOString()});['op-date','op-phone'].forEach(id=>document.getElementById(id).value='');document.getElementById('op-type').value='';document.getElementById('op-closer').value='';document.getElementById('op-closer-wrap').style.display='none';document.getElementById('op-comm-preview').textContent='—';document.getElementById('op-tier-label').textContent='';updateOpenerCommPreview();toast('Transfer submitted!','success');}
+    try{await addDoc(collection(db,'transfers'),{name,type,date,phone,closer:closer||null,firstpay,comm,status:'Pending',openerEmail:currentUser.email,createdAt:new Date().toISOString()});['op-date','op-phone'].forEach(id=>document.getElementById(id).value='');document.getElementById('op-type').value='';document.getElementById('op-closer').value='';document.getElementById('op-closer-wrap').style.display='none';const fpEl=document.getElementById('op-firstpay');if(fpEl)fpEl.value='';const fpWrap=document.getElementById('op-firstpay-wrap');if(fpWrap)fpWrap.style.display='none';document.getElementById('op-comm-preview').textContent='—';document.getElementById('op-tier-label').textContent='';updateOpenerCommPreview();toast('Transfer submitted!','success');}
     catch(e){toast('Failed to submit.','error');console.error(e);}
     btn.disabled=false;btn.textContent='Submit Transfer';
   };
@@ -3047,6 +3104,241 @@
   const DS_DEAL_TYPES = ['Debt Settlement','Debt Validation'];
   function dsAllDeals(){ return deals.filter(d=>DS_DEAL_TYPES.includes(d.dealType)); }
   function dsAllXfers(){ return transfers.filter(t=>t.type==='Debt Settlement In-House'); }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // DS CLEARING — Advanced DS Clearing & Commission Tracking.
+  // Independent for Openers and Closers: a Closer's DS deal (deals,
+  // dealType 'Debt Settlement'/'Debt Validation') and an Opener's DS
+  // transfer (transfers, type 'Debt Settlement In-House') are cleared
+  // separately, each carrying its own First Payment Date (`firstpay`), its
+  // own `clearStatus` ('Cleared' | 'Not Cleared' | unset/awaiting), and its
+  // own `dsArchived` flag. Only Approved records are ever eligible for
+  // clearing — Pending/Declined records never enter this pipeline at all.
+  //
+  //   Total Transfers (opener) / Total Closed Deals (closer) — see
+  //     dsClearingStats' `primary` field: opener = every submission
+  //     regardless of status, closer = Approved-only ("successfully closed").
+  //   Cleared Deals      = Approved && clearStatus==='Cleared'
+  //   Not Cleared Deals  = Approved && dsArchived===true (sitting in the Archive)
+  //   Clearing Ratio     = Cleared / (Cleared + Not Cleared)
+  //   Cancellation Ratio = Not Cleared / (Cleared + Not Cleared)
+  //   Estimated Commission = sum(comm) over all Approved DS records
+  //   Cleared Commission   = sum(comm) over Approved && Cleared records
+  //   Difference            = Estimated − Cleared
+  //
+  // Queue membership (dsInClearingQueue): Approved, not archived, not yet
+  // Cleared, has a First Payment Date, and today is within 2 days of (or
+  // past) it. There's no dedicated queue page — a record entering the queue
+  // just means the small "DS Clearing" button on its Deals & Transfers row
+  // becomes actionable (see the Deals & Transfers admin-record renderer).
+  //
+  // Marking a reviewed deal "Not Cleared" moves it into the DS Clearing
+  // Archive (dsArchived:true) instead of leaving it active — archived
+  // records are NEVER deleted, and Admin can Restore one at any time
+  // (dsRestoreFromArchive), which drops it back into the active queue with
+  // a clean slate to be reviewed again.
+  // ══════════════════════════════════════════════════════════════════════
+  function dsClearEligible(kind){ return kind==='opener' ? dsAllXfers() : dsAllDeals(); }
+
+  function dsDaysUntil(dateStr){
+    if(!dateStr) return null;
+    const datePart=String(dateStr).slice(0,10);
+    const [y,m,d]=datePart.split('-').map(Number);
+    if(!y||!m||!d) return null;
+    const target=new Date(y,m-1,d); target.setHours(0,0,0,0);
+    const today=getNowEgypt(); today.setHours(0,0,0,0);
+    return Math.round((target-today)/86400000);
+  }
+
+  function dsInClearingQueue(r){
+    if(r.status!=='Approved') return false;
+    if(r.clearStatus==='Cleared') return false;
+    if(r.dsArchived) return false;
+    if(!r.firstpay) return false;
+    const days=dsDaysUntil(r.firstpay);
+    return days!==null && days<=2;
+  }
+
+  function dsClearingQueueRecords(kind){
+    return dsClearEligible(kind).filter(dsInClearingQueue);
+  }
+
+  function dsArchivedRecords(kind){
+    return dsClearEligible(kind).filter(r=>r.status==='Approved' && r.dsArchived && r.clearStatus!=='Cleared');
+  }
+
+  function dsClearingStats(kind){
+    const all=dsClearEligible(kind);
+    const approved=all.filter(r=>r.status==='Approved');
+    const cleared=approved.filter(r=>r.clearStatus==='Cleared');
+    const notCleared=approved.filter(r=>r.dsArchived && r.clearStatus!=='Cleared');
+    const decided=cleared.length+notCleared.length;
+    const estComm=approved.reduce((s,r)=>s+(Number(r.comm)||0),0);
+    const clearedComm=cleared.reduce((s,r)=>s+(Number(r.comm)||0),0);
+    return {
+      primary: kind==='opener' ? all.length : approved.length, // Total Transfers | Total Closed Deals
+      clearedCount:cleared.length,
+      notClearedCount:notCleared.length,
+      clearingRatio: decided? Math.round((cleared.length/decided)*1000)/10 : 0,
+      cancellationRatio: decided? Math.round((notCleared.length/decided)*1000)/10 : 0,
+      estComm, clearedComm, difference: estComm-clearedComm,
+    };
+  }
+
+  // Per-agent Estimated vs Cleared commission — the two separate totals
+  // required for every Opener/Closer.
+  function dsAgentClearingStats(kind){
+    const names = kind==='opener' ? ACTIVE_OPENER_NAMES : ACTIVE_CLOSER_NAMES;
+    const all=dsClearEligible(kind);
+    return names.map(name=>{
+      const mine=all.filter(r=>r.name===name && r.status==='Approved');
+      const cleared=mine.filter(r=>r.clearStatus==='Cleared');
+      const notCleared=mine.filter(r=>r.dsArchived && r.clearStatus!=='Cleared');
+      const decided=cleared.length+notCleared.length;
+      const estComm=mine.reduce((s,r)=>s+(Number(r.comm)||0),0);
+      const clearedComm=cleared.reduce((s,r)=>s+(Number(r.comm)||0),0);
+      return {
+        name, total:mine.length, cleared:cleared.length, notCleared:notCleared.length,
+        clearingRatio: decided? Math.round((cleared.length/decided)*1000)/10 : 0,
+        estComm, clearedComm, difference: estComm-clearedComm,
+      };
+    }).filter(a=>a.total>0);
+  }
+
+  // Admin marks a DS record Cleared or Not Cleared — editable at any time
+  // via the small DS Clearing button on its Deals & Transfers row, not just
+  // while it's sitting in the automatic queue. Cleared awards the
+  // commission immediately; Not Cleared moves it into the Archive (never
+  // deleted) rather than leaving it in the active list. Firestore's
+  // onSnapshot listeners already push every write straight back through
+  // renderCurrentView(), so the archive, stats, ratios, and both dashboards
+  // update instantly with no extra plumbing here.
+  window.dsSetClearStatus=async function(kind, id, decision){
+    const coll = kind==='opener' ? 'transfers' : 'deals';
+    try{
+      await updateDoc(doc(db,coll,id), {
+        clearStatus:decision,
+        dsArchived: decision==='Not Cleared',
+        clearedAt: decision==='Cleared' ? new Date().toISOString() : null,
+      });
+      toast(decision==='Cleared' ? '✓ Marked Cleared — commission moved to Cleared.' : 'Marked Not Cleared — moved to the DS Clearing Archive.', 'success');
+      closeDsClearPopup();
+    }catch(e){ toast('Failed to update clearing status.','error'); console.error(e); }
+  };
+
+  // Restores an archived record to the active queue with a clean slate —
+  // it will reappear automatically once its First Payment Date is (still)
+  // within the 2-day window, which for an overdue archived record is
+  // immediately.
+  window.dsRestoreFromArchive=async function(kind, id){
+    const coll = kind==='opener' ? 'transfers' : 'deals';
+    try{
+      await updateDoc(doc(db,coll,id), { clearStatus:null, dsArchived:false, clearedAt:null });
+      toast('Restored to the active DS Clearing queue.','success');
+    }catch(e){ toast('Failed to restore this deal.','error'); console.error(e); }
+  };
+
+  function dsSetText(id,val){ const el=document.getElementById(id); if(el) el.textContent=val; }
+
+  // ── Compact DS Clearing popup — opened from the small button beside an
+  // eligible deal on Deals & Transfers (see the admin-record renderer).
+  // Keeps the main list clean instead of a large inline queue section. ──
+  window._dsClearPopupCtx=null;
+  window.openDsClearPopup=function(kind,id){
+    const rec=(kind==='opener'?transfers:deals).find(x=>x.id===id); if(!rec) return;
+    window._dsClearPopupCtx={kind,id};
+    const days=dsDaysUntil(rec.firstpay);
+    const urgency = days===null ? 'No First Payment Date on file yet.'
+      : days<0 ? `${Math.abs(days)}d overdue` : days===0 ? 'Due today' : `${days}d until First Payment`;
+    const titleLine = kind==='closer' ? `${displayName(rec.name)} → ${rec.client||'—'}` : `${displayName(rec.name)} — ${rec.type||'Debt Settlement In-House'}`;
+    const canAct = currentUser?.role!=='readonly';
+    document.getElementById('dscp-title').textContent=titleLine;
+    document.getElementById('dscp-body').innerHTML=`
+      <div class="ar-grid" style="margin-bottom:12px">
+        <div class="ar-field"><span class="ar-key">First Payment</span><span class="ar-val">${fmtDate(rec.firstpay)}</span></div>
+        <div class="ar-field"><span class="ar-key">Status</span><span class="ar-val">${urgency}</span></div>
+        <div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${rec.comm||0}</span></div>
+        <div class="ar-field"><span class="ar-key">Clearing</span><span class="ar-val">${rec.clearStatus==='Cleared'?'✓ Cleared':rec.dsArchived?'✗ Not Cleared (Archived)':'Awaiting decision'}</span></div>
+      </div>
+      ${canAct?`<div class="ar-btns" style="flex-wrap:wrap">
+        <button class="btn-approve" onclick="dsSetClearStatus('${kind}','${id}','Cleared')">✓ Mark Cleared</button>
+        ${rec.dsArchived?`<button class="btn-filter-clear" onclick="dsRestoreFromArchive('${kind}','${id}');closeDsClearPopup();">↺ Restore to Queue</button>`:`<button class="btn-decline" onclick="dsSetClearStatus('${kind}','${id}','Not Cleared')">✗ Mark Not Cleared</button>`}
+      </div>`:'<div class="empty-state">Read-only — Admin can change clearing status.</div>'}`;
+    document.getElementById('dscp-overlay').classList.add('open');
+  };
+  window.closeDsClearPopup=function(){
+    document.getElementById('dscp-overlay')?.classList.remove('open');
+    window._dsClearPopupCtx=null;
+  };
+
+  function renderDsArchiveList(){
+    const wrap=document.getElementById('dsc-archive-list'); if(!wrap) return;
+    const closerArch=dsArchivedRecords('closer');
+    const openerArch=dsArchivedRecords('opener');
+    const all=[...closerArch.map(r=>({r,kind:'closer'})), ...openerArch.map(r=>({r,kind:'opener'}))]
+      .sort((a,b)=>(b.r.clearedAt||b.r.createdAt||'').localeCompare(a.r.clearedAt||a.r.createdAt||''));
+    dsSetText('dsc-archive-count', all.length);
+    if(!all.length){ wrap.innerHTML='<div class="empty-state">No archived DS deals. Deals marked “Not Cleared” land here instead of disappearing.</div>'; return; }
+    const canAct=currentUser?.role!=='readonly';
+    wrap.innerHTML=all.map(({r,kind})=>{
+      const titleLine = kind==='closer' ? `${displayName(r.name)} → ${r.client||'—'}` : `${displayName(r.name)} — ${r.type||'Debt Settlement In-House'}`;
+      return `<div class="admin-record">
+        <div class="admin-record-top">
+          <div class="ar-left"><span class="gsearch-kind-tag">${kind==='closer'?'Closer Deal':'Opener Transfer'}</span><span class="ar-name">${titleLine}</span></div>
+          <div class="ar-top-right"><span class="status-badge badge-red">✗ Not Cleared</span></div>
+        </div>
+        <div class="ar-grid">
+          <div class="ar-field"><span class="ar-key">First Payment</span><span class="ar-val">${fmtDate(r.firstpay)}</span></div>
+          <div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${r.phone||'—'}</span></div>
+          <div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${r.comm||0}</span></div>
+        </div>
+        ${canAct?`<div class="task-actions"><div class="ar-btns">
+          <button class="btn-approve" onclick="dsSetClearStatus('${kind}','${r.id}','Cleared')">✓ Cleared</button>
+          <button class="btn-filter-clear" onclick="dsRestoreFromArchive('${kind}','${r.id}')">↺ Restore to Queue</button>
+        </div></div>`:''}
+      </div>`;
+    }).join('');
+  }
+
+  function renderDsClearingAgentTable(kind){
+    const wrap=document.getElementById(kind==='closer'?'dscc-agent-table':'dsco-agent-table'); if(!wrap) return;
+    const stats=dsAgentClearingStats(kind).sort((a,b)=>b.clearedComm-a.clearedComm || b.estComm-a.estComm);
+    if(!stats.length){ wrap.innerHTML=`<div class="empty-state">No approved DS ${kind==='closer'?'deals':'transfers'} yet.</div>`; return; }
+    const rows=stats.map(a=>`<tr>
+        <td><span style="display:inline-flex;align-items:center;gap:6px">${avatarHTML(a.name,'avatar-xs')} ${displayName(a.name)}</span></td>
+        <td>${a.total}</td><td>${a.cleared}</td><td>${a.notCleared}</td><td>${a.clearingRatio}%</td>
+        <td>$${a.estComm.toLocaleString()}</td><td>$${a.clearedComm.toLocaleString()}</td><td>$${a.difference.toLocaleString()}</td>
+      </tr>`).join('');
+    wrap.innerHTML=`<table class="ref-table"><thead><tr>
+        <th>Agent</th><th>Approved DS</th><th>Cleared</th><th>Not Cleared</th><th>Clearing %</th><th>Estimated Comm.</th><th>Cleared Comm.</th><th>Difference</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function renderDsClearingSection(kind){
+    const s=dsClearingStats(kind);
+    const p=kind==='closer'?'dscc':'dsco';
+    dsSetText(p+'-total', s.primary);
+    dsSetText(p+'-cleared', s.clearedCount);
+    dsSetText(p+'-cancelled', s.notClearedCount);
+    dsSetText(p+'-clearingratio', s.clearingRatio+'%');
+    dsSetText(p+'-cancelratio', s.cancellationRatio+'%');
+    dsSetText(p+'-estcomm', '$'+s.estComm.toLocaleString());
+    dsSetText(p+'-clearedcomm', '$'+s.clearedComm.toLocaleString());
+    dsSetText(p+'-diffcomm', '$'+s.difference.toLocaleString());
+    renderDsClearingAgentTable(kind);
+  }
+
+  // Main entry point — wired into switchView('ds-clearing') and into
+  // renderCurrentView() so every Firestore change (a new DS deal, an
+  // approval, a Cleared/Not Cleared decision, or a Restore) redraws this
+  // page instantly whenever it's the one on screen.
+  function renderDsClearingPage(){
+    const view=document.getElementById('view-ds-clearing'); if(!view) return;
+    renderDsArchiveList();
+    renderDsClearingSection('closer');
+    renderDsClearingSection('opener');
+  }
+  window.renderDsClearingPage = renderDsClearingPage;
   // Both respect the shared master date-range filter in the top bar, but
   // ignore its role-scope tab — this page always shows Debt Settlement
   // performance regardless of which scope is active there.
@@ -3062,17 +3354,29 @@
   // control, so it behaves consistently with Overview / Commission
   // Structure / everywhere else. The only thing local to this page is
   // which single agent (within that scope) to drill into. ──
-  window._dsFilter = window._dsFilter || { name:'' };
+  window._dsFilter = window._dsFilter || { name:'', scope:'all' };
 
   // Maps the shared master filter's roleScope onto what this page can
   // actually show: 'all' and 'closer' both default to the Closer-side view
   // (Debt Settlement Convergent's primary dataset — the `deals` records),
   // 'opener' shows the Opener-side view (Debt Settlement In-House
   // transfers).
+  // Driven by this page's own Agent filter (All / Openers / Closers) —
+  // page-local, does NOT touch the shared master roleScope (so leaving this
+  // page doesn't change what Overview/Commission Structure show). 'All'
+  // still resolves the detailed charts/leaderboards/table to the Closer
+  // side (unchanged historical behavior) — the two summary cards driven by
+  // dsAllDeals()/dsAllXfers() directly (Total Closed Deals / Total
+  // Transfers) always show real numbers for both sides regardless of scope.
   function dsResolveScope(){
-    const s=window._gdf.roleScope;
+    const s=window._dsFilter.scope;
     return s==='opener' ? 'opener' : 'closer';
   }
+  window.dsAgentScopeChange=function(){
+    window._dsFilter.scope=document.getElementById('dsp-agent-scope')?.value||'all';
+    window._dsFilter.name=''; // switching scope invalidates any single-agent drill-down
+    renderDsConvergentPage();
+  };
 
   // Records + date field + which "kind" of agent (opener/closer) they
   // belong to, honoring the shared master filter's scope AND the selected
@@ -3148,6 +3452,8 @@
   // but WHICH list (Closers vs Openers) is entirely driven by the shared
   // master filter's Filter Scope, same as everywhere else in the app. ──
   function dsPopulateFilterNames(){
+    const scopeSel=document.getElementById('dsp-agent-scope');
+    if(scopeSel) scopeSel.value=window._dsFilter.scope||'all';
     const sel=document.getElementById('dsp-filter-name'); if(!sel) return;
     const nameWrap=document.getElementById('dsp-filter-name-wrap');
     const kind=dsResolveScope();
@@ -3175,21 +3481,30 @@
     const pending =records.filter(r=>r.status==='Pending');
     const declined=records.filter(r=>r.status==='Declined');
     const totalComm=approved.reduce((s,r)=>s+(Number(r.comm)||0),0);
-    const avgComm=approved.length?totalComm/approved.length:0;
     const closeRate=records.length?Math.round((approved.length/records.length)*1000)/10:0;
+
+    // Total Transfers and Total Closed Deals are fixed, role-specific
+    // counts (Transfers = Openers, Closed Deals = Closers). Each only
+    // narrows to the current name drill-down when that drill-down is
+    // actually for its own role — otherwise it stays company-wide so both
+    // numbers always mean something real regardless of the Agent filter.
+    const xfersInRange=dsRangeXfers();
+    const dealsInRange=dsRangeDeals();
+    const totalTransfersRecords   = kind==='opener' ? records : xfersInRange;
+    const totalClosedDealsRecords = kind==='closer' ? approved : dealsInRange.filter(d=>d.status==='Approved');
 
     // Stash the current record set on window so the clickable stat cards
     // (see dsShowStatBreakdown below) can build their breakdown list from
     // exactly what's on screen right now, without re-deriving filters.
-    window._dsCurrentRecords = { records, approved, pending, declined, dateField, kind };
+    window._dsCurrentRecords = { records, approved, pending, declined, dateField, kind, totalTransfersRecords, totalClosedDealsRecords };
 
     const set=(id,val)=>{const el=document.getElementById(id); if(el) el.textContent=val;};
-    set('dsp-stat-total', records.length);
-    set('dsp-stat-closed', approved.length);
+    set('dsp-stat-total', totalTransfersRecords.length);
+    set('dsp-stat-closed', totalClosedDealsRecords.length);
     set('dsp-stat-pending', pending.length);
     set('dsp-stat-declined', declined.length);
     set('dsp-stat-closerate', closeRate+'%');
-    set('dsp-stat-avgpcc', '$'+avgComm.toFixed(2));
+    set('dsp-stat-avgpcc', '$'+totalComm.toLocaleString());
 
     renderDsCharts(records, approved, dateField);
 
@@ -3463,17 +3778,22 @@
 
   window.dsShowStatBreakdown=function(statType){
     const cur=window._dsCurrentRecords;
-    if(!cur || !cur.records.length && !cur.approved.length && !cur.pending.length && !cur.declined.length){
+    if(!cur || !cur.records.length && !cur.approved.length && !cur.pending.length && !cur.declined.length && !cur.totalTransfersRecords.length && !cur.totalClosedDealsRecords.length){
       toast('No Debt Settlement records in the current filters.','error');
       return;
     }
-    const { kind } = cur;
+    let kind=cur.kind;
     let list, title;
-    if(statType==='total')                       { list=cur.records;  title='All Debt Settlement Records'; }
-    else if(statType==='closed'||statType==='closerate') { list=cur.approved; title=statType==='closerate' ? 'Close Rate — Closed Records' : 'Closed / Approved Records'; }
+    // 'total' (Total Transfers) and 'closed' (Total Closed Deals) are fixed
+    // to their own role now — Openers and Closers respectively — regardless
+    // of which scope this page currently has resolved, so their row kind is
+    // pinned rather than following cur.kind like every other stat here.
+    if(statType==='total')                        { list=cur.totalTransfersRecords;   title='All DS Transfers (Openers)'; kind='opener'; }
+    else if(statType==='closed')                  { list=cur.totalClosedDealsRecords; title='Closed DS Deals (Closers)';  kind='closer'; }
+    else if(statType==='closerate')               { list=cur.approved; title='Close Rate — Closed Records'; }
     else if(statType==='pending')                 { list=cur.pending;  title='Pending Records'; }
     else if(statType==='declined')                { list=cur.declined; title='Declined Records'; }
-    else if(statType==='avgpcc')                  { list=cur.approved; title='Average PCC — Approved Records'; }
+    else if(statType==='avgpcc')                  { list=cur.approved; title='Total Commission — Approved Records'; }
     else                                           { list=cur.records;  title='Records'; }
 
     if(!list.length){
@@ -4203,6 +4523,11 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
 /* EDIT BUTTON — sits beside the delete button on record cards */
 .edit-button{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background-color:rgba(90,150,255,.12);border:2px solid rgba(90,150,255,.35);color:#5a96ff;cursor:pointer;transition:.2s;flex-shrink:0;}
 .edit-button:hover{background-color:rgba(90,150,255,.28);}
+.ds-clear-button{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background-color:rgba(29,179,122,.12);border:2px solid rgba(29,179,122,.35);color:var(--green);cursor:pointer;transition:.2s;flex-shrink:0;}
+.ds-clear-button:hover{background-color:rgba(29,179,122,.28);}
+.ds-clear-button.ds-clear-due{background-color:rgba(229,160,32,.16);border-color:rgba(229,160,32,.55);color:var(--amber);animation:dsCleardue 2s ease-in-out infinite;}
+.ds-clear-button.ds-clear-archived{background-color:rgba(229,69,90,.14);border-color:rgba(229,69,90,.45);color:var(--red);}
+@keyframes dsCleardue{0%,100%{box-shadow:0 0 0 0 rgba(229,160,32,.35);}50%{box-shadow:0 0 0 4px rgba(229,160,32,0);}}
 .edit-button:active{transform:scale(0.9);}
 
 #del-confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998;display:none;align-items:center;justify-content:center;padding:20px;}
@@ -4368,6 +4693,7 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
       </div>
       <div class="comm-preview-card"><div class="comm-preview-label">Commission for this transfer</div><div class="comm-preview-amount" id="adm-op-comm-preview">—</div></div>
       <div class="field" id="adm-op-closer-wrap" style="display:none"><label>Assign to Closer</label><select id="adm-op-closer"><option value="">Select closer…</option><option value="Outsource">Outsource</option></select></div>
+      <div class="field" id="adm-op-firstpay-wrap" style="display:none"><label>First Payment Date <span style="color:var(--text3);font-weight:400">(for DS Clearing)</span></label><input id="adm-op-firstpay" type="date"/></div>
       <div class="field-row"><div class="field"><label>Transfer Date &amp; Time</label><input id="adm-op-date" type="datetime-local"/></div><div class="field"><label>Client Phone</label><input id="adm-op-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('adm-op-phone')"/><div id="adm-op-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div></div>
       <button class="btn-form" id="adm-op-submit-btn" onclick="adminSubmitOpener()">Submit Transfer</button>
     </div>
@@ -4698,7 +5024,7 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
             <div class="comm-preview-sub" style="margin-top:5px">Reassign updates only the closer, right away. Changing it here without clicking Reassign still saves normally with Save Changes below.</div>
           </div>
           <div class="field-row"><div class="field"><label>Transfer Date &amp; Time</label><input type="datetime-local" id="et-date"/></div><div class="field"><label>Client Phone</label><input type="text" id="et-phone" placeholder="423-482-1384"/></div></div>
-          <div class="field"><label>Commission ($)</label><input type="number" id="et-comm" placeholder="0.00"/></div>
+          <div class="field-row"><div class="field"><label>Commission ($)</label><input type="number" id="et-comm" placeholder="0.00"/></div><div class="field"><label>First Payment Date <span style="color:var(--text3);font-weight:400">(for DS Clearing)</span></label><input type="date" id="et-firstpay"/></div></div>
           <div class="login-error" id="et-modal-error" style="display:none"></div>
           <button class="btn-form" id="et-save-btn" onclick="saveEditTransfer()">Save Changes</button>
           <div id="et-actions-container"></div>
@@ -4711,29 +5037,33 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
            its sole data source — no new collection, nothing duplicated.
            Respects the shared master date-range filter in the top bar. ══ -->
       <div class="view" id="view-ds-convergent">
-        <div class="view-header"><div class="view-title">💠 Debt Settlement Convergent</div><div class="view-sub">Executive performance analytics for Debt Settlement In-House deals · use the master filter above to change the date range and scope.</div></div>
+        <div class="view-header"><div class="view-title">💠 Debt Settlement Conversion</div><div class="view-sub">Executive performance analytics for Debt Settlement In-House deals · use the master filter above to change the date range, and the Agent filter below to switch scope.</div></div>
 
         <div class="filter-panel">
           <div class="filter-panel-title">Filter by Agent</div>
           <div class="filter-grid">
+            <div class="filter-field">
+              <label>Scope</label>
+              <select id="dsp-agent-scope" onchange="dsAgentScopeChange()">
+                <option value="all">All</option>
+                <option value="opener">Openers</option>
+                <option value="closer">Closers</option>
+              </select>
+            </div>
             <div class="filter-field" id="dsp-filter-name-wrap" style="display:none">
               <label id="dsp-filter-name-label">Agent</label>
               <select id="dsp-filter-name" onchange="dsFilterNameChange()"></select>
-            </div>
-            <div class="filter-field" id="dsp-filter-hint-wrap">
-              <label>Scope</label>
-              <div class="dsp-scope-hint" id="dsp-scope-hint">Use the <b>Filter Scope</b> in the master filter above (Closers / Openers) to switch who this page shows, and drill into one agent here.</div>
             </div>
           </div>
         </div>
 
         <div class="stats-row-6">
-          <div class="stat-card blue dsp-stat-clickable" onclick="dsShowStatBreakdown('total')" title="Click to see every record"><div class="stat-label">Total DS Deals</div><div class="stat-value" id="dsp-stat-total">0</div></div>
-          <div class="stat-card green dsp-stat-clickable" onclick="dsShowStatBreakdown('closed')" title="Click to see closed/approved records"><div class="stat-label">Total Closed</div><div class="stat-value" id="dsp-stat-closed">0</div></div>
+          <div class="stat-card blue dsp-stat-clickable" onclick="dsShowStatBreakdown('total')" title="Click to see every transfer"><div class="stat-label">Total Transfers</div><div class="stat-value" id="dsp-stat-total">0</div></div>
+          <div class="stat-card green dsp-stat-clickable" onclick="dsShowStatBreakdown('closed')" title="Click to see closed deals"><div class="stat-label">Total Closed Deals</div><div class="stat-value" id="dsp-stat-closed">0</div></div>
           <div class="stat-card amber dsp-stat-clickable" onclick="dsShowStatBreakdown('pending')" title="Click to see pending records"><div class="stat-label">Total Pending</div><div class="stat-value" id="dsp-stat-pending">0</div></div>
           <div class="stat-card red dsp-stat-clickable" onclick="dsShowStatBreakdown('declined')" title="Click to see declined records"><div class="stat-label">Total Declined</div><div class="stat-value" id="dsp-stat-declined">0</div></div>
           <div class="stat-card purple dsp-stat-clickable" onclick="dsShowStatBreakdown('closerate')" title="Click to see the closed records behind this rate"><div class="stat-label">Close Rate</div><div class="stat-value" id="dsp-stat-closerate">0%</div></div>
-          <div class="stat-card teal dsp-stat-clickable" onclick="dsShowStatBreakdown('avgpcc')" title="Click to see the approved records behind this average"><div class="stat-label">Average PCC</div><div class="stat-value" id="dsp-stat-avgpcc">$0</div></div>
+          <div class="stat-card teal dsp-stat-clickable" onclick="dsShowStatBreakdown('avgpcc')" title="Click to see the approved records behind this total"><div class="stat-label">Total Commission</div><div class="stat-value" id="dsp-stat-avgpcc">$0</div></div>
         </div>
 
         <div id="dsp-dashboard-content">
@@ -4760,6 +5090,65 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
             <div id="dsp-agent-table" style="overflow-x:auto"><div class="empty-state">Loading…</div></div>
           </div>
         </div>
+        </div>
+      </div>
+
+      <!-- ══ DS CLEARING ══ Advanced DS Clearing & Commission Tracking.
+           Independent stats + archive for Closer DS deals and Opener DS
+           transfers. A deal enters the automatic queue 2 days before its
+           First Payment Date — that just means its small "DS Clearing"
+           button on the Deals & Transfers page becomes actionable, no big
+           queue list here. Marking a deal Not Cleared moves it into the
+           Archive below (never deleted); Restore brings it back to active.
+           Everything re-renders live off the same deals/transfers
+           Firestore listeners as the rest of the app. ══ -->
+      <div class="view" id="view-ds-clearing">
+        <div class="view-header"><div class="view-title">✅ DS Clearing</div><div class="view-sub">Debt Settlement clearing &amp; commission tracking · Openers and Closers are tracked and cleared independently · clear deals from the small button on their Deals &amp; Transfers row.</div></div>
+
+        <div class="panel-card" style="margin-bottom:16px">
+          <div class="panel-card-title"><span>DS Clearing Archive</span><span class="ap-record-count" id="dsc-archive-count">0</span></div>
+          <div class="view-sub" style="margin:-4px 0 12px">Deals marked “Not Cleared” live here instead of disappearing — never deleted. Restore any of them back to the active queue at any time.</div>
+          <div id="dsc-archive-list"><div class="empty-state">Loading…</div></div>
+        </div>
+
+        <div class="panel-card" style="margin-bottom:16px">
+          <div class="panel-card-title">Closer DS Deals</div>
+          <div class="stats-row-4">
+            <div class="stat-card blue"><div class="stat-label">Total Closed Deals</div><div class="stat-value" id="dscc-total">0</div></div>
+            <div class="stat-card green"><div class="stat-label">Cleared Deals</div><div class="stat-value" id="dscc-cleared">0</div></div>
+            <div class="stat-card red"><div class="stat-label">Not Cleared Deals</div><div class="stat-value" id="dscc-cancelled">0</div></div>
+            <div class="stat-card teal"><div class="stat-label">Clearing Ratio</div><div class="stat-value" id="dscc-clearingratio">0%</div></div>
+            <div class="stat-card amber"><div class="stat-label">Cancellation Ratio</div><div class="stat-value" id="dscc-cancelratio">0%</div></div>
+            <div class="stat-card purple"><div class="stat-label">Estimated Commission</div><div class="stat-value" id="dscc-estcomm">$0</div></div>
+            <div class="stat-card indigo"><div class="stat-label">Cleared Commission</div><div class="stat-value" id="dscc-clearedcomm">$0</div></div>
+            <div class="stat-card pink"><div class="stat-label">Est. − Cleared</div><div class="stat-value" id="dscc-diffcomm">$0</div></div>
+          </div>
+          <div id="dscc-agent-table" style="overflow-x:auto"><div class="empty-state">Loading…</div></div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-card-title">Opener DS Transfers</div>
+          <div class="stats-row-4">
+            <div class="stat-card blue"><div class="stat-label">Total Transfers</div><div class="stat-value" id="dsco-total">0</div></div>
+            <div class="stat-card green"><div class="stat-label">Cleared Deals</div><div class="stat-value" id="dsco-cleared">0</div></div>
+            <div class="stat-card red"><div class="stat-label">Not Cleared Deals</div><div class="stat-value" id="dsco-cancelled">0</div></div>
+            <div class="stat-card teal"><div class="stat-label">Clearing Ratio</div><div class="stat-value" id="dsco-clearingratio">0%</div></div>
+            <div class="stat-card amber"><div class="stat-label">Cancellation Ratio</div><div class="stat-value" id="dsco-cancelratio">0%</div></div>
+            <div class="stat-card purple"><div class="stat-label">Estimated Commission</div><div class="stat-value" id="dsco-estcomm">$0</div></div>
+            <div class="stat-card indigo"><div class="stat-label">Cleared Commission</div><div class="stat-value" id="dsco-clearedcomm">$0</div></div>
+            <div class="stat-card pink"><div class="stat-label">Est. − Cleared</div><div class="stat-value" id="dsco-diffcomm">$0</div></div>
+          </div>
+          <div id="dsco-agent-table" style="overflow-x:auto"><div class="empty-state">Loading…</div></div>
+        </div>
+      </div>
+
+      <!-- ══ DS CLEARING — compact review popup, opened from the small
+           button beside an eligible deal on Deals & Transfers ══ -->
+      <div id="dscp-overlay" class="ap-overlay">
+        <div class="ap-box" style="max-width:440px">
+          <button class="ap-close" onclick="closeDsClearPopup()">✕</button>
+          <div class="form-card-title" id="dscp-title">DS Clearing</div>
+          <div id="dscp-body" style="margin-top:10px"></div>
         </div>
       </div>
 
@@ -4941,6 +5330,13 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
         </div>
         <div class="eod-card" id="eod-opener" style="display:none"></div>
         <div class="tier-card"><div id="op-tier-tracker"></div></div>
+        <div class="panel-card" id="op-ds-cleared-panel" style="display:none;margin-bottom:16px;border-color:var(--green)">
+          <div class="panel-card-title" style="color:var(--green)">DS Cleared Commission</div>
+          <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+            <div class="stat-value" id="op-ds-cleared-amount" style="font-size:28px">$0</div>
+            <div class="view-sub" id="op-ds-cleared-count" style="margin:0">0 cleared DS deals</div>
+          </div>
+        </div>
         <div id="agent-queue-wrap-opener"></div>
         <div class="panel-card"><div class="panel-card-title">Recent transfers <span class="panel-card-action" onclick="switchView('opener-history')">View all →</span></div><div id="op-recent-feed"><div class="empty-state">No transfers yet.</div></div></div>
       </div>
@@ -4960,6 +5356,7 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
           </div>
           <div class="comm-preview-card"><div class="comm-preview-label">Commission for this transfer</div><div class="comm-preview-amount" id="op-comm-preview">—</div><div class="comm-preview-sub" id="op-tier-label"></div></div>
           <div class="field" id="op-closer-wrap" style="display:none"><label>Assign to Closer</label><select id="op-closer"><option value="">Select closer…</option><option value="Outsource">Outsource</option></select></div>
+          <div class="field" id="op-firstpay-wrap" style="display:none"><label>First Payment Date <span style="color:var(--text3);font-weight:400">(for DS Clearing)</span></label><input id="op-firstpay" type="date"/></div>
           <div class="field-row"><div class="field"><label>Transfer Date &amp; Time</label><input id="op-date" type="datetime-local"/></div><div class="field"><label>Client Phone</label><input id="op-phone" placeholder="423-482-1384" oninput="clearPhoneAlert('op-phone')"/><div id="op-phone-alert" style="display:none;color:#e5484d;font-size:12px;margin-top:4px">Duplicate number</div></div></div>
           <button class="btn-form" id="op-submit-btn" onclick="submitOpener()">Submit Transfer</button>
         </div>
@@ -5003,6 +5400,13 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
           <div class="shift-tag-text" id="shift-tag-closer">Egypt: 5PM – 2AM · Mon–Fri</div>
         </div>
         <div class="eod-card" id="eod-closer" style="display:none"></div>
+        <div class="panel-card" id="cl-ds-cleared-panel" style="display:none;margin-bottom:16px;border-color:var(--green)">
+          <div class="panel-card-title" style="color:var(--green)">DS Cleared Commission</div>
+          <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+            <div class="stat-value" id="cl-ds-cleared-amount" style="font-size:28px">$0</div>
+            <div class="view-sub" id="cl-ds-cleared-count" style="margin:0">0 cleared DS deals</div>
+          </div>
+        </div>
         <div id="agent-queue-wrap-closer"></div>
         <div class="panel-card"><div class="panel-card-title">Recent deals <span class="panel-card-action" onclick="switchView('closer-history')">View all →</span></div><div id="cl-recent-feed"><div class="empty-state">No deals yet.</div></div></div>
       </div>
