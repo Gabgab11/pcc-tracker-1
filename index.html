@@ -3200,6 +3200,7 @@
       return {
         name, total:mine.length, cleared:cleared.length, notCleared:notCleared.length,
         clearingRatio: decided? Math.round((cleared.length/decided)*1000)/10 : 0,
+        cancellationRatio: decided? Math.round((notCleared.length/decided)*1000)/10 : 0,
         estComm, clearedComm, difference: estComm-clearedComm,
       };
     }).filter(a=>a.total>0);
@@ -3260,9 +3261,12 @@
         <div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${rec.comm||0}</span></div>
         <div class="ar-field"><span class="ar-key">Clearing</span><span class="ar-val">${rec.clearStatus==='Cleared'?'✓ Cleared':rec.dsArchived?'✗ Not Cleared (Archived)':'Awaiting decision'}</span></div>
       </div>
-      ${canAct?`<div class="ar-btns" style="flex-wrap:wrap">
-        <button class="btn-approve" onclick="dsSetClearStatus('${kind}','${id}','Cleared')">✓ Mark Cleared</button>
-        ${rec.dsArchived?`<button class="btn-filter-clear" onclick="dsRestoreFromArchive('${kind}','${id}');closeDsClearPopup();">↺ Restore to Queue</button>`:`<button class="btn-decline" onclick="dsSetClearStatus('${kind}','${id}','Not Cleared')">✗ Mark Not Cleared</button>`}
+      ${canAct?`<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+        ${rec.dsArchived
+          ? `<button class="btn-approve-sm" onclick="dsSetClearStatus('${kind}','${id}','Cleared')">✓ Mark Cleared</button>
+             <button class="btn-restore-sm" onclick="dsRestoreFromArchive('${kind}','${id}');closeDsClearPopup();">↺ Restore to Queue</button>`
+          : `<button class="btn-decline" style="flex:none" onclick="dsSetClearStatus('${kind}','${id}','Not Cleared')">✗ Mark Not Cleared</button>
+             <button class="btn-approve-sm" onclick="dsSetClearStatus('${kind}','${id}','Cleared')">✓ Mark Cleared</button>`}
       </div>`:'<div class="empty-state">Read-only — Admin can change clearing status.</div>'}`;
     document.getElementById('dscp-overlay').classList.add('open');
   };
@@ -3280,22 +3284,26 @@
     dsSetText('dsc-archive-count', all.length);
     if(!all.length){ wrap.innerHTML='<div class="empty-state">No archived DS deals. Deals marked “Not Cleared” land here instead of disappearing.</div>'; return; }
     const canAct=currentUser?.role!=='readonly';
+    // Only Cleared and Restore to Queue are ever clickable here — the
+    // record's already been reviewed once (that's how it got archived), so
+    // there's no "Not Cleared" action to repeat. Both sit compact, stacked
+    // directly beneath the status badge instead of a full-width button row.
     wrap.innerHTML=all.map(({r,kind})=>{
       const titleLine = kind==='closer' ? `${displayName(r.name)} → ${r.client||'—'}` : `${displayName(r.name)} — ${r.type||'Debt Settlement In-House'}`;
       return `<div class="admin-record">
-        <div class="admin-record-top">
+        <div class="admin-record-top" style="align-items:flex-start">
           <div class="ar-left"><span class="gsearch-kind-tag">${kind==='closer'?'Closer Deal':'Opener Transfer'}</span><span class="ar-name">${titleLine}</span></div>
-          <div class="ar-top-right"><span class="status-badge badge-red">✗ Not Cleared</span></div>
+          <div class="ar-top-right ar-top-right-stack">
+            <span class="status-badge badge-red">✗ Not Cleared</span>
+            ${canAct?`<button class="btn-approve-sm" onclick="dsSetClearStatus('${kind}','${r.id}','Cleared')">✓ Cleared</button>`:''}
+            ${canAct?`<button class="btn-restore-sm" onclick="dsRestoreFromArchive('${kind}','${r.id}')">↺ Restore to Queue</button>`:''}
+          </div>
         </div>
         <div class="ar-grid">
           <div class="ar-field"><span class="ar-key">First Payment</span><span class="ar-val">${fmtDate(r.firstpay)}</span></div>
           <div class="ar-field"><span class="ar-key">Phone</span><span class="ar-val">${r.phone||'—'}</span></div>
           <div class="ar-field"><span class="ar-key">Commission</span><span class="ar-val comm-val">$${r.comm||0}</span></div>
         </div>
-        ${canAct?`<div class="task-actions"><div class="ar-btns">
-          <button class="btn-approve" onclick="dsSetClearStatus('${kind}','${r.id}','Cleared')">✓ Cleared</button>
-          <button class="btn-filter-clear" onclick="dsRestoreFromArchive('${kind}','${r.id}')">↺ Restore to Queue</button>
-        </div></div>`:''}
       </div>`;
     }).join('');
   }
@@ -3304,7 +3312,7 @@
     const wrap=document.getElementById(kind==='closer'?'dscc-agent-table':'dsco-agent-table'); if(!wrap) return;
     const stats=dsAgentClearingStats(kind).sort((a,b)=>b.clearedComm-a.clearedComm || b.estComm-a.estComm);
     if(!stats.length){ wrap.innerHTML=`<div class="empty-state">No approved DS ${kind==='closer'?'deals':'transfers'} yet.</div>`; return; }
-    const rows=stats.map(a=>`<tr>
+    const rows=stats.map(a=>`<tr class="dsp-agent-row" onclick="openDsClearAgentProfile('${kind}','${String(a.name).replace(/'/g,"\\'")}')">
         <td><span style="display:inline-flex;align-items:center;gap:6px">${avatarHTML(a.name,'avatar-xs')} ${displayName(a.name)}</span></td>
         <td>${a.total}</td><td>${a.cleared}</td><td>${a.notCleared}</td><td>${a.clearingRatio}%</td>
         <td>$${a.estComm.toLocaleString()}</td><td>$${a.clearedComm.toLocaleString()}</td><td>$${a.difference.toLocaleString()}</td>
@@ -3313,6 +3321,110 @@
         <th>Agent</th><th>Approved DS</th><th>Cleared</th><th>Not Cleared</th><th>Clearing %</th><th>Estimated Comm.</th><th>Cleared Comm.</th><th>Difference</th>
       </tr></thead><tbody>${rows}</tbody></table>`;
   }
+
+  // ── DS Clearing agent profile — clicking any agent name opens a clean
+  // details page (same ap-overlay/ap-header/ap-stats-grid pattern as the
+  // Commission Structure agent profile) listing ALL of that agent's DS
+  // deals/transfers, whatever their status, plus their clearing figures. ──
+  window.openDsClearAgentProfile=function(kind,name){
+    document.getElementById('dscap-overlay').classList.add('open');
+    renderDsClearAgentProfile(kind,name);
+  };
+  window.closeDsClearAgentProfile=function(){
+    document.getElementById('dscap-overlay').classList.remove('open');
+  };
+
+  function renderDsClearAgentProfile(kind,name){
+    const stats=dsAgentClearingStats(kind).find(a=>a.name===name);
+    const allForAgent=dsClearEligible(kind).filter(r=>r.name===name)
+      .sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+    const s = stats || { total:0,cleared:0,notCleared:0,clearingRatio:0,cancellationRatio:0,estComm:0,clearedComm:0,difference:0 };
+
+    const rows = allForAgent.length ? allForAgent.map(r=>{
+      const label = kind==='closer' ? (r.client||'—') : (r.type||'—');
+      const isApproved=r.status==='Approved';
+      const clearLabel = !isApproved ? '—' : r.clearStatus==='Cleared' ? '✓ Cleared' : r.dsArchived ? '✗ Not Cleared' : 'Awaiting';
+      const clearClass = !isApproved ? 'badge-blue' : r.clearStatus==='Cleared' ? 'badge-green' : r.dsArchived ? 'badge-red' : 'badge-amber';
+      return `<tr>
+        <td>${fmtDate(r.createdAt)}</td><td>${label}</td>
+        <td><span class="status-badge ${gsStatusBadgeClass(r.status)}">${r.status||'Pending'}</span></td>
+        <td><span class="status-badge ${clearClass}">${clearLabel}</span></td>
+        <td>${fmtDate(r.firstpay)}</td><td class="ref-amt">$${r.comm||0}</td>
+      </tr>`;
+    }).join('') : '';
+
+    document.getElementById('dscap-body').innerHTML=`
+      <div class="ap-header">
+        ${avatarHTML(name,'ap-avatar')}
+        <div><div class="ap-name">${displayName(name)}</div><div class="ap-role">${kind==='opener'?'Opener':'Closer'} · DS Clearing</div></div>
+      </div>
+      <div class="ap-stats-grid">
+        <div class="ap-stat"><div class="ap-stat-val">${s.total}</div><div class="ap-stat-lbl">Approved DS ${kind==='opener'?'Transfers':'Deals'}</div></div>
+        <div class="ap-stat green"><div class="ap-stat-val">${s.cleared}</div><div class="ap-stat-lbl">Cleared</div></div>
+        <div class="ap-stat red"><div class="ap-stat-val">${s.notCleared}</div><div class="ap-stat-lbl">Not Cleared</div></div>
+        <div class="ap-stat teal"><div class="ap-stat-val">${s.clearingRatio}%</div><div class="ap-stat-lbl">Clearing Ratio</div></div>
+        <div class="ap-stat amber"><div class="ap-stat-val">${s.cancellationRatio}%</div><div class="ap-stat-lbl">Cancellation Ratio</div></div>
+        <div class="ap-stat purple"><div class="ap-stat-val">$${s.estComm.toLocaleString()}</div><div class="ap-stat-lbl">Estimated Commission</div></div>
+        <div class="ap-stat indigo"><div class="ap-stat-val">$${s.clearedComm.toLocaleString()}</div><div class="ap-stat-lbl">Cleared Commission</div></div>
+        <div class="ap-stat pink"><div class="ap-stat-val">$${s.difference.toLocaleString()}</div><div class="ap-stat-lbl">Est. − Cleared</div></div>
+      </div>
+      <div class="panel-card">
+        <div class="panel-card-title"><span>All DS ${kind==='opener'?'Transfers':'Deals'}</span><span class="ap-record-count">${allForAgent.length} total</span></div>
+        ${allForAgent.length ? `<table class="ref-table"><thead><tr>
+            <th>Date</th><th>${kind==='closer'?'Client':'Type'}</th><th>Status</th><th>Clearing</th><th>First Payment</th><th>Commission</th>
+          </tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty-state">No DS records for this agent yet.</div>'}
+      </div>`;
+  }
+
+  // ── Clickable stat cards — every DS Clearing stat card opens a modal
+  // listing the exact records behind that number, same pattern as the
+  // Debt Settlement Conversion page's dsShowStatBreakdown. ──
+  function dsClearGetStatRecords(kind, statType){
+    const all=dsClearEligible(kind);
+    const approved=all.filter(r=>r.status==='Approved');
+    const cleared=approved.filter(r=>r.clearStatus==='Cleared');
+    const notCleared=approved.filter(r=>r.dsArchived && r.clearStatus!=='Cleared');
+    const decided=[...cleared,...notCleared];
+    const roleLabel=kind==='opener'?'Transfers':'Deals';
+    switch(statType){
+      case 'total':        return { list: kind==='opener'?all:approved, title: kind==='opener'?'All DS Transfers':'Closed DS Deals' };
+      case 'cleared':       return { list:cleared,    title:'Cleared '+roleLabel };
+      case 'notcleared':    return { list:notCleared,  title:'Not Cleared '+roleLabel+' (Archived)' };
+      case 'clearingratio': return { list:decided,     title:'Clearing Ratio — Reviewed '+roleLabel };
+      case 'cancelratio':   return { list:decided,     title:'Cancellation Ratio — Reviewed '+roleLabel };
+      case 'estcomm':       return { list:approved,    title:'Estimated Commission — Approved '+roleLabel };
+      case 'clearedcomm':   return { list:cleared,     title:'Cleared Commission — Cleared '+roleLabel };
+      case 'diffcomm':      return { list:approved.filter(r=>r.clearStatus!=='Cleared'), title:'Estimated − Cleared — Not Yet Cleared '+roleLabel };
+      default:              return { list:approved,    title:roleLabel };
+    }
+  }
+
+  window.dsClearShowStat=function(kind, statType){
+    const {list,title}=dsClearGetStatRecords(kind,statType);
+    document.getElementById('dsc-stat-modal-title').textContent=title;
+    document.getElementById('dsc-stat-modal-sub').textContent=`${list.length} record${list.length!==1?'s':''} · ${kind==='closer'?'Closer':'Opener'} DS`;
+    const body=document.getElementById('dsc-stat-modal-body');
+    if(!list.length){
+      body.innerHTML='<div class="empty-state">No records match this metric.</div>';
+    } else {
+      const sorted=[...list].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+      const rows=sorted.map(r=>{
+        const titleLine = kind==='closer' ? `${displayName(r.name)} → ${r.client||'—'}` : `${displayName(r.name)} — ${r.type||'—'}`;
+        const isApproved = r.status==='Approved';
+        const clearLabel = !isApproved ? (r.status||'Pending') : r.clearStatus==='Cleared' ? '✓ Cleared' : r.dsArchived ? '✗ Not Cleared' : 'Awaiting';
+        const clearClass = !isApproved ? gsStatusBadgeClass(r.status) : r.clearStatus==='Cleared' ? 'badge-green' : r.dsArchived ? 'badge-red' : 'badge-amber';
+        const rowAttrs = isApproved ? `onclick="closeDsClearStatModal();openDsClearPopup('${kind}','${r.id}')" style="cursor:pointer"` : '';
+        return `<tr ${rowAttrs}>
+          <td>${titleLine}</td><td>${fmtDate(r.firstpay)}</td><td><span class="status-badge ${clearClass}">${clearLabel}</span></td><td class="ref-amt">$${r.comm||0}</td>
+        </tr>`;
+      }).join('');
+      body.innerHTML=`<table class="ref-table"><thead><tr><th>${kind==='closer'?'Closer → Client':'Opener — Type'}</th><th>First Payment</th><th>Clearing</th><th>Commission</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+    document.getElementById('dsc-stat-modal-overlay').classList.add('open');
+  };
+  window.closeDsClearStatModal=function(){
+    document.getElementById('dsc-stat-modal-overlay')?.classList.remove('open');
+  };
 
   function renderDsClearingSection(kind){
     const s=dsClearingStats(kind);
@@ -4408,6 +4520,11 @@ table.ref-table{width:100%;border-collapse:collapse;}
 .ar-name{font-size:13px;color:var(--text);}
 .ar-date{font-size:11px;color:var(--text3);}
 .ar-top-right{display:flex;align-items:center;gap:10px;flex-shrink:0;}
+.ar-top-right-stack{flex-direction:column;align-items:flex-end;gap:6px;}
+.btn-approve-sm{padding:4px 10px;border-radius:6px;background:rgba(29,179,122,.12);border:1px solid rgba(29,179,122,.3);color:var(--green);font-family:'Inter',sans-serif;font-size:11px;font-weight:600;cursor:pointer;transition:background .2s;white-space:nowrap;}
+.btn-approve-sm:hover{background:rgba(29,179,122,.24);}
+.btn-restore-sm{padding:4px 10px;border-radius:6px;background:transparent;border:1px solid var(--border2);color:var(--text2);font-family:'Inter',sans-serif;font-size:11px;cursor:pointer;transition:all .2s;white-space:nowrap;}
+.btn-restore-sm:hover{border-color:var(--accent2);color:var(--accent2);}
 .ar-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:10px;}
 .ar-field{display:flex;flex-direction:column;gap:1px;}
 .ar-key{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;}
@@ -5114,14 +5231,14 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
         <div class="panel-card" style="margin-bottom:16px">
           <div class="panel-card-title">Closer DS Deals</div>
           <div class="stats-row-4">
-            <div class="stat-card blue"><div class="stat-label">Total Closed Deals</div><div class="stat-value" id="dscc-total">0</div></div>
-            <div class="stat-card green"><div class="stat-label">Cleared Deals</div><div class="stat-value" id="dscc-cleared">0</div></div>
-            <div class="stat-card red"><div class="stat-label">Not Cleared Deals</div><div class="stat-value" id="dscc-cancelled">0</div></div>
-            <div class="stat-card teal"><div class="stat-label">Clearing Ratio</div><div class="stat-value" id="dscc-clearingratio">0%</div></div>
-            <div class="stat-card amber"><div class="stat-label">Cancellation Ratio</div><div class="stat-value" id="dscc-cancelratio">0%</div></div>
-            <div class="stat-card purple"><div class="stat-label">Estimated Commission</div><div class="stat-value" id="dscc-estcomm">$0</div></div>
-            <div class="stat-card indigo"><div class="stat-label">Cleared Commission</div><div class="stat-value" id="dscc-clearedcomm">$0</div></div>
-            <div class="stat-card pink"><div class="stat-label">Est. − Cleared</div><div class="stat-value" id="dscc-diffcomm">$0</div></div>
+            <div class="stat-card blue dsp-stat-clickable" onclick="dsClearShowStat('closer','total')" title="Click to see every closed deal"><div class="stat-label">Total Closed Deals</div><div class="stat-value" id="dscc-total">0</div></div>
+            <div class="stat-card green dsp-stat-clickable" onclick="dsClearShowStat('closer','cleared')" title="Click to see cleared deals"><div class="stat-label">Cleared Deals</div><div class="stat-value" id="dscc-cleared">0</div></div>
+            <div class="stat-card red dsp-stat-clickable" onclick="dsClearShowStat('closer','notcleared')" title="Click to see archived deals"><div class="stat-label">Not Cleared Deals</div><div class="stat-value" id="dscc-cancelled">0</div></div>
+            <div class="stat-card teal dsp-stat-clickable" onclick="dsClearShowStat('closer','clearingratio')" title="Click to see the deals behind this rate"><div class="stat-label">Clearing Ratio</div><div class="stat-value" id="dscc-clearingratio">0%</div></div>
+            <div class="stat-card amber dsp-stat-clickable" onclick="dsClearShowStat('closer','cancelratio')" title="Click to see the deals behind this rate"><div class="stat-label">Cancellation Ratio</div><div class="stat-value" id="dscc-cancelratio">0%</div></div>
+            <div class="stat-card purple dsp-stat-clickable" onclick="dsClearShowStat('closer','estcomm')" title="Click to see the approved deals behind this total"><div class="stat-label">Estimated Commission</div><div class="stat-value" id="dscc-estcomm">$0</div></div>
+            <div class="stat-card indigo dsp-stat-clickable" onclick="dsClearShowStat('closer','clearedcomm')" title="Click to see the cleared deals behind this total"><div class="stat-label">Cleared Commission</div><div class="stat-value" id="dscc-clearedcomm">$0</div></div>
+            <div class="stat-card pink dsp-stat-clickable" onclick="dsClearShowStat('closer','diffcomm')" title="Click to see deals not yet cleared"><div class="stat-label">Est. − Cleared</div><div class="stat-value" id="dscc-diffcomm">$0</div></div>
           </div>
           <div id="dscc-agent-table" style="overflow-x:auto"><div class="empty-state">Loading…</div></div>
         </div>
@@ -5129,14 +5246,14 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
         <div class="panel-card">
           <div class="panel-card-title">Opener DS Transfers</div>
           <div class="stats-row-4">
-            <div class="stat-card blue"><div class="stat-label">Total Transfers</div><div class="stat-value" id="dsco-total">0</div></div>
-            <div class="stat-card green"><div class="stat-label">Cleared Deals</div><div class="stat-value" id="dsco-cleared">0</div></div>
-            <div class="stat-card red"><div class="stat-label">Not Cleared Deals</div><div class="stat-value" id="dsco-cancelled">0</div></div>
-            <div class="stat-card teal"><div class="stat-label">Clearing Ratio</div><div class="stat-value" id="dsco-clearingratio">0%</div></div>
-            <div class="stat-card amber"><div class="stat-label">Cancellation Ratio</div><div class="stat-value" id="dsco-cancelratio">0%</div></div>
-            <div class="stat-card purple"><div class="stat-label">Estimated Commission</div><div class="stat-value" id="dsco-estcomm">$0</div></div>
-            <div class="stat-card indigo"><div class="stat-label">Cleared Commission</div><div class="stat-value" id="dsco-clearedcomm">$0</div></div>
-            <div class="stat-card pink"><div class="stat-label">Est. − Cleared</div><div class="stat-value" id="dsco-diffcomm">$0</div></div>
+            <div class="stat-card blue dsp-stat-clickable" onclick="dsClearShowStat('opener','total')" title="Click to see every transfer"><div class="stat-label">Total Transfers</div><div class="stat-value" id="dsco-total">0</div></div>
+            <div class="stat-card green dsp-stat-clickable" onclick="dsClearShowStat('opener','cleared')" title="Click to see cleared transfers"><div class="stat-label">Cleared Deals</div><div class="stat-value" id="dsco-cleared">0</div></div>
+            <div class="stat-card red dsp-stat-clickable" onclick="dsClearShowStat('opener','notcleared')" title="Click to see archived transfers"><div class="stat-label">Not Cleared Deals</div><div class="stat-value" id="dsco-cancelled">0</div></div>
+            <div class="stat-card teal dsp-stat-clickable" onclick="dsClearShowStat('opener','clearingratio')" title="Click to see the transfers behind this rate"><div class="stat-label">Clearing Ratio</div><div class="stat-value" id="dsco-clearingratio">0%</div></div>
+            <div class="stat-card amber dsp-stat-clickable" onclick="dsClearShowStat('opener','cancelratio')" title="Click to see the transfers behind this rate"><div class="stat-label">Cancellation Ratio</div><div class="stat-value" id="dsco-cancelratio">0%</div></div>
+            <div class="stat-card purple dsp-stat-clickable" onclick="dsClearShowStat('opener','estcomm')" title="Click to see the approved transfers behind this total"><div class="stat-label">Estimated Commission</div><div class="stat-value" id="dsco-estcomm">$0</div></div>
+            <div class="stat-card indigo dsp-stat-clickable" onclick="dsClearShowStat('opener','clearedcomm')" title="Click to see the cleared transfers behind this total"><div class="stat-label">Cleared Commission</div><div class="stat-value" id="dsco-clearedcomm">$0</div></div>
+            <div class="stat-card pink dsp-stat-clickable" onclick="dsClearShowStat('opener','diffcomm')" title="Click to see transfers not yet cleared"><div class="stat-label">Est. − Cleared</div><div class="stat-value" id="dsco-diffcomm">$0</div></div>
           </div>
           <div id="dsco-agent-table" style="overflow-x:auto"><div class="empty-state">Loading…</div></div>
         </div>
@@ -5149,6 +5266,24 @@ table.dsp-table th,table.dsp-table td{white-space:nowrap;}
           <button class="ap-close" onclick="closeDsClearPopup()">✕</button>
           <div class="form-card-title" id="dscp-title">DS Clearing</div>
           <div id="dscp-body" style="margin-top:10px"></div>
+        </div>
+      </div>
+
+      <!-- ══ DS CLEARING — stat card breakdown modal ══ -->
+      <div id="dsc-stat-modal-overlay" class="ap-overlay">
+        <div class="ap-box" style="max-width:640px">
+          <button class="ap-close" onclick="closeDsClearStatModal()">✕</button>
+          <div class="form-card-title" id="dsc-stat-modal-title">Records</div>
+          <div class="view-sub" id="dsc-stat-modal-sub" style="margin-bottom:14px">—</div>
+          <div id="dsc-stat-modal-body" style="overflow-x:auto"></div>
+        </div>
+      </div>
+
+      <!-- ══ DS CLEARING — agent profile modal ══ -->
+      <div id="dscap-overlay" class="ap-overlay">
+        <div class="ap-box">
+          <button class="ap-close" onclick="closeDsClearAgentProfile()">✕</button>
+          <div id="dscap-body"></div>
         </div>
       </div>
 
